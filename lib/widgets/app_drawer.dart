@@ -1,11 +1,60 @@
 import 'package:flutter/material.dart';
+import '../models/user_role.dart';
+import '../services/auth_service.dart';
+import '../screens/settings_screen.dart';
+import '../screens/profile_screen.dart';
 
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+  final UserRole currentRole;
+  final ValueChanged<UserRole>? onRoleChanged;
+
+  const AppDrawer({
+    super.key,
+    this.currentRole = UserRole.patient,
+    this.onRoleChanged,
+  });
+
+  String _getDisplayName() {
+    final user = AuthService.currentUser;
+    if (user?.displayName != null && user!.displayName!.isNotEmpty) {
+      return user.displayName!;
+    }
+    switch (currentRole) {
+      case UserRole.doctor:
+        return 'Dr. Rafiqul Islam';
+      case UserRole.operator:
+        return 'Popular Diagnostic Desk';
+      case UserRole.admin:
+        return 'System Administrator';
+      case UserRole.patient:
+        return AuthService.isSignedIn ? 'Demo Patient' : 'DoctorDesk Guest';
+    }
+  }
+
+  String _getEmailOrSubtitle() {
+    final user = AuthService.currentUser;
+    if (user?.email != null && user!.email!.isNotEmpty) {
+      return user.email!;
+    }
+    switch (currentRole) {
+      case UserRole.doctor:
+        return 'Active Doctor • BMDC Verified';
+      case UserRole.operator:
+        return 'Chamber Desk Operator';
+      case UserRole.admin:
+        return 'Admin • Backend Controller';
+      case UserRole.patient:
+        return AuthService.isSignedIn ? 'Patient Account' : 'Guest Account';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final displayName = _getDisplayName();
+    final emailOrSubtitle = _getEmailOrSubtitle();
+    final avatarInitial = displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U';
+
     return Drawer(
       child: Column(
         children: [
@@ -13,13 +62,29 @@ class AppDrawer extends StatelessWidget {
             decoration: BoxDecoration(
               color: colorScheme.primary,
             ),
-            accountName: const Text('John Doe'),
-            accountEmail: const Text('john.doe@example.com'),
+            accountName: Text(
+              displayName,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            accountEmail: Text(emailOrSubtitle),
+            otherAccountsPictures: [
+              CircleAvatar(
+                backgroundColor: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.all(4.0),
+                  child: Image.asset('assets/images/logo.png'),
+                ),
+              ),
+            ],
             currentAccountPicture: CircleAvatar(
               backgroundColor: colorScheme.onPrimary,
               child: Text(
-                'J',
-                style: TextStyle(fontSize: 24.0, color: colorScheme.primary),
+                avatarInitial,
+                style: TextStyle(
+                  fontSize: 24.0,
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.primary,
+                ),
               ),
             ),
           ),
@@ -27,7 +92,24 @@ class AppDrawer extends StatelessWidget {
             leading: const Icon(Icons.home_outlined),
             title: const Text('Home'),
             onTap: () {
-              Navigator.pop(context); // Close drawer
+              Navigator.pop(context);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('Account & Roles'),
+            subtitle: Text('Current: ${currentRole.name.toUpperCase()}'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ProfileScreen(
+                    role: currentRole,
+                    onRoleChanged: onRoleChanged,
+                  ),
+                ),
+              );
             },
           ),
           ListTile(
@@ -35,6 +117,12 @@ class AppDrawer extends StatelessWidget {
             title: const Text('Settings'),
             onTap: () {
               Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => SettingsScreen(role: currentRole),
+                ),
+              );
             },
           ),
           ListTile(
@@ -45,14 +133,24 @@ class AppDrawer extends StatelessWidget {
             },
           ),
           const Spacer(),
-          ListTile(
-            leading: const Icon(Icons.logout),
-            title: const Text('Logout'),
-            onTap: () {
-              Navigator.pop(context);
-            },
-          ),
-          const SizedBox(height: 20),
+          if (AuthService.isSignedIn) ...[
+            const Divider(),
+            ListTile(
+              leading: Icon(Icons.logout, color: colorScheme.error),
+              title: Text('Sign Out', style: TextStyle(color: colorScheme.error)),
+              onTap: () async {
+                Navigator.pop(context);
+                await AuthService.signOut();
+                onRoleChanged?.call(UserRole.patient);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Signed out successfully')),
+                  );
+                }
+              },
+            ),
+          ],
+          const SizedBox(height: 16),
         ],
       ),
     );

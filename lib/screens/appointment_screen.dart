@@ -3,7 +3,7 @@ import '../services/api_service.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'doctors_screen.dart';
 
-/// Appointments & Health Calendar Screen
+/// Appointments Screen
 class AppointmentScreen extends StatefulWidget {
   final int initialTabIndex;
 
@@ -18,11 +18,11 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return DefaultTabController(
-      initialIndex: widget.initialTabIndex,
-      length: 3,
+      initialIndex: widget.initialTabIndex.clamp(0, 1),
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Appointments & Calendar'),
+          title: const Text('Appointments'),
           actions: const [
             ProfileAvatarButton(),
           ],
@@ -32,7 +32,6 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
             tabs: const [
               Tab(text: 'Upcoming'),
               Tab(text: 'Past Visits'),
-              Tab(text: 'Health Calendar'),
             ],
             labelColor: theme.colorScheme.primary,
             unselectedLabelColor: Colors.grey[600],
@@ -52,10 +51,49 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
               title: 'No past appointments yet',
               subtitle: 'Your visit history will show up here after consultations.',
             ),
-            _HealthCalendarTab(),
           ],
         ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Booking coming soon — browse doctors to get started'),
+                action: SnackBarAction(
+                  label: 'Browse',
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const DoctorsScreen()),
+                    );
+                  },
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
+          tooltip: 'Book Appointment',
+          child: const Icon(Icons.add),
+        ),
       ),
+    );
+  }
+}
+
+/// Standalone Health Calendar Screen accessible from Home's Calendar link
+class HealthCalendarScreen extends StatelessWidget {
+  const HealthCalendarScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Health Calendar'),
+        actions: const [
+          ProfileAvatarButton(),
+        ],
+      ),
+      body: const _HealthCalendarTab(),
     );
   }
 }
@@ -164,59 +202,6 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Daily Health Gratitude Reminder Banner
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(bottom: 16),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0FDF4),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFFBBF7D0)),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDCFCE7),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.favorite_rounded,
-                      color: Color(0xFF16A34A),
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Be Grateful for Your Health Today',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            color: Color(0xFF166534),
-                          ),
-                        ),
-                        SizedBox(height: 3),
-                        Text(
-                          'Every healthy day is a blessing. Log your mood daily on Home to build your wellness streak and track your monthly health.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF15803D),
-                            height: 1.35,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
             // Month Header with Prev / Next controls
             Card(
               elevation: 0.8,
@@ -247,9 +232,9 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                     ),
                     const SizedBox(height: 12),
                     // Weekday headers
-                    Row(
+                    const Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: const [
+                      children: [
                         _WeekdayLabel('Mon'),
                         _WeekdayLabel('Tue'),
                         _WeekdayLabel('Wed'),
@@ -451,8 +436,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                     ),
                     const SizedBox(height: 12),
                     if (selectedFeeling == 'good' || selectedFeeling == 'great') ...[
-                      Row(
-                        children: const [
+                      const Row(
+                        children: [
                           Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 28),
                           SizedBox(width: 10),
                           Expanded(
@@ -469,7 +454,7 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                 ),
                                 SizedBox(height: 2),
                                 Text(
-                                  'You logged feeling healthy and great on this day. Take a moment to be grateful for your health!',
+                                  'You logged feeling healthy, energetic, and well on this day.',
                                   style: TextStyle(fontSize: 13, color: Colors.grey),
                                 ),
                               ],
@@ -484,8 +469,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                           color: const Color(0xFFFFFDE7),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Row(
-                          children: const [
+                        child: const Row(
+                          children: [
                             Icon(Icons.sentiment_neutral, color: Color(0xFFF57F17), size: 26),
                             SizedBox(width: 10),
                             Expanded(
@@ -521,8 +506,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: const [
+                            const Row(
+                              children: [
                                 Icon(Icons.psychology_outlined, color: Color(0xFF5E35B1), size: 24),
                                 SizedBox(width: 8),
                                 Text(
@@ -575,8 +560,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: const [
+                            const Row(
+                              children: [
                                 Icon(Icons.healing, color: Color(0xFFC62828), size: 24),
                                 SizedBox(width: 8),
                                 Text(

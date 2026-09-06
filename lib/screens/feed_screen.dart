@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/profile_avatar_button.dart';
+import '../services/auth_service.dart';
+import 'create_post_screen.dart';
 
 /// Blended Health Feed Screen
 /// Combines Health Videos, Doctor Articles, and Community Q&A into a single unified
@@ -22,6 +24,7 @@ class _FeedScreenState extends State<FeedScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final isDoctor = AuthService.userRoles.isDoctor;
 
     return Scaffold(
       appBar: AppBar(
@@ -33,6 +36,18 @@ class _FeedScreenState extends State<FeedScreen> {
           ProfileAvatarButton(),
         ],
       ),
+      floatingActionButton: isDoctor
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CreatePostScreen()),
+                );
+              },
+              icon: const Icon(Icons.edit),
+              label: const Text('New Post'),
+            )
+          : null,
       body: RefreshIndicator(
         onRefresh: () async {
           await Future.delayed(const Duration(milliseconds: 600));
@@ -40,6 +55,58 @@ class _FeedScreenState extends State<FeedScreen> {
         child: ListView(
           padding: const EdgeInsets.symmetric(vertical: 8),
           children: [
+            // Doctor Post Composer Bar (Facebook-style inline entry on Feed)
+            if (isDoctor) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                child: Card(
+                  elevation: 0.5,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.25)),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const CreatePostScreen()),
+                      );
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 16,
+                            backgroundColor: colorScheme.primaryContainer,
+                            child: Icon(Icons.edit_note, size: 18, color: colorScheme.onPrimaryContainer),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Share a clinical advisory or health tip...',
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                            ),
+                          ),
+                          FilledButton.tonal(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (_) => const CreatePostScreen()),
+                              );
+                            },
+                            child: const Text('Post'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
+
             // Top Feed Filters
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
@@ -74,8 +141,6 @@ class _FeedScreenState extends State<FeedScreen> {
                 caption:
                     'Watch verified health tips and preventative guidance curated from certified Bangladeshi physicians.',
                 attachment: _buildVideoAttachment(colorScheme),
-                likesCount: 24,
-                commentsCount: 3,
               ),
               const SizedBox(height: 12),
             ],
@@ -93,8 +158,6 @@ class _FeedScreenState extends State<FeedScreen> {
                 caption:
                     'Specialist clinical advisories and wellness articles written by registered medical doctors will be published directly to this stream.',
                 attachment: _buildArticleAttachment(colorScheme),
-                likesCount: 18,
-                commentsCount: 2,
               ),
               const SizedBox(height: 12),
             ],
@@ -112,8 +175,6 @@ class _FeedScreenState extends State<FeedScreen> {
                 caption:
                     'Have questions about symptoms, medications, or treatment protocols? Ask verified doctors directly.',
                 attachment: _buildQnAAttachment(colorScheme),
-                likesCount: 15,
-                commentsCount: 8,
               ),
               const SizedBox(height: 16),
             ],
@@ -146,8 +207,6 @@ class _FeedScreenState extends State<FeedScreen> {
     required String timeAgo,
     required String caption,
     required Widget attachment,
-    required int likesCount,
-    required int commentsCount,
   }) {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -230,39 +289,6 @@ class _FeedScreenState extends State<FeedScreen> {
 
             // Embedded Attachment (Video, Article, or Q&A card)
             attachment,
-            const SizedBox(height: 12),
-
-            // Divider & Action Row
-            Divider(height: 1, color: Colors.grey.withValues(alpha: 0.2)),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildActionButton(Icons.thumb_up_outlined, likesCount.toString(), () {}),
-                _buildActionButton(Icons.chat_bubble_outline, commentsCount.toString(), () {}),
-                _buildActionButton(Icons.share_outlined, 'Share', () {}),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: Colors.grey[600]),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(color: Colors.grey[600], fontSize: 13),
-            ),
           ],
         ),
       ),
@@ -295,9 +321,9 @@ class _FeedScreenState extends State<FeedScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          Text(
+          const Text(
             isConfigured ? 'Playing video feed...' : 'Video feed coming soon',
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
           ),
           const SizedBox(height: 4),
           Text(

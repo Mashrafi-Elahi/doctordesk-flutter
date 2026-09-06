@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
 import 'doctor_detail_screen.dart';
+import '../widgets/chamber_accessibility.dart';
 
 class NearbyDoctorsScreen extends StatefulWidget {
   const NearbyDoctorsScreen({super.key});
@@ -169,7 +170,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              color: colorScheme.primaryContainer.withOpacity(0.3),
+              color: colorScheme.primaryContainer.withValues(alpha: 0.3),
               child: Row(
                 children: [
                   Icon(Icons.location_on, size: 18, color: colorScheme.primary),
@@ -415,6 +416,12 @@ class _NearbyDoctorCard extends StatelessWidget {
                               fontWeight: FontWeight.w500,
                             ),
                           ),
+                          if (doctor.chamber?.accessibility != null) ...[
+                            const SizedBox(width: 8),
+                            AccessibilityIcon(
+                              accessibility: doctor.chamber!.accessibility!,
+                            ),
+                          ],
                         ],
                       ),
                     ],

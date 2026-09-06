@@ -3,6 +3,7 @@ import 'dart:async';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
 import 'doctor_detail_screen.dart';
+import '../widgets/chamber_accessibility.dart';
 
 class DoctorsScreen extends StatefulWidget {
   final String? initialQuery;
@@ -24,6 +25,7 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
   
   bool _isLoading = false;
   bool _isLoadingMore = false;
+  bool _isOffline = false;
   String? _error;
   
   int _currentPage = 1;
@@ -103,19 +105,21 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
         speciality: _selectedSpeciality == 'All' ? null : _selectedSpeciality,
       );
 
+      final isOff = data['isOffline'] == true;
       setState(() {
         if (loadMore) {
           _doctors.addAll(List<Doctor>.from(data['doctors']));
         } else {
           _doctors = List<Doctor>.from(data['doctors']);
         }
-        _totalPages = data['totalPages'];
+        _totalPages = (data['totalPages'] as int?) ?? 1;
+        _isOffline = isOff;
         _isLoading = false;
         _isLoadingMore = false;
       });
     } catch (e) {
       setState(() {
-        _error = e.toString();
+        _error = 'No Internet Connection\nPlease check your network connection and try again.';
         _isLoading = false;
         _isLoadingMore = false;
       });
@@ -183,18 +187,38 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
 
     if (_error != null) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('Error: $_error', style: TextStyle(color: Theme.of(context).colorScheme.error)),
-            TextButton(
-              onPressed: () {
-                _currentPage = 1;
-                _fetchDoctors();
-              },
-              child: const Text('Retry'),
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.wifi_off_rounded, size: 52, color: Theme.of(context).colorScheme.error),
+              const SizedBox(height: 14),
+              Text(
+                'No Internet Connection',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Please check your network connection and try again.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.tonalIcon(
+                onPressed: () {
+                  _currentPage = 1;
+                  _fetchDoctors();
+                },
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -212,21 +236,54 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
       );
     }
 
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(16.0),
-      itemCount: _doctors.length + (_isLoadingMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == _doctors.length) {
-          return const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        
-        final doctor = _doctors[index];
-        return _DoctorListCard(doctor: doctor);
-      },
+    return Column(
+      children: [
+        if (_isOffline)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber.shade300),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.cloud_off_rounded, size: 18, color: Colors.amber.shade900),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Offline mode • Displaying saved doctor directory',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.amber.shade900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(16.0),
+            itemCount: _doctors.length + (_isLoadingMore ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == _doctors.length) {
+                return const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              final doctor = _doctors[index];
+              return _DoctorListCard(doctor: doctor);
+            },
+          ),
+        ),
+      ],
     );
   }
 }
@@ -315,6 +372,10 @@ class _DoctorListCard extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                          if (doctor.chamber?.accessibility != null) ...[
+                            const SizedBox(width: 6),
+                            AccessibilityIcon(accessibility: doctor.chamber!.accessibility!),
+                          ],
                         ],
                       ),
                     ],
@@ -325,7 +386,7 @@ class _DoctorListCard extends StatelessWidget {
                         const SizedBox(width: 4),
                         Text(
                           doctor.ratingCount > 0
-                              ? '${doctor.bayesianRating?.toStringAsFixed(1) ?? 'N/A'}'
+                              ? (doctor.bayesianRating?.toStringAsFixed(1) ?? 'N/A')
                               : 'Not rated yet',
                           style: TextStyle(
                             fontSize: 12,

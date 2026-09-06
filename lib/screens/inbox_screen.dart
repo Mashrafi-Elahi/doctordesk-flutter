@@ -43,6 +43,19 @@ class InboxScreen extends StatelessWidget {
           ),
         ),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Messaging unlocks once you have an active appointment'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        },
+        tooltip: 'New Message',
+        child: const Icon(Icons.add),
+      ),
     );
   }
 }

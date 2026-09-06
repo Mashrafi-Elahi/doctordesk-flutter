@@ -1,21 +1,40 @@
+import '../widgets/chamber_accessibility.dart';
+
 class Chamber {
   final String? hospitalName;
   final String? area;
   final String? location;
+  final ChamberAccessibility? accessibility;
 
   Chamber({
     this.hospitalName,
     this.area,
     this.location,
+    this.accessibility,
   });
 
   factory Chamber.fromJson(Map<String, dynamic> json) {
+    ChamberAccessibility? accessibility;
+    if (json['accessibility'] != null && json['accessibility'] is Map<String, dynamic>) {
+      accessibility = ChamberAccessibility.fromJson(json['accessibility'] as Map<String, dynamic>);
+    } else if (json['wheelchairEntrance'] != null) {
+      accessibility = ChamberAccessibility.fromJson(json);
+    }
+
     return Chamber(
       hospitalName: json['hospitalName'] as String?,
       area: json['area'] as String?,
       location: json['location'] as String?,
+      accessibility: accessibility,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'hospitalName': hospitalName,
+    'area': area,
+    'location': location,
+    'accessibility': accessibility?.toJson(),
+  };
 }
 
 class Doctor {
@@ -28,6 +47,9 @@ class Doctor {
   final String? designation;
   final String? bmdcRegNumber;
   final bool isBmdcVerified;
+  final bool isClaimed;
+  final String? claimedByUid;
+  final String? certificateImageUrl;
   final double? bayesianRating;
   final double? ratingAverage;
   final int ratingCount;
@@ -45,6 +67,9 @@ class Doctor {
     this.designation,
     this.bmdcRegNumber,
     required this.isBmdcVerified,
+    this.isClaimed = false,
+    this.claimedByUid,
+    this.certificateImageUrl,
     this.bayesianRating,
     this.ratingAverage,
     required this.ratingCount,
@@ -81,6 +106,9 @@ class Doctor {
       designation: json['designation'],
       bmdcRegNumber: json['bmdcRegNumber'],
       isBmdcVerified: json['isBmdcVerified'] ?? false,
+      isClaimed: json['isClaimed'] ?? false,
+      claimedByUid: json['claimedByUid'],
+      certificateImageUrl: json['certificateImageUrl'],
       bayesianRating: (json['bayesianRating'] as num?)?.toDouble(),
       ratingAverage: (json['ratingAverage'] as num?)?.toDouble(),
       ratingCount: (json['ratingCount'] as num?)?.toInt() ?? 0,
@@ -89,4 +117,25 @@ class Doctor {
       distance: (json['distance'] as num?)?.toDouble(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    '_id': id,
+    'name': name,
+    'specialities': specialities,
+    'experienceYears': experienceYears,
+    'education': education,
+    'concentrations': concentrations,
+    'designation': designation,
+    'bmdcRegNumber': bmdcRegNumber,
+    'isBmdcVerified': isBmdcVerified,
+    'isClaimed': isClaimed,
+    'claimedByUid': claimedByUid,
+    'certificateImageUrl': certificateImageUrl,
+    'bayesianRating': bayesianRating,
+    'ratingAverage': ratingAverage,
+    'ratingCount': ratingCount,
+    'chambers': chambers.map((c) => c.toJson()).toList(),
+    'chamber': chamber?.toJson(),
+    'distance': distance,
+  };
 }
