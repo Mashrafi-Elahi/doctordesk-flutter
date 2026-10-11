@@ -193,18 +193,27 @@ class DataService {
     required String uid,
     String? email,
     String? name,
+    String? phone,
+    String? role,
+    bool isDoctor = false,
   }) {
     if (isFirestore) {
       return FirestoreService.syncUser(
         uid: uid,
         email: email,
         name: name,
+        phone: phone,
+        role: role,
+        isDoctor: isDoctor,
       );
     }
     return ApiService.syncUser(
       uid: uid,
       email: email,
       name: name,
+      phone: phone,
+      role: role,
+      isDoctor: isDoctor,
     );
   }
 

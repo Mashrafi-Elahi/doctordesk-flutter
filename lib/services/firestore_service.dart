@@ -619,23 +619,30 @@ class FirestoreService {
     required String uid,
     String? email,
     String? name,
+    String? phone,
+    String? role,
+    bool isDoctor = false,
   }) async {
     try {
       final userRef = _db.collection('users').doc(uid);
       final existing = await userRef.get();
+      final wantsDoctor = isDoctor || role == 'doctor';
 
       if (!existing.exists) {
         final isDemo = (email == 'demo@mail.com');
+        final shouldBeDoctor = isDemo || wantsDoctor;
         final userData = {
           'uid': uid,
           'email': email ?? '',
           'name': name ?? '',
+          'phone': phone ?? '',
           'isDemoAccount': isDemo,
           'roles': {
-            'isDoctor': isDemo,
+            'isDoctor': shouldBeDoctor,
             'isOperator': isDemo,
             'isAdmin': isDemo,
           },
+          'chamberCount': shouldBeDoctor ? 1 : 0,
           'doctorProfileId': isDemo ? 'doctor_1' : null,
           'operatorAssignments': isDemo ? ['chamber-1'] : [],
           'createdAt': FieldValue.serverTimestamp(),
@@ -655,10 +662,23 @@ class FirestoreService {
         if (email != null && email.isNotEmpty && (existing.data()?['email'] == null || existing.data()?['email'] == '')) {
           updates['email'] = email;
         }
+        if (phone != null && phone.isNotEmpty && (existing.data()?['phone'] == null || existing.data()?['phone'] == '')) {
+          updates['phone'] = phone;
+        }
+        if (wantsDoctor) {
+          final roles = Map<String, dynamic>.from((existing.data()?['roles'] as Map?) ?? {});
+          roles['isDoctor'] = true;
+          updates['roles'] = roles;
+          if (((existing.data()?['chamberCount'] as int?) ?? 0) == 0) {
+            updates['chamberCount'] = 1;
+          }
+        }
         if (updates.isNotEmpty) {
           await userRef.update(updates);
         }
-        return existing.data();
+        final merged = Map<String, dynamic>.from(existing.data() ?? {});
+        merged.addAll(updates);
+        return merged;
       }
     } catch (e) {
       debugPrint('Firestore syncUser error: $e');

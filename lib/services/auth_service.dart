@@ -96,13 +96,28 @@ class AuthService {
   }
 
   /// Sign in with email and password
-  static Future<UserCredential?> signInWithEmailPassword(String email, String password) async {
+  static Future<UserCredential?> signInWithEmailPassword(
+    String email,
+    String password, {
+    bool isDoctor = false,
+  }) async {
     try {
       final credential = await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password.trim(),
       );
+      if (isDoctor) {
+        await ApiService.syncUser(
+          uid: credential.user!.uid,
+          email: email.trim(),
+          role: 'doctor',
+          isDoctor: true,
+        );
+      }
       await fetchUserRoles();
+      if (isDoctor) {
+        await saveRole(UserRole.doctor);
+      }
       await setGuestMode(false);
       return credential;
     } catch (e) {
@@ -116,6 +131,9 @@ class AuthService {
     String email,
     String password, {
     String? name,
+    String? phone,
+    String? role,
+    bool isDoctor = false,
   }) async {
     try {
       final credential = await _auth.createUserWithEmailAndPassword(
@@ -129,8 +147,14 @@ class AuthService {
         uid: credential.user!.uid,
         email: email.trim(),
         name: name ?? '',
+        phone: phone ?? '',
+        role: role ?? (isDoctor ? 'doctor' : 'patient'),
+        isDoctor: isDoctor,
       );
       await fetchUserRoles();
+      if (isDoctor) {
+        await saveRole(UserRole.doctor);
+      }
       await setGuestMode(false);
       return credential;
     } catch (e) {
@@ -140,7 +164,7 @@ class AuthService {
   }
 
   /// Sign in or Sign up with Google OAuth
-  static Future<UserCredential?> signInWithGoogle() async {
+  static Future<UserCredential?> signInWithGoogle({bool isDoctor = false}) async {
     try {
       final googleProvider = GoogleAuthProvider();
       googleProvider.addScope('email');
@@ -159,9 +183,14 @@ class AuthService {
           uid: user.uid,
           email: user.email ?? '',
           name: user.displayName ?? '',
+          role: isDoctor ? 'doctor' : 'patient',
+          isDoctor: isDoctor,
         );
       }
       await fetchUserRoles();
+      if (isDoctor) {
+        await saveRole(UserRole.doctor);
+      }
       await setGuestMode(false);
       return credential;
     } on FirebaseAuthException catch (e) {
@@ -173,6 +202,69 @@ class AuthService {
       rethrow;
     } catch (e) {
       debugPrint('Google Sign-in error: $e');
+      rethrow;
+    }
+  }
+
+  /// Trigger phone verification via SMS OTP
+  static Future<void> verifyPhoneNumber({
+    required String phoneNumber,
+    required void Function(String verificationId) onCodeSent,
+    required void Function(FirebaseAuthException error) onVerificationFailed,
+    required void Function(PhoneAuthCredential credential) onVerificationCompleted,
+    void Function(String verificationId)? onCodeAutoRetrievalTimeout,
+  }) async {
+    await _auth.verifyPhoneNumber(
+      phoneNumber: phoneNumber.trim(),
+      verificationCompleted: onVerificationCompleted,
+      verificationFailed: onVerificationFailed,
+      codeSent: (String verificationId, int? resendToken) {
+        onCodeSent(verificationId);
+      },
+      codeAutoRetrievalTimeout: (String verificationId) {
+        onCodeAutoRetrievalTimeout?.call(verificationId);
+      },
+      timeout: const Duration(seconds: 60),
+    );
+  }
+
+  /// Complete phone verification and sign in / sign up with OTP
+  static Future<UserCredential?> signInWithPhoneOtp({
+    required String verificationId,
+    required String smsCode,
+    String? name,
+    String? phone,
+    String? role,
+    bool isDoctor = false,
+  }) async {
+    try {
+      final credential = PhoneAuthProvider.credential(
+        verificationId: verificationId,
+        smsCode: smsCode.trim(),
+      );
+      final userCred = await _auth.signInWithCredential(credential);
+
+      if (name != null && name.isNotEmpty) {
+        await userCred.user?.updateDisplayName(name);
+      }
+
+      await ApiService.syncUser(
+        uid: userCred.user!.uid,
+        email: userCred.user!.email ?? '',
+        name: name ?? (userCred.user!.displayName ?? ''),
+        phone: phone ?? (userCred.user!.phoneNumber ?? ''),
+        role: role ?? (isDoctor ? 'doctor' : 'patient'),
+        isDoctor: isDoctor,
+      );
+
+      await fetchUserRoles();
+      if (isDoctor) {
+        await saveRole(UserRole.doctor);
+      }
+      await setGuestMode(false);
+      return userCred;
+    } catch (e) {
+      debugPrint('Phone OTP sign-in error: $e');
       rethrow;
     }
   }

@@ -550,12 +550,18 @@ class ApiService {
     required String uid,
     String? email,
     String? name,
+    String? phone,
+    String? role,
+    bool isDoctor = false,
   }) async {
     if (FirestoreConfig.useFirestore) {
       return FirestoreService.syncUser(
         uid: uid,
         email: email,
         name: name,
+        phone: phone,
+        role: role,
+        isDoctor: isDoctor,
       );
     }
 
@@ -567,6 +573,8 @@ class ApiService {
           'uid': uid,
           'email': email ?? '',
           'name': name ?? '',
+          'phone': phone ?? '',
+          'role': role ?? (isDoctor ? 'doctor' : 'patient'),
         }),
       );
       if (response.statusCode == 200) {
