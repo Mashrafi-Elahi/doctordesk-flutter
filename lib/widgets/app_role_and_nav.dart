@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
+import 'google_sign_in_button.dart';
 
 export '../models/user_role.dart';
 
@@ -146,6 +147,7 @@ class AuthEntryButtons extends StatelessWidget {
   final VoidCallback onSignUp;
   final VoidCallback onContinueAsGuest;
   final VoidCallback? onDemoQuickLogin;
+  final VoidCallback? onGoogleSignIn;
 
   const AuthEntryButtons({
     super.key,
@@ -153,6 +155,7 @@ class AuthEntryButtons extends StatelessWidget {
     required this.onSignUp,
     required this.onContinueAsGuest,
     this.onDemoQuickLogin,
+    this.onGoogleSignIn,
   });
 
   @override
@@ -170,6 +173,13 @@ class AuthEntryButtons extends StatelessWidget {
           onPressed: onSignUp,
           child: const Text('Sign Up'),
         ),
+        if (onGoogleSignIn != null) ...[
+          const SizedBox(height: 8),
+          GoogleSignInButton(
+            text: 'Continue with Google',
+            onPressed: onGoogleSignIn,
+          ),
+        ],
         const SizedBox(height: 8),
         TextButton(
           onPressed: onContinueAsGuest,

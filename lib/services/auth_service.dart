@@ -139,6 +139,44 @@ class AuthService {
     }
   }
 
+  /// Sign in or Sign up with Google OAuth
+  static Future<UserCredential?> signInWithGoogle() async {
+    try {
+      final googleProvider = GoogleAuthProvider();
+      googleProvider.addScope('email');
+      googleProvider.addScope('profile');
+
+      UserCredential credential;
+      if (kIsWeb) {
+        credential = await _auth.signInWithPopup(googleProvider);
+      } else {
+        credential = await _auth.signInWithProvider(googleProvider);
+      }
+
+      final user = credential.user;
+      if (user != null) {
+        await ApiService.syncUser(
+          uid: user.uid,
+          email: user.email ?? '',
+          name: user.displayName ?? '',
+        );
+      }
+      await fetchUserRoles();
+      await setGuestMode(false);
+      return credential;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'popup-closed-by-user' || e.code == 'canceled') {
+        debugPrint('Google sign in cancelled by user');
+        return null;
+      }
+      debugPrint('Google sign in FirebaseAuthException: ${e.code} - ${e.message}');
+      rethrow;
+    } catch (e) {
+      debugPrint('Google Sign-in error: $e');
+      rethrow;
+    }
+  }
+
   /// Real demo account login (demo@mail.com / demo1234)
   /// Seeds real session linked to seeded Doctor + Chamber + Appointments in MongoDB.
   static Future<bool> quickLoginDemo() async {

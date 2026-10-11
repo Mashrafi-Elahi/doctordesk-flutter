@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../widgets/app_role_and_nav.dart';
+import '../widgets/google_sign_in_button.dart';
 import '../services/auth_service.dart';
 import 'settings_screen.dart';
 import 'admin_console_screen.dart';
@@ -68,7 +69,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final emailController = TextEditingController();
     final passController = TextEditingController();
     final nameController = TextEditingController();
+    bool isCurrentSignUp = isSignUp;
     bool loading = false;
+    bool googleLoading = false;
     String? authError;
 
     showModalBottomSheet(
@@ -95,7 +98,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        isSignUp ? 'Create Account' : 'Welcome Back',
+                        isCurrentSignUp ? 'Create Account' : 'Welcome Back',
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                       ),
                       IconButton(
@@ -119,7 +122,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     const SizedBox(height: 10),
                   ],
-                  if (isSignUp) ...[
+                  if (isCurrentSignUp) ...[
                     TextField(
                       controller: nameController,
                       decoration: const InputDecoration(
@@ -148,7 +151,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
-                    onPressed: loading
+                    onPressed: (loading || googleLoading)
                         ? null
                         : () async {
                             final email = emailController.text.trim();
@@ -163,7 +166,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             });
 
                             try {
-                              if (isSignUp) {
+                              if (isCurrentSignUp) {
                                 await AuthService.signUpWithEmailPassword(
                                   email,
                                   pass,
@@ -188,7 +191,67 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             width: 20,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
-                        : Text(isSignUp ? 'Sign Up' : 'Log In'),
+                        : Text(isCurrentSignUp ? 'Sign Up' : 'Log In'),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(child: Divider(color: Colors.grey.shade300)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          'OR',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ),
+                      Expanded(child: Divider(color: Colors.grey.shade300)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  GoogleSignInButton(
+                    text: isCurrentSignUp ? 'Sign up with Google' : 'Sign in with Google',
+                    isLoading: googleLoading,
+                    onPressed: (loading || googleLoading)
+                        ? null
+                        : () async {
+                            setModalState(() {
+                              googleLoading = true;
+                              authError = null;
+                            });
+                            try {
+                              final cred = await AuthService.signInWithGoogle();
+                              if (cred != null) {
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                await _loadUserRoles();
+                                if (mounted) setState(() {});
+                              } else {
+                                setModalState(() => googleLoading = false);
+                              }
+                            } catch (e) {
+                              setModalState(() {
+                                googleLoading = false;
+                                authError = e.toString().replaceAll('Exception:', '').trim();
+                              });
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      setModalState(() {
+                        isCurrentSignUp = !isCurrentSignUp;
+                        authError = null;
+                      });
+                    },
+                    child: Text(
+                      isCurrentSignUp
+                          ? 'Already have an account? Log In'
+                          : "Don't have an account? Sign Up",
+                    ),
                   ),
                 ],
               ),
@@ -269,6 +332,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: AuthEntryButtons(
                       onLogIn: () => _showAuthModal(context, isSignUp: false),
                       onSignUp: () => _showAuthModal(context, isSignUp: true),
+                      onGoogleSignIn: () async {
+                        try {
+                          final cred = await AuthService.signInWithGoogle();
+                          if (cred != null) {
+                            await _loadUserRoles();
+                            if (mounted) setState(() {});
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Google Sign-in failed: ${e.toString().replaceAll("Exception:", "").trim()}'),
+                              ),
+                            );
+                          }
+                        }
+                      },
                       onContinueAsGuest: () async {
                         await AuthService.setGuestMode(true);
                         widget.onRoleChanged?.call(UserRole.patient);
