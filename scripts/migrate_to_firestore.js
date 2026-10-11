@@ -32,23 +32,53 @@ if (!csvPath || !fs.existsSync(csvPath)) {
 }
 
 // 2. Initialize Firebase Admin SDK idempotently
-const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+function findServiceAccountKey() {
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+    return process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  }
+  const searchDirs = [__dirname, path.join(__dirname, '..')];
+  const commonNames = ['serviceAccountKey.json', 'doctordesk-sa.json'];
+  for (const dir of searchDirs) {
+    for (const name of commonNames) {
+      const p = path.join(dir, name);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  for (const dir of searchDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir);
+    for (const f of files) {
+      const lower = f.toLowerCase();
+      if (lower.endsWith('.json') && (lower.includes('adminsdk') || lower.includes('serviceaccount') || lower.includes('-sa'))) {
+        return path.join(dir, f);
+      }
+    }
+  }
+  return null;
+}
+
+const serviceAccountPath = findServiceAccountKey();
 if (!serviceAccountPath) {
-  console.error('ERROR: GOOGLE_APPLICATION_CREDENTIALS environment variable is not set.');
-  console.error('Please set it to the path of your Firebase service account JSON key:');
-  console.error('  $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\path\\to\\serviceAccountKey.json"');
+  console.error('\n======================================================');
+  console.error('ERROR: Firebase Service Account JSON key not found!');
+  console.error('======================================================');
+  console.error('How to get it:');
+  console.error('1. Open Firebase Console: https://console.firebase.google.com/project/docdesk-1e4cc/settings/serviceaccounts/adminsdk');
+  console.error('2. Click the blue button: "Generate new private key".');
+  console.error('3. Save the downloaded .json file as:');
+  console.error('   ' + path.join(__dirname, 'serviceAccountKey.json'));
+  console.error('   OR set $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\path\\to\\your-key.json"');
+  console.error('======================================================\n');
   process.exit(1);
 }
 
-if (!fs.existsSync(serviceAccountPath)) {
-  console.error('ERROR: Service account file not found at path in GOOGLE_APPLICATION_CREDENTIALS.');
-  process.exit(1);
-}
+console.log(`Using service account key: ${path.basename(serviceAccountPath)}`);
 
 if (!admin.apps.length) {
   try {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccountPath),
+      databaseURL: process.env.FIREBASE_DATABASE_URL || 'https://docdesk-1e4cc-default-rtdb.asia-southeast1.firebasedatabase.app',
     });
   } catch (err) {
     console.error('Failed to initialize Firebase Admin SDK:', err.message);
