@@ -588,9 +588,13 @@ class ApiService {
   }
 
   /// GET /api/v1/doctors/:id/can-review?patientUid=xxx
-  static Future<bool> checkCanReview(String doctorId, String patientUid) async {
+  static Future<bool> checkCanReview(
+    String doctorId,
+    String patientUid, {
+    Map<String, dynamic>? doctorData,
+  }) async {
     if (FirestoreConfig.useFirestore) {
-      return FirestoreService.checkCanReview(doctorId, patientUid);
+      return FirestoreService.checkCanReview(doctorId, patientUid, doctorData: doctorData);
     }
 
     try {
@@ -601,6 +605,45 @@ class ApiService {
       }
     } catch (_) {}
     return true; // fallback to true if offline, backend will guard on submit
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchDoctorApplications() async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchDoctorApplications();
+    }
+    return [];
+  }
+
+  static Future<void> setDoctorRole({
+    required String uid,
+    required bool isDoctor,
+    String? doctorProfileId,
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.setDoctorRole(
+        uid: uid,
+        isDoctor: isDoctor,
+        doctorProfileId: doctorProfileId,
+      );
+    }
+  }
+
+  static Future<void> applyForDoctorRole({
+    required String uid,
+    required String phone,
+    String? name,
+    String? bmdcNumber,
+    String? speciality,
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.applyForDoctorRole(
+        uid: uid,
+        phone: phone,
+        name: name,
+        bmdcNumber: bmdcNumber,
+        speciality: speciality,
+      );
+    }
   }
 
   // =========================================================================

@@ -367,6 +367,29 @@ class _AuthModalContentState extends State<_AuthModalContent> {
                 ],
               ),
             ),
+            if (_isDoctorRole) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.shield_outlined, color: Colors.blue.shade700, size: 16),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Doctor role is allocated via database only. Signing up applies for Admin verification.',
+                        style: TextStyle(fontSize: 11.5, color: Colors.blue.shade900),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
 
             // Method Toggle: Email vs Phone Number

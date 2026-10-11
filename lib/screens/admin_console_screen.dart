@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/data_service.dart';
 import '../services/firestore_config.dart';
+import '../services/rtdb_service.dart';
 import '../widgets/app_role_and_nav.dart';
 
 class AdminConsoleScreen extends StatefulWidget {
@@ -21,11 +23,87 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   int? _doctorCount;
   int? _appointmentCount;
   String? _lastActionMessage;
+  List<Map<String, dynamic>> _doctorApplications = [];
+  final TextEditingController _manualUidController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _refreshBackendStats();
+    _loadDoctorApplications();
+  }
+
+  @override
+  void dispose() {
+    _manualUidController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadDoctorApplications() async {
+    try {
+      final apps = await DataService.fetchDoctorApplications();
+      if (mounted) {
+        setState(() {
+          _doctorApplications = apps;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _approveDoctorApplication(String uid) async {
+    setState(() => _loading = true);
+    try {
+      await DataService.setDoctorRole(uid: uid, isDoctor: true);
+      setState(() {
+        _lastActionMessage = 'Approved & allocated Doctor role for user $uid in database.';
+      });
+      await _loadDoctorApplications();
+      await _refreshBackendStats();
+    } catch (e) {
+      setState(() => _lastActionMessage = 'Error allocating doctor role: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _rejectDoctorApplication(String uid) async {
+    setState(() => _loading = true);
+    try {
+      await DataService.setDoctorRole(uid: uid, isDoctor: false);
+      setState(() {
+        _lastActionMessage = 'Doctor application rejected/revoked for user $uid in database.';
+      });
+      await _loadDoctorApplications();
+      await _refreshBackendStats();
+    } catch (e) {
+      setState(() => _lastActionMessage = 'Error rejecting doctor application: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _manualToggleDoctorRole(bool grant) async {
+    final uid = _manualUidController.text.trim();
+    if (uid.isEmpty) {
+      setState(() => _lastActionMessage = 'Please enter a valid user UID.');
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      await DataService.setDoctorRole(uid: uid, isDoctor: grant);
+      setState(() {
+        _lastActionMessage = grant
+            ? 'Granted Doctor role to $uid via database.'
+            : 'Revoked Doctor role from $uid via database.';
+        _manualUidController.clear();
+      });
+      await _loadDoctorApplications();
+      await _refreshBackendStats();
+    } catch (e) {
+      setState(() => _lastActionMessage = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<void> _refreshBackendStats() async {
@@ -258,6 +336,128 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               const SizedBox(height: 16),
             ],
 
+            // Doctor Role Allocation Section (Role allocation via database only)
+            _sectionTitle('DOCTOR ROLE ALLOCATION & DATABASE APPROVALS'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Doctor roles are allocated strictly via the database. Users who apply for a doctor account remain pending until approved here.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Pending Applications (${_doctorApplications.length})',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh, size: 20),
+                          tooltip: 'Refresh applications',
+                          onPressed: _loading ? null : _loadDoctorApplications,
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 1),
+                    if (_doctorApplications.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: Text(
+                            'No pending doctor applications.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      ..._doctorApplications.map((app) {
+                        final uid = app['uid'] ?? '';
+                        final name = app['name']?.toString().isNotEmpty == true
+                            ? app['name']
+                            : (app['doctorApplication']?['name'] ?? 'Doctor Applicant');
+                        final email = app['email'] ?? app['doctorApplication']?['email'] ?? '';
+                        final phone = app['phone'] ?? app['doctorApplication']?['phone'] ?? '';
+
+                        return Container(
+                          margin: const EdgeInsets.only(top: 8, bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50.withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.blue.shade100),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('$name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              const SizedBox(height: 2),
+                              Text('UID: $uid', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                              if (email.isNotEmpty) Text('Email: $email', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                              if (phone.isNotEmpty) Text('Phone: $phone', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  FilledButton(
+                                    style: FilledButton.styleFrom(backgroundColor: Colors.green),
+                                    onPressed: _loading ? null : () => _approveDoctorApplication(uid),
+                                    child: const Text('Approve Doctor'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  OutlinedButton(
+                                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                                    onPressed: _loading ? null : () => _rejectDoctorApplication(uid),
+                                    child: const Text('Reject'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    const SizedBox(height: 12),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Manual Doctor Role Assignment (by UID):',
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _manualUidController,
+                            decoration: const InputDecoration(
+                              hintText: 'Enter user UID',
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: _loading ? null : () => _manualToggleDoctorRole(true),
+                          child: const Text('Grant'),
+                        ),
+                        const SizedBox(width: 4),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                          onPressed: _loading ? null : () => _manualToggleDoctorRole(false),
+                          child: const Text('Revoke'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
             // Appointment & Queue Controls
             _sectionTitle('APPOINTMENTS & QUEUE MANAGEMENT'),
             Card(
@@ -341,6 +541,27 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
             Card(
               child: Column(
                 children: [
+                  ListTile(
+                    leading: const Icon(Icons.speed, color: Colors.deepOrangeAccent),
+                    title: const Text('Realtime Database Ratings Ping'),
+                    subtitle: const Text(RtdbService.databaseUrl),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      setState(() => _loading = true);
+                      try {
+                        final ratings = await RtdbService.fetchDoctorRatings('doctor_1');
+                        setState(() {
+                          _lastActionMessage =
+                              'Firebase Realtime Database Connected (${ratings.length} demo ratings retrieved).';
+                        });
+                      } catch (e) {
+                        setState(() => _lastActionMessage = 'RTDB Ping error: $e');
+                      } finally {
+                        setState(() => _loading = false);
+                      }
+                    },
+                  ),
+                  const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.cable, color: Colors.amber),
                     title: const Text('Test Backend Connection Ping'),

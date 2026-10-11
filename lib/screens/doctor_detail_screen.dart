@@ -7,6 +7,8 @@ import 'package:image_picker/image_picker.dart';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/rtdb_service.dart';
+import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
 import '../widgets/trust_score.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -191,18 +193,42 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   // ──────────────────────────────────────────────────────────────────────────
 
   void _openReviewSheet() async {
-    final patientUid = AuthService.currentUser?.uid;
-    if (patientUid != null) {
-      final canRev = await ApiService.checkCanReview(widget.doctorId, patientUid);
-      if (!canRev && mounted) {
+    final user = AuthService.currentUser;
+    if (user == null || !AuthService.isSignedIn || AuthService.isGuest) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('You are not eligible to review this profile (doctor self-review or staff conflict).'),
+            content: Text('Guests can only check ratings. Please sign in as a Patient, Operator, or Doctor to rate.'),
             behavior: SnackBarBehavior.floating,
           ),
         );
-        return;
+        showDoctorDeskAuthModal(context, isSignUp: false);
       }
+      return;
+    }
+
+    final doctorMap = _doctor != null
+        ? {
+            '_id': _doctor!.id,
+            'id': _doctor!.id,
+            'claimedByUid': _doctor!.claimedByUid,
+          }
+        : null;
+
+    final eligibility = await RtdbService.checkRatingEligibility(
+      doctorId: widget.doctorId,
+      userId: user.uid,
+      doctorData: doctorMap,
+    );
+
+    if (!eligibility.canRate && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(eligibility.message ?? 'You are not eligible to rate this profile.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
     }
 
     if (!mounted) return;
@@ -216,9 +242,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         doctorId: widget.doctorId,
         onSuccess: () {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Review submitted — thank you!')),
+            const SnackBar(content: Text('Rating saved to Realtime Database — thank you!')),
           );
           _loadReviews();
+          _loadDoctor();
         },
       ),
     );
@@ -647,7 +674,16 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   // ──────────────────────────────────────────────────────────────────────────
 
   Widget _buildReviewsContent() {
-    final isSignedIn = AuthService.isSignedIn;
+    final isSignedIn = AuthService.isSignedIn && !AuthService.isGuest;
+    final isDoctor = AuthService.userRoles.isDoctor;
+    final isOperator = AuthService.userRoles.isOperator;
+
+    String buttonLabel = 'Write a review';
+    if (isDoctor) {
+      buttonLabel = 'Rate as Doctor Specialist (Realtime Database)';
+    } else if (isOperator) {
+      buttonLabel = 'Rate as Chamber Operator (Realtime Database)';
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -677,12 +713,37 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                 .map((review) => _ReviewCard(review: review))
                 .toList(),
           ),
-        if (isSignedIn) ...[
-          const SizedBox(height: 12),
+        const SizedBox(height: 12),
+        if (!isSignedIn) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.visibility_outlined, size: 18, color: Colors.grey.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Guest Mode: Viewing ratings only. Sign in to rate this doctor.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => showDoctorDeskAuthModal(context, isSignUp: false),
+                  child: const Text('Sign In', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+        ] else ...[
           TextButton.icon(
             onPressed: _openReviewSheet,
             icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Write a review'),
+            label: Text(buttonLabel),
           ),
         ],
       ],
@@ -755,6 +816,9 @@ class _ReviewCard extends StatelessWidget {
     final bool isProofVerified = review['isProofVerified'] == true;
     final String dateStr = _formatDate(review['createdAt'] as String?);
 
+    final String? raterRole = review['raterRole'] as String?;
+    final String? raterName = review['raterName'] as String?;
+
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 12),
@@ -780,6 +844,33 @@ class _ReviewCard extends StatelessWidget {
                 }),
               ),
               const SizedBox(width: 8),
+              if (raterRole == 'doctor')
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: const Text(
+                    'Doctor Specialist',
+                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.blue),
+                  ),
+                )
+              else if (raterRole == 'operator')
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.indigo.shade200),
+                  ),
+                  child: const Text(
+                    'Desk Operator',
+                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.indigo),
+                  ),
+                ),
+              const SizedBox(width: 6),
               // Verified chip
               if (isProofVerified)
                 const Chip(
@@ -808,6 +899,13 @@ class _ReviewCard extends StatelessWidget {
                 ),
             ],
           ),
+          if (raterName != null && raterName.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              raterName,
+              style: TextStyle(color: Colors.grey[800], fontSize: 11.5, fontWeight: FontWeight.w500),
+            ),
+          ],
           if (comment.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
@@ -1144,6 +1242,31 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.bolt, color: Colors.amber, size: 16),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      AuthService.userRoles.isDoctor
+                          ? 'Rating as Doctor Specialist (Peer review • Live RTDB sync)'
+                          : (AuthService.userRoles.isOperator
+                              ? 'Rating as Chamber Operator (Live RTDB sync)'
+                              : 'Rating as Verified Patient (Live RTDB sync)'),
+                      style: TextStyle(fontSize: 11.5, color: Colors.amber.shade900, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
 
             // Star selector
@@ -1261,7 +1384,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                   ? const Center(child: CircularProgressIndicator())
                   : FilledButton(
                       onPressed: _selectedRating > 0 ? _submit : null,
-                      child: const Text('Submit Review'),
+                      child: const Text('Submit Rating to Realtime Database'),
                     ),
             ),
           ],

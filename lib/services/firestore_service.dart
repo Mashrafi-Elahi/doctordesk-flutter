@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/doctor.dart';
 import 'geofire_utils.dart';
+import 'rtdb_service.dart';
 
 /// Cloud Firestore service providing complete data access for DoctorDesk.
 /// Matches the method signatures of [ApiService] for transparent backend switching.
@@ -469,26 +470,7 @@ class FirestoreService {
   // =========================================================================
 
   static Future<List<Map<String, dynamic>>> fetchReviews(String doctorId) async {
-    try {
-      final snapshot = await _db
-          .collection('reviews')
-          .where('doctorId', isEqualTo: doctorId)
-          .orderBy('createdAt', descending: true)
-          .get();
-
-      return snapshot.docs.map((d) {
-        final data = d.data();
-        data['id'] = d.id;
-        final ts = data['createdAt'];
-        if (ts is Timestamp) {
-          data['createdAt'] = ts.toDate().toIso8601String();
-        }
-        return data;
-      }).toList();
-    } catch (e) {
-      debugPrint('Firestore fetchReviews error: $e');
-      return [];
-    }
+    return RtdbService.fetchDoctorRatings(doctorId);
   }
 
   static Future<Map<String, dynamic>> submitReview(
@@ -498,70 +480,43 @@ class FirestoreService {
     String comment = '',
     String? proofImageUrl,
   }) async {
-    final reviewData = {
-      'doctorId': doctorId,
-      'userId': patientUid,
-      'patientUid': patientUid,
-      'rating': rating,
-      'comment': comment,
-      'proofImageUrl': proofImageUrl,
-      'isProofVerified': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    };
+    // 1. Write to Firebase Realtime Database
+    final rtdbResult = await RtdbService.submitRating(
+      doctorId: doctorId,
+      userId: patientUid,
+      rating: rating,
+      comment: comment,
+      proofImageUrl: proofImageUrl,
+    );
 
-    final reviewDocId = '${doctorId}_$patientUid';
-    await _db.collection('reviews').doc(reviewDocId).set(reviewData);
-
-    // Update doctor's rating aggregate via transaction
+    // 2. Dual-write to Firestore for offline caching & security rules parity
     try {
-      final doctorRef = _db.collection('doctors').doc(doctorId);
-      await _db.runTransaction((tx) async {
-        final docSnap = await tx.get(doctorRef);
-        if (docSnap.exists) {
-          final data = docSnap.data()!;
-          final currentCount = (data['ratingCount'] as num?)?.toInt() ?? 0;
-          final currentAvg = (data['ratingAverage'] as num?)?.toDouble() ?? 0.0;
-          final weight = (proofImageUrl != null && proofImageUrl.isNotEmpty) ? 2 : 1;
-          final newCount = currentCount + weight;
-          final newAvg = ((currentAvg * currentCount) + (rating * weight)) / newCount;
-
-          tx.update(doctorRef, {
-            'ratingCount': newCount,
-            'ratingAverage': double.parse(newAvg.toStringAsFixed(2)),
-          });
-        }
+      final reviewDocId = '${doctorId}_$patientUid';
+      await _db.collection('reviews').doc(reviewDocId).set({
+        'doctorId': doctorId,
+        'userId': patientUid,
+        'patientUid': patientUid,
+        'rating': rating,
+        'comment': comment,
+        'proofImageUrl': proofImageUrl,
+        'isProofVerified': proofImageUrl != null && proofImageUrl.isNotEmpty,
+        'createdAt': FieldValue.serverTimestamp(),
       });
-    } catch (err) {
-      debugPrint('Rating aggregation transaction notice: $err');
+    } catch (e) {
+      debugPrint('Firestore review dual-write notice: $e');
     }
 
-    return {
-      'id': reviewDocId,
-      ...reviewData,
-    };
+    return rtdbResult;
   }
 
-  static Future<bool> checkCanReview(String doctorId, String patientUid) async {
+  static Future<bool> checkCanReview(String doctorId, String patientUid, {Map<String, dynamic>? doctorData}) async {
     try {
-      // 1. Prevent multiple reviews from same user
-      final existing = await _db
-          .collection('reviews')
-          .where('doctorId', isEqualTo: doctorId)
-          .where('userId', isEqualTo: patientUid)
-          .limit(1)
-          .get();
-
-      if (existing.docs.isNotEmpty) return false;
-
-      // 2. Prevent doctor reviewing their own profile
-      final docSnap = await _db.collection('doctors').doc(doctorId).get();
-      if (docSnap.exists) {
-        final claimedBy = docSnap.data()?['claimedByUid'];
-        if (claimedBy != null && claimedBy == patientUid) {
-          return false;
-        }
-      }
-      return true;
+      final eligibility = await RtdbService.checkRatingEligibility(
+        doctorId: doctorId,
+        userId: patientUid,
+        doctorData: doctorData,
+      );
+      return eligibility.canRate;
     } catch (_) {
       return true;
     }
@@ -630,23 +585,33 @@ class FirestoreService {
 
       if (!existing.exists) {
         final isDemo = (email == 'demo@mail.com');
-        final shouldBeDoctor = isDemo || wantsDoctor;
-        final userData = {
+        final userData = <String, dynamic>{
           'uid': uid,
           'email': email ?? '',
           'name': name ?? '',
           'phone': phone ?? '',
           'isDemoAccount': isDemo,
           'roles': {
-            'isDoctor': shouldBeDoctor,
+            'isDoctor': isDemo, // Doctor role is allocated via database only; demo has pre-set access
             'isOperator': isDemo,
             'isAdmin': isDemo,
           },
-          'chamberCount': shouldBeDoctor ? 1 : 0,
+          'chamberCount': isDemo ? 1 : 0,
           'doctorProfileId': isDemo ? 'doctor_1' : null,
           'operatorAssignments': isDemo ? ['chamber-1'] : [],
           'createdAt': FieldValue.serverTimestamp(),
         };
+
+        if (wantsDoctor && !isDemo) {
+          userData['doctorApplication'] = {
+            'status': 'pending',
+            'appliedAt': FieldValue.serverTimestamp(),
+            'phone': phone ?? '',
+            'name': name ?? '',
+            'email': email ?? '',
+          };
+        }
+
         await userRef.set(userData);
 
         if (isDemo) {
@@ -666,11 +631,15 @@ class FirestoreService {
           updates['phone'] = phone;
         }
         if (wantsDoctor) {
-          final roles = Map<String, dynamic>.from((existing.data()?['roles'] as Map?) ?? {});
-          roles['isDoctor'] = true;
-          updates['roles'] = roles;
-          if (((existing.data()?['chamberCount'] as int?) ?? 0) == 0) {
-            updates['chamberCount'] = 1;
+          final isAlreadyDoctor = existing.data()?['roles']?['isDoctor'] == true;
+          if (!isAlreadyDoctor) {
+            updates['doctorApplication'] = {
+              'status': 'pending',
+              'appliedAt': FieldValue.serverTimestamp(),
+              'phone': phone ?? existing.data()?['phone'] ?? '',
+              'name': name ?? existing.data()?['name'] ?? '',
+              'email': email ?? existing.data()?['email'] ?? '',
+            };
           }
         }
         if (updates.isNotEmpty) {
@@ -684,6 +653,61 @@ class FirestoreService {
       debugPrint('Firestore syncUser error: $e');
       return null;
     }
+  }
+
+  /// Fetches pending doctor applications for admin review from the database
+  static Future<List<Map<String, dynamic>>> fetchDoctorApplications() async {
+    try {
+      final snap = await _db
+          .collection('users')
+          .where('doctorApplication.status', isEqualTo: 'pending')
+          .get();
+      return snap.docs.map((doc) => {'uid': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      debugPrint('Firestore fetchDoctorApplications error: $e');
+      return [];
+    }
+  }
+
+  /// Allocates or revokes the Doctor role in the database for a user (Admin only)
+  static Future<void> setDoctorRole({
+    required String uid,
+    required bool isDoctor,
+    String? doctorProfileId,
+  }) async {
+    final userRef = _db.collection('users').doc(uid);
+    final updates = <String, dynamic>{
+      'roles.isDoctor': isDoctor,
+      'chamberCount': isDoctor ? 1 : 0,
+      'doctorApplication.status': isDoctor ? 'approved' : 'revoked',
+      'doctorApplication.reviewedAt': FieldValue.serverTimestamp(),
+      'doctorApplication.reviewedByUid': _auth.currentUser?.uid,
+    };
+    if (doctorProfileId != null) {
+      updates['doctorProfileId'] = doctorProfileId;
+    }
+    await userRef.update(updates);
+  }
+
+  /// Submits an application for the doctor role to the database
+  static Future<void> applyForDoctorRole({
+    required String uid,
+    required String phone,
+    String? name,
+    String? bmdcNumber,
+    String? speciality,
+  }) async {
+    final userRef = _db.collection('users').doc(uid);
+    await userRef.set({
+      'doctorApplication': {
+        'status': 'pending',
+        'appliedAt': FieldValue.serverTimestamp(),
+        'phone': phone,
+        'name': name ?? '',
+        'bmdcNumber': bmdcNumber ?? '',
+        'speciality': speciality ?? '',
+      },
+    }, SetOptions(merge: true));
   }
 
   // =========================================================================

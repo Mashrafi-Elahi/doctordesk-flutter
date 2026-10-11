@@ -151,11 +151,15 @@ class DataService {
     );
   }
 
-  static Future<bool> checkCanReview(String doctorId, String patientUid) {
+  static Future<bool> checkCanReview(
+    String doctorId,
+    String patientUid, {
+    Map<String, dynamic>? doctorData,
+  }) {
     if (isFirestore) {
-      return FirestoreService.checkCanReview(doctorId, patientUid);
+      return FirestoreService.checkCanReview(doctorId, patientUid, doctorData: doctorData);
     }
-    return ApiService.checkCanReview(doctorId, patientUid);
+    return ApiService.checkCanReview(doctorId, patientUid, doctorData: doctorData);
   }
 
   static Future<Map<String, dynamic>> claimDoctor(
@@ -214,6 +218,57 @@ class DataService {
       phone: phone,
       role: role,
       isDoctor: isDoctor,
+    );
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchDoctorApplications() {
+    if (isFirestore) {
+      return FirestoreService.fetchDoctorApplications();
+    }
+    return ApiService.fetchDoctorApplications();
+  }
+
+  static Future<void> setDoctorRole({
+    required String uid,
+    required bool isDoctor,
+    String? doctorProfileId,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.setDoctorRole(
+        uid: uid,
+        isDoctor: isDoctor,
+        doctorProfileId: doctorProfileId,
+      );
+    }
+    return ApiService.setDoctorRole(
+      uid: uid,
+      isDoctor: isDoctor,
+      doctorProfileId: doctorProfileId,
+    );
+  }
+
+  static Future<void> applyForDoctorRole({
+    required String uid,
+    required String phone,
+    String? name,
+    String? bmdcNumber,
+    String? speciality,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.applyForDoctorRole(
+        uid: uid,
+        phone: phone,
+        name: name,
+        bmdcNumber: bmdcNumber,
+        speciality: speciality,
+      );
+    }
+    return ApiService.applyForDoctorRole(
+      uid: uid,
+      phone: phone,
+      name: name,
+      bmdcNumber: bmdcNumber,
+      speciality: speciality,
     );
   }
 

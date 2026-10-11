@@ -72,13 +72,22 @@ service cloud.firestore {
       allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
 
-    // Users: Owner can read and update profile name/email.
-    // Privilege escalation prevention: users cannot write or alter 'roles' or 'operatorAssignments'.
+    // Users: Owner can read and update profile info. Admin can read all and update roles.
+    // Role allocation doctor is via database/admin only: regular users cannot alter 'roles'.
     match /users/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && (
+        request.auth.uid == uid ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
       allow create: if request.auth != null && request.auth.uid == uid;
-      allow update: if request.auth != null && request.auth.uid == uid &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'doctorProfileId', 'operatorAssignments']);
+      allow update: if request.auth != null && (
+        (
+          request.auth.uid == uid &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'doctorProfileId', 'operatorAssignments'])
+        )
+        ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
       allow delete: if false;
     }
 

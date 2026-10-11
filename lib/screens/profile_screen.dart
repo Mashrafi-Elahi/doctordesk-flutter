@@ -3,6 +3,7 @@ import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/first_time_checkin_dialog.dart';
 import '../services/auth_service.dart';
+import '../services/data_service.dart';
 import 'settings_screen.dart';
 import 'admin_console_screen.dart';
 
@@ -25,6 +26,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool get _isSignedIn => AuthService.isSignedIn;
   UserRoles _userRoles = AuthService.userRoles;
+  Map<String, dynamic>? _userProfile;
 
   @override
   void initState() {
@@ -34,10 +36,92 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadUserRoles() async {
     final roles = await AuthService.fetchUserRoles();
+    final uid = AuthService.currentUser?.uid;
+    if (uid != null) {
+      _userProfile = await DataService.fetchUserProfile(uid);
+    }
     if (mounted) {
       setState(() {
         _userRoles = roles;
       });
+    }
+  }
+
+  Future<void> _showDoctorApplicationDialog() async {
+    final phoneController = TextEditingController(text: AuthService.currentUser?.phoneNumber ?? '');
+    final bmdcController = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.medical_services_outlined, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Doctor Application', style: TextStyle(fontSize: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Doctor role allocation is managed via database review. Enter your BMDC registration number and phone to apply for verification.',
+              style: TextStyle(fontSize: 12.5, color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: phoneController,
+              decoration: const InputDecoration(
+                labelText: 'Phone Number (Required)',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: bmdcController,
+              decoration: const InputDecoration(
+                labelText: 'BMDC Registration Number',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (phoneController.text.trim().isEmpty) return;
+              Navigator.pop(ctx, true);
+            },
+            child: const Text('Submit Application'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      final uid = AuthService.currentUser?.uid;
+      if (uid != null) {
+        await DataService.applyForDoctorRole(
+          uid: uid,
+          phone: phoneController.text.trim(),
+          bmdcNumber: bmdcController.text.trim(),
+          name: AuthService.currentUser?.displayName,
+        );
+        await _loadUserRoles();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Doctor application submitted! Your role will be activated in database after Admin verification.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -256,7 +340,63 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            if (_isSignedIn && !_userRoles.isDoctor) ...[
+              if (_userProfile?['doctorApplication']?['status'] == 'pending') ...[
+                Card(
+                  color: Colors.amber.shade50,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: Colors.amber.shade300),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.hourglass_top, color: Colors.amber.shade900),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Doctor Application Pending',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.amber.shade900,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Your application to become a doctor specialist is recorded in the database. An admin will review and allocate your Doctor role.',
+                          style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ] else ...[
+                Card(
+                  color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.2)),
+                  ),
+                  child: ListTile(
+                    leading: Icon(Icons.medical_services_outlined, color: colorScheme.primary),
+                    title: const Text('Are you a Doctor?'),
+                    subtitle: const Text('Apply for doctor verification. Role is allocated via database approval.'),
+                    trailing: FilledButton.tonal(
+                      onPressed: _showDoctorApplicationDialog,
+                      child: const Text('Apply'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ],
             _ProfileTile(
               icon: Icons.edit_outlined,
               label: 'Edit Profile Details',
