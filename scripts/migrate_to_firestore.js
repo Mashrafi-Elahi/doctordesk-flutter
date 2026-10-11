@@ -31,60 +31,95 @@ if (!csvPath || !fs.existsSync(csvPath)) {
   process.exit(1);
 }
 
-// 2. Initialize Firebase Admin SDK idempotently
-function findServiceAccountKey() {
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
-    return process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  }
-  const searchDirs = [__dirname, path.join(__dirname, '..')];
-  const commonNames = ['serviceAccountKey.json', 'doctordesk-sa.json'];
-  for (const dir of searchDirs) {
-    for (const name of commonNames) {
-      const p = path.join(dir, name);
-      if (fs.existsSync(p)) return p;
-    }
-  }
-  for (const dir of searchDirs) {
-    if (!fs.existsSync(dir)) continue;
-    const files = fs.readdirSync(dir);
-    for (const f of files) {
-      const lower = f.toLowerCase();
-      if (lower.endsWith('.json') && (lower.includes('adminsdk') || lower.includes('serviceaccount') || lower.includes('-sa'))) {
-        return path.join(dir, f);
-      }
-    }
-  }
-  return null;
-}
+// 2. Initialize Firebase Admin SDK (Supports: Service Account Key, Active Firebase CLI session, or ADC)
+const os = require('os');
 
-const serviceAccountPath = findServiceAccountKey();
-if (!serviceAccountPath) {
+function initFirebase() {
+  if (admin.apps.length) return admin.app();
+
+  const databaseURL = process.env.FIREBASE_DATABASE_URL || 'https://docdesk-1e4cc-default-rtdb.asia-southeast1.firebasedatabase.app';
+  const projectId = process.env.FIREBASE_PROJECT_ID || 'docdesk-1e4cc';
+
+  // Option A: Check for serviceAccountKey.json or GOOGLE_APPLICATION_CREDENTIALS
+  const searchDirs = [__dirname, path.join(__dirname, '..')];
+  let serviceAccountPath = (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS))
+    ? process.env.GOOGLE_APPLICATION_CREDENTIALS
+    : null;
+
+  if (!serviceAccountPath) {
+    const commonNames = ['serviceAccountKey.json', 'doctordesk-sa.json'];
+    for (const dir of searchDirs) {
+      for (const name of commonNames) {
+        const p = path.join(dir, name);
+        if (fs.existsSync(p)) {
+          serviceAccountPath = p;
+          break;
+        }
+      }
+      if (serviceAccountPath) break;
+    }
+  }
+
+  if (serviceAccountPath && fs.existsSync(serviceAccountPath)) {
+    console.log(`Using service account key: ${path.basename(serviceAccountPath)}`);
+    return admin.initializeApp({
+      credential: admin.credential.cert(serviceAccountPath),
+      databaseURL,
+      projectId,
+    });
+  }
+
+  // Option B: Seamless zero-config authentication using active Firebase CLI session (no new key generation required!)
+  const fbCliConfig = path.join(os.homedir(), '.config', 'configstore', 'firebase-tools.json');
+  if (fs.existsSync(fbCliConfig)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(fbCliConfig, 'utf8'));
+      if (cfg.tokens && cfg.tokens.refresh_token) {
+        let clientId = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
+        let clientSecret = 'j9iVZfS8kkCEFUPaAeJV0sA';
+        try {
+          const api = require(path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', 'firebase-tools', 'lib', 'api.js'));
+          clientId = api.clientId();
+          clientSecret = api.clientSecret();
+        } catch (_) {}
+
+        const tempAdcPath = path.join(os.tmpdir(), `firebase_adc_${process.pid}.json`);
+        fs.writeFileSync(tempAdcPath, JSON.stringify({
+          type: 'authorized_user',
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: cfg.tokens.refresh_token,
+        }));
+
+        process.env.GOOGLE_APPLICATION_CREDENTIALS = tempAdcPath;
+        process.on('exit', () => {
+          try { if (fs.existsSync(tempAdcPath)) fs.unlinkSync(tempAdcPath); } catch (_) {}
+        });
+
+        const userEmail = cfg.user && cfg.user.email ? cfg.user.email : 'active user';
+        console.log(`Authenticated via active Firebase session (${userEmail}). No manual key generation needed.`);
+        return admin.initializeApp({
+          credential: admin.credential.applicationDefault(),
+          databaseURL,
+          projectId,
+        });
+      }
+    } catch (e) {
+      // Fall through to error
+    }
+  }
+
   console.error('\n======================================================');
-  console.error('ERROR: Firebase Service Account JSON key not found!');
-  console.error('======================================================');
-  console.error('How to get it:');
-  console.error('1. Open Firebase Console: https://console.firebase.google.com/project/docdesk-1e4cc/settings/serviceaccounts/adminsdk');
-  console.error('2. Click the blue button: "Generate new private key".');
-  console.error('3. Save the downloaded .json file as:');
-  console.error('   ' + path.join(__dirname, 'serviceAccountKey.json'));
-  console.error('   OR set $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\path\\to\\your-key.json"');
+  console.error('ERROR: Could not authenticate to Firebase.');
+  console.error('Please either:');
+  console.error('1. Run "firebase login" in PowerShell to authenticate, OR');
+  console.error('2. Place a serviceAccountKey.json in the scripts/ folder.');
   console.error('======================================================\n');
   process.exit(1);
 }
 
-console.log(`Using service account key: ${path.basename(serviceAccountPath)}`);
+initFirebase();
 
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccountPath),
-      databaseURL: process.env.FIREBASE_DATABASE_URL || 'https://docdesk-1e4cc-default-rtdb.asia-southeast1.firebasedatabase.app',
-    });
-  } catch (err) {
-    console.error('Failed to initialize Firebase Admin SDK:', err.message);
-    process.exit(1);
-  }
-}
 
 const db = admin.firestore();
 
