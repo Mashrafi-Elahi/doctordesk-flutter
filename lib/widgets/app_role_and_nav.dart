@@ -17,12 +17,14 @@ class UserRoles {
   final bool isDoctor;
   final bool isOperator;
   final bool isAdmin;
+  final bool isModerator;
   final int chamberCount; // 0 means "hide Manage/Desk tab entirely"
 
   const UserRoles({
     this.isDoctor = false,
     this.isOperator = false,
     this.isAdmin = false,
+    this.isModerator = false,
     this.chamberCount = 0,
   });
 
@@ -32,9 +34,20 @@ class UserRoles {
       isDoctor: roles['isDoctor'] == true,
       isOperator: roles['isOperator'] == true,
       isAdmin: roles['isAdmin'] == true,
+      isModerator: roles['isModerator'] == true,
       chamberCount: (json['chamberCount'] as int?) ?? 0,
     );
   }
+
+  /// Feed & Q&A Permission Rules:
+  /// - Doctor can post video, answer FAQ, and post in feed
+  /// - Patient and operator can comment and ask questions, but cannot answer or post video
+  /// - Admin and Moderator can do all
+  /// - Admin can remove moderator, moderator cannot
+  bool get canPostVideo => isDoctor || isAdmin || isModerator;
+  bool get canPostFeed => isDoctor || isAdmin || isModerator;
+  bool get canAnswerFaq => isDoctor || isAdmin || isModerator;
+  bool get canManageModerators => isAdmin;
 
   List<AppRole> get availableRoles => [
         AppRole.patient,

@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
-import '../widgets/profile_avatar_button.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../services/auth_service.dart';
+import '../services/data_service.dart';
+import '../widgets/profile_avatar_button.dart';
 import 'create_post_screen.dart';
 
-/// Blended Health Feed Screen
-/// Combines Health Videos, Doctor Articles, and Community Q&A into a single unified
-/// social feed stream (like Facebook/LinkedIn cards) without full-screen video doomscrolling.
+/// Real-time Health Feed Screen
+/// - Blended stream of clinical YouTube videos, health tips, and community Q&A.
+/// - Role permissions:
+///   * Doctors, Admins, Moderators: post videos, publish articles, answer questions.
+///   * Patients & Operators: comment on any post and ask health questions.
+///   * Admins & Moderators: moderate and delete posts.
 class FeedScreen extends StatefulWidget {
   const FeedScreen({super.key});
 
@@ -14,172 +20,221 @@ class FeedScreen extends StatefulWidget {
 }
 
 class _FeedScreenState extends State<FeedScreen> {
-  // Slots for future YouTube API integration:
-  static const String? youtubeApiKey = null;
-  static const String? youtubePlaylistId = null;
+  String _selectedFilter = 'All'; // 'All' | 'Videos' | 'Articles' | 'Community Q&A'
 
-  String _selectedFilter = 'All';
+  String? _mapFilterToType(String filter) {
+    return switch (filter) {
+      'Videos' => 'video',
+      'Articles' => 'tip',
+      'Community Q&A' => 'question',
+      _ => null,
+    };
+  }
+
+  void _openCreatePost({String? initialType}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CreatePostScreen(initialType: initialType),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final isDoctor = AuthService.userRoles.isDoctor;
+    final roles = AuthService.userRoles;
+    final canPostMedia = roles.canPostVideo;
+    final typeFilter = _mapFilterToType(_selectedFilter);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Health Feed',
+          'Health Feed & Q&A',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: const [
           ProfileAvatarButton(),
         ],
       ),
-      floatingActionButton: isDoctor
-          ? FloatingActionButton.extended(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const CreatePostScreen()),
-                );
-              },
-              icon: const Icon(Icons.edit),
-              label: const Text('New Post'),
-            )
-          : null,
-      body: RefreshIndicator(
-        onRefresh: () async {
-          await Future.delayed(const Duration(milliseconds: 600));
-        },
-        child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          children: [
-            // Doctor Post Composer Bar (Facebook-style inline entry on Feed)
-            if (isDoctor) ...[
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
-                child: Card(
-                  elevation: 0.5,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.25)),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openCreatePost(
+          initialType: canPostMedia ? 'video' : 'question',
+        ),
+        icon: Icon(canPostMedia ? Icons.add_circle_outline : Icons.help_outline),
+        label: Text(canPostMedia ? 'New Post' : 'Ask Question'),
+      ),
+      body: Column(
+        children: [
+          // Inline composer banner
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Card(
+              elevation: 0.5,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.25)),
+              ),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _openCreatePost(
+                  initialType: canPostMedia ? 'video' : 'question',
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundColor: colorScheme.primaryContainer,
+                        child: Icon(
+                          canPostMedia ? Icons.edit_note : Icons.chat_bubble_outline,
+                          size: 18,
+                          color: colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          canPostMedia
+                              ? 'Share clinical guidance or YouTube video...'
+                              : 'Ask a specialist a medical question...',
+                          style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                        ),
+                      ),
+                      FilledButton.tonal(
+                        onPressed: () => _openCreatePost(
+                          initialType: canPostMedia ? 'video' : 'question',
+                        ),
+                        child: Text(canPostMedia ? 'Post' : 'Ask'),
+                      ),
+                    ],
                   ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(14),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const CreatePostScreen()),
-                      );
-                    },
+                ),
+              ),
+            ),
+          ),
+
+          // Feed Category Filters
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+            child: SizedBox(
+              height: 38,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _buildFilterChip('All'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('Videos'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('Articles'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('Community Q&A'),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // Real-time Firestore Stream of Posts
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: DataService.feedPostsStream(typeFilter: typeFilter),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                if (snapshot.hasError) {
+                  return Center(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
-                      child: Row(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          CircleAvatar(
-                            radius: 16,
-                            backgroundColor: colorScheme.primaryContainer,
-                            child: Icon(Icons.edit_note, size: 18, color: colorScheme.onPrimaryContainer),
+                          const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+                          const SizedBox(height: 12),
+                          Text('Failed to load feed: ${snapshot.error}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                final docs = snapshot.data?.docs ?? [];
+
+                if (docs.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _selectedFilter == 'Videos'
+                                ? Icons.ondemand_video
+                                : (_selectedFilter == 'Community Q&A'
+                                    ? Icons.forum_outlined
+                                    : Icons.feed_outlined),
+                            size: 56,
+                            color: Colors.grey[350],
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Share a clinical advisory or health tip...',
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                          const SizedBox(height: 16),
+                          Text(
+                            _selectedFilter == 'Videos'
+                                ? 'No health videos posted yet'
+                                : (_selectedFilter == 'Community Q&A'
+                                    ? 'No community questions yet'
+                                    : 'Health feed is empty'),
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            canPostMedia
+                                ? 'Tap the button below to share a clinical YouTube guide or article.'
+                                : 'Ask a health question to receive answers from verified doctors.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            onPressed: () => _openCreatePost(
+                              initialType: canPostMedia ? 'video' : 'question',
                             ),
-                          ),
-                          FilledButton.tonal(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const CreatePostScreen()),
-                              );
-                            },
-                            child: const Text('Post'),
+                            icon: Icon(canPostMedia ? Icons.post_add : Icons.help_outline),
+                            label: Text(canPostMedia ? 'Share First Post' : 'Ask a Question'),
                           ),
                         ],
                       ),
                     ),
+                  );
+                }
+
+                return RefreshIndicator(
+                  onRefresh: () async {
+                    await Future.delayed(const Duration(milliseconds: 300));
+                  },
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: docs.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final doc = docs[index];
+                      final data = doc.data();
+                      return _FeedCard(
+                        postId: doc.id,
+                        data: data,
+                      );
+                    },
                   ),
-                ),
-              ),
-              const SizedBox(height: 4),
-            ],
-
-            // Top Feed Filters
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
-              child: SizedBox(
-                height: 38,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: [
-                    _buildFilterChip('All'),
-                    const SizedBox(width: 8),
-                    _buildFilterChip('Videos'),
-                    const SizedBox(width: 8),
-                    _buildFilterChip('Articles'),
-                    const SizedBox(width: 8),
-                    _buildFilterChip('Community Q&A'),
-                  ],
-                ),
-              ),
+                );
+              },
             ),
-            const SizedBox(height: 8),
-
-            // Blended Feed Post 1: Video Post Card
-            if (_selectedFilter == 'All' || _selectedFilter == 'Videos') ...[
-              _buildFeedCard(
-                context,
-                colorScheme,
-                avatarIcon: Icons.ondemand_video,
-                avatarColor: Colors.redAccent,
-                authorName: 'DoctorDesk Health Media',
-                badgeText: 'Verified',
-                timeAgo: '2h ago',
-                caption:
-                    'Watch verified health tips and preventative guidance curated from certified Bangladeshi physicians.',
-                attachment: _buildVideoAttachment(colorScheme),
-              ),
-              const SizedBox(height: 12),
-            ],
-
-            // Blended Feed Post 2: Article Post Card
-            if (_selectedFilter == 'All' || _selectedFilter == 'Articles') ...[
-              _buildFeedCard(
-                context,
-                colorScheme,
-                avatarIcon: Icons.medical_services_outlined,
-                avatarColor: colorScheme.primary,
-                authorName: 'Clinical Editorial Board',
-                badgeText: 'Doctor Post',
-                timeAgo: 'Yesterday',
-                caption:
-                    'Specialist clinical advisories and wellness articles written by registered medical doctors will be published directly to this stream.',
-                attachment: _buildArticleAttachment(colorScheme),
-              ),
-              const SizedBox(height: 12),
-            ],
-
-            // Blended Feed Post 3: Community Q&A Post Card
-            if (_selectedFilter == 'All' || _selectedFilter == 'Community Q&A') ...[
-              _buildFeedCard(
-                context,
-                colorScheme,
-                avatarIcon: Icons.forum_outlined,
-                avatarColor: Colors.teal,
-                authorName: 'Patient Health Forum',
-                badgeText: 'Q&A',
-                timeAgo: '2d ago',
-                caption:
-                    'Have questions about symptoms, medications, or treatment protocols? Ask verified doctors directly.',
-                attachment: _buildQnAAttachment(colorScheme),
-              ),
-              const SizedBox(height: 16),
-            ],
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -196,18 +251,178 @@ class _FeedScreenState extends State<FeedScreen> {
       },
     );
   }
+}
 
-  Widget _buildFeedCard(
-    BuildContext context,
-    ColorScheme colorScheme, {
-    required IconData avatarIcon,
-    required Color avatarColor,
-    required String authorName,
-    required String badgeText,
-    required String timeAgo,
-    required String caption,
-    required Widget attachment,
-  }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Feed Card Widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FeedCard extends StatelessWidget {
+  final String postId;
+  final Map<String, dynamic> data;
+
+  const _FeedCard({
+    required this.postId,
+    required this.data,
+  });
+
+  String _formatTimestamp(dynamic timestamp) {
+    if (timestamp is Timestamp) {
+      final dt = timestamp.toDate();
+      final diff = DateTime.now().difference(dt);
+      if (diff.inMinutes < 1) return 'Just now';
+      if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+      if (diff.inDays < 1) return '${diff.inHours}h ago';
+      if (diff.inDays < 7) return '${diff.inDays}d ago';
+      return '${dt.day}/${dt.month}/${dt.year}';
+    }
+    return 'Recently';
+  }
+
+  void _showAnswerDialog(BuildContext context) {
+    final answerController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.verified, color: Colors.blueAccent),
+            SizedBox(width: 8),
+            Text('Answer Health Inquiry', style: TextStyle(fontSize: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Q: ${data['title'] ?? ''}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: answerController,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                hintText: 'Provide clinical answer, advice, and recommendations...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final text = answerController.text.trim();
+              if (text.isEmpty) return;
+              Navigator.pop(ctx);
+              try {
+                await DataService.answerQuestion(
+                  postId: postId,
+                  answerContent: text,
+                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Answer posted successfully!')),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to submit answer: $e')),
+                  );
+                }
+              }
+            },
+            child: const Text('Submit Answer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openComments(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _CommentsSheet(postId: postId),
+    );
+  }
+
+  void _confirmDelete(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Post?'),
+        content: const Text('This will remove the post and its comments from the health feed.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await DataService.deleteFeedPost(postId);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Post deleted')),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to delete: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final roles = AuthService.userRoles;
+    final currentUid = AuthService.currentUser?.uid;
+
+    final type = data['type'] as String? ?? 'tip';
+    final title = data['title'] as String? ?? '';
+    final content = data['content'] as String? ?? '';
+    final youtubeUrl = data['youtubeUrl'] as String? ?? '';
+    final authorName = data['authorName'] as String? ?? 'Specialist';
+    final authorRole = data['authorRole'] as String? ?? 'doctor';
+    final authorUid = data['userId'] as String? ?? '';
+    final isBmdcVerified = data['isBmdcVerified'] == true;
+    final commentsCount = (data['commentsCount'] as int?) ?? 0;
+    final answer = data['answer'] as Map<String, dynamic>?;
+
+    final canDelete = roles.isAdmin || roles.isModerator || (currentUid != null && currentUid == authorUid);
+    final canAnswer = roles.canAnswerFaq;
+
+    final badgeColor = switch (authorRole) {
+      'admin' => Colors.purple,
+      'moderator' => Colors.deepOrange,
+      'doctor' => Colors.blue,
+      'operator' => Colors.amber.shade800,
+      _ => Colors.teal,
+    };
+
+    final badgeLabel = switch (authorRole) {
+      'admin' => 'Admin',
+      'moderator' => 'Moderator',
+      'doctor' => isBmdcVerified ? 'BMDC Verified Doctor' : 'Doctor Specialist',
+      'operator' => 'Chamber Operator',
+      _ => 'Patient Member',
+    };
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       elevation: 0.8,
@@ -220,13 +435,19 @@ class _FeedScreenState extends State<FeedScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Post Header (Author info + time)
+            // Header: Author details & more menu
             Row(
               children: [
                 CircleAvatar(
                   radius: 20,
-                  backgroundColor: avatarColor.withValues(alpha: 0.15),
-                  child: Icon(avatarIcon, size: 20, color: avatarColor),
+                  backgroundColor: badgeColor.withValues(alpha: 0.15),
+                  child: Icon(
+                    type == 'video'
+                        ? Icons.ondemand_video
+                        : (type == 'question' ? Icons.help_outline : Icons.local_hospital_outlined),
+                    size: 20,
+                    color: badgeColor,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -240,162 +461,472 @@ class _FeedScreenState extends State<FeedScreen> {
                               authorName,
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                           ),
                           const SizedBox(width: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              color: colorScheme.primaryContainer.withValues(alpha: 0.4),
+                              color: badgeColor.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(6),
                             ),
-                            child: Text(
-                              badgeText,
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: colorScheme.primary,
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (isBmdcVerified || authorRole == 'doctor') ...[
+                                  Icon(Icons.verified, size: 10, color: badgeColor),
+                                  const SizedBox(width: 2),
+                                ],
+                                Text(
+                                  badgeLabel,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: badgeColor,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        timeAgo,
-                        style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                        _formatTimestamp(data['timestamp']),
+                        style: TextStyle(color: Colors.grey[500], fontSize: 11),
                       ),
                     ],
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.more_horiz),
-                  onPressed: () {},
-                ),
+                if (canDelete)
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, size: 20),
+                    onSelected: (val) {
+                      if (val == 'delete') _confirmDelete(context);
+                    },
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                            SizedBox(width: 8),
+                            Text('Delete Post', style: TextStyle(color: Colors.red)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
             const SizedBox(height: 12),
 
-            // Post Caption
+            // Post Title
             Text(
-              caption,
-              style: const TextStyle(fontSize: 14, height: 1.4),
+              title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, height: 1.3),
             ),
+            if (content.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                content,
+                style: TextStyle(fontSize: 13.5, color: Colors.grey[800], height: 1.4),
+              ),
+            ],
             const SizedBox(height: 12),
 
-            // Embedded Attachment (Video, Article, or Q&A card)
-            attachment,
+            // Embedded Video (for video posts)
+            if (type == 'video' && youtubeUrl.isNotEmpty) ...[
+              _YoutubeFeedPlayer(youtubeUrl: youtubeUrl),
+              const SizedBox(height: 12),
+            ],
+
+            // Question Answer Box (for Q&A posts)
+            if (type == 'question') ...[
+              if (answer != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.verified, size: 16, color: Colors.green),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Specialist Answer by ${answer['authorName'] ?? 'Doctor'}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12.5,
+                              color: Colors.green.shade900,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        answer['content'] ?? '',
+                        style: TextStyle(fontSize: 13, color: Colors.grey.shade900, height: 1.35),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ] else ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.hourglass_empty, size: 18, color: Colors.amber.shade800),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Awaiting verified doctor response...',
+                          style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
+                        ),
+                      ),
+                      if (canAnswer)
+                        FilledButton.tonal(
+                          onPressed: () => _showAnswerDialog(context),
+                          style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                          child: const Text('Answer'),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+            ],
+
+            // Action Row: Comments & Interaction
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () => _openComments(context),
+                  icon: const Icon(Icons.comment_outlined, size: 18),
+                  label: Text(
+                    commentsCount > 0 ? '$commentsCount Comments' : 'Comment',
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ),
+                const Spacer(),
+                if (type == 'question' && answer == null && canAnswer)
+                  OutlinedButton.icon(
+                    onPressed: () => _showAnswerDialog(context),
+                    icon: const Icon(Icons.medical_services_outlined, size: 16),
+                    label: const Text('Provide Answer', style: TextStyle(fontSize: 12)),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildVideoAttachment(ColorScheme colorScheme) {
-    const isConfigured = youtubeApiKey != null && youtubePlaylistId != null;
+// ─────────────────────────────────────────────────────────────────────────────
+// Embedded YouTube Feed Player
+// ─────────────────────────────────────────────────────────────────────────────
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.withValues(alpha: 0.15)),
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.redAccent.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.play_arrow_rounded,
-              size: 36,
-              color: Colors.redAccent,
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            isConfigured ? 'Playing video feed...' : 'Video feed coming soon',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Curated Bangladeshi doctor health guides and clinical videos will be linked here.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey[600], fontSize: 12),
-          ),
-        ],
-      ),
-    );
+class _YoutubeFeedPlayer extends StatefulWidget {
+  final String youtubeUrl;
+
+  const _YoutubeFeedPlayer({required this.youtubeUrl});
+
+  @override
+  State<_YoutubeFeedPlayer> createState() => _YoutubeFeedPlayerState();
+}
+
+class _YoutubeFeedPlayerState extends State<_YoutubeFeedPlayer> {
+  YoutubePlayerController? _controller;
+  String? _videoId;
+
+  @override
+  void initState() {
+    super.initState();
+    _videoId = YoutubePlayer.convertUrlToId(widget.youtubeUrl);
+    if (_videoId != null && _videoId!.isNotEmpty) {
+      _controller = YoutubePlayerController(
+        initialVideoId: _videoId!,
+        flags: const YoutubePlayerFlags(
+          autoPlay: false,
+          mute: false,
+          hideControls: false,
+          enableCaption: true,
+        ),
+      );
+    }
   }
 
-  Widget _buildArticleAttachment(ColorScheme colorScheme) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.withValues(alpha: 0.15)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.menu_book_outlined, size: 18, color: colorScheme.primary),
-              const SizedBox(width: 8),
-              const Text(
-                'Clinical Advisories & Articles',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'No articles published yet — BMDC-verified doctors can publish medical guidance directly to patients once doctor portal goes live.',
-            style: TextStyle(color: Colors.grey[600], fontSize: 12, height: 1.35),
-          ),
-        ],
-      ),
-    );
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
   }
 
-  Widget _buildQnAAttachment(ColorScheme colorScheme) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.withValues(alpha: 0.15)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
+  @override
+  Widget build(BuildContext context) {
+    if (_controller == null || _videoId == null) {
+      return Container(
+        height: 180,
+        decoration: BoxDecoration(
+          color: Colors.black12,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.help_outline, size: 18, color: Colors.teal),
+              Icon(Icons.ondemand_video, color: Colors.redAccent),
               SizedBox(width: 8),
-              Text(
-                'Community Medical Inquiries',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-              ),
+              Text('Unable to load video link'),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            'No community questions submitted yet — patient inquiries answered by registered specialists will appear here.',
-            style: TextStyle(color: Colors.grey[600], fontSize: 12, height: 1.35),
-          ),
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: YoutubePlayer(
+        controller: _controller!,
+        showVideoProgressIndicator: true,
+        progressIndicatorColor: Colors.redAccent,
+        bottomActions: const [
+          CurrentPosition(),
+          ProgressBar(isExpanded: true),
+          RemainingDuration(),
+          PlaybackSpeedButton(),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Comments Bottom Sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CommentsSheet extends StatefulWidget {
+  final String postId;
+
+  const _CommentsSheet({required this.postId});
+
+  @override
+  State<_CommentsSheet> createState() => _CommentsSheetState();
+}
+
+class _CommentsSheetState extends State<_CommentsSheet> {
+  final _commentController = TextEditingController();
+  bool _isSending = false;
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitComment() async {
+    final text = _commentController.text.trim();
+    if (text.isEmpty) return;
+
+    setState(() => _isSending = true);
+    try {
+      final user = AuthService.currentUser;
+      final roles = AuthService.userRoles;
+      final role = roles.isAdmin
+          ? 'admin'
+          : (roles.isModerator
+              ? 'moderator'
+              : (roles.isDoctor ? 'doctor' : (roles.isOperator ? 'operator' : 'patient')));
+
+      await DataService.addPostComment(
+        postId: widget.postId,
+        comment: text,
+        authorName: user?.displayName ?? 'Community Member',
+        authorRole: role,
+      );
+      _commentController.clear();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to comment: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: mediaQuery.viewInsets.bottom,
+      ),
+      child: SizedBox(
+        height: mediaQuery.size.height * 0.65,
+        child: Column(
+          children: [
+            // Sheet handle
+            Container(
+              margin: const EdgeInsets.only(top: 8, bottom: 4),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.chat_bubble_outline, size: 20),
+                  SizedBox(width: 8),
+                  Text('Community Discussion', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+
+            // Live Comments Stream
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: DataService.postCommentsStream(widget.postId),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final docs = snapshot.data?.docs ?? [];
+                  if (docs.isEmpty) {
+                    return Center(
+                      child: Text('No comments yet. Start the discussion!',
+                          style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                    );
+                  }
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: docs.length,
+                    itemBuilder: (context, index) {
+                      final c = docs[index].data();
+                      final author = c['authorName'] as String? ?? 'User';
+                      final commentText = c['comment'] as String? ?? '';
+                      final role = c['authorRole'] as String? ?? 'patient';
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12.0),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CircleAvatar(
+                              radius: 14,
+                              backgroundColor: Colors.blue.shade100,
+                              child: Text(
+                                author.isNotEmpty ? author[0].toUpperCase() : 'U',
+                                style: TextStyle(fontSize: 12, color: Colors.blue.shade900),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Text(
+                                          author,
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: Colors.blue.shade50,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            role,
+                                            style: TextStyle(fontSize: 9, color: Colors.blue.shade800),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(commentText, style: const TextStyle(fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            const Divider(height: 1),
+
+            // Comment text input bar
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _commentController,
+                        decoration: InputDecoration(
+                          hintText: 'Add a comment...',
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      onPressed: _isSending ? null : _submitComment,
+                      icon: _isSending
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.send, size: 18),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/doctor.dart';
 import 'firestore_config.dart';
 import 'firestore_service.dart';
@@ -617,13 +618,19 @@ class ApiService {
   static Future<void> setDoctorRole({
     required String uid,
     required bool isDoctor,
+    bool isBmdcVerified = false,
     String? doctorProfileId,
+    String? nid,
+    String? bmdcNumber,
   }) async {
     if (FirestoreConfig.useFirestore) {
       return FirestoreService.setDoctorRole(
         uid: uid,
         isDoctor: isDoctor,
+        isBmdcVerified: isBmdcVerified,
         doctorProfileId: doctorProfileId,
+        nid: nid,
+        bmdcNumber: bmdcNumber,
       );
     }
   }
@@ -632,6 +639,7 @@ class ApiService {
     required String uid,
     required String phone,
     String? name,
+    String? nid,
     String? bmdcNumber,
     String? speciality,
   }) async {
@@ -640,10 +648,107 @@ class ApiService {
         uid: uid,
         phone: phone,
         name: name,
+        nid: nid,
         bmdcNumber: bmdcNumber,
         speciality: speciality,
       );
     }
+  }
+
+  // --- REAL-TIME FEED & COMMUNITY Q&A ---
+
+  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream({String? typeFilter}) {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.feedPostsStream(typeFilter: typeFilter);
+    }
+    return const Stream.empty();
+  }
+
+  static Future<String> createFeedPost({
+    required String type,
+    required String title,
+    String? content,
+    String? youtubeUrl,
+    String? authorName,
+    String? authorRole,
+    bool isBmdcVerified = false,
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.createFeedPost(
+        type: type,
+        title: title,
+        content: content,
+        youtubeUrl: youtubeUrl,
+        authorName: authorName,
+        authorRole: authorRole,
+        isBmdcVerified: isBmdcVerified,
+      );
+    }
+    return 'mock_post_id';
+  }
+
+  static Future<void> answerQuestion({
+    required String postId,
+    required String answerContent,
+    String? doctorName,
+    String? doctorRole,
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.answerQuestion(
+        postId: postId,
+        answerContent: answerContent,
+        doctorName: doctorName,
+        doctorRole: doctorRole,
+      );
+    }
+  }
+
+  static Future<void> addPostComment({
+    required String postId,
+    required String comment,
+    String? authorName,
+    String? authorRole,
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.addPostComment(
+        postId: postId,
+        comment: comment,
+        authorName: authorName,
+        authorRole: authorRole,
+      );
+    }
+  }
+
+  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(String postId) {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.postCommentsStream(postId);
+    }
+    return const Stream.empty();
+  }
+
+  static Future<void> deleteFeedPost(String postId) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.deleteFeedPost(postId);
+    }
+  }
+
+  static Future<void> setModeratorRole({
+    required String uid,
+    required bool isModerator,
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.setModeratorRole(
+        uid: uid,
+        isModerator: isModerator,
+      );
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchModerators() async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchModerators();
+    }
+    return [];
   }
 
   // =========================================================================

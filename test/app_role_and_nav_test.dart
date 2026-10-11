@@ -31,5 +31,42 @@ void main() {
       expect(doctorAndOperator.availableRoles, [AppRole.patient, AppRole.doctor, AppRole.operator]);
       expect(doctorAndOperator.hasMultipleRoles, isTrue);
     });
+
+    test('UserRoles enforces feed, video, FAQ, and moderator permissions accurately', () {
+      // 1. Patient: Cannot post video or answer FAQ, cannot manage moderators
+      const patient = UserRoles();
+      expect(patient.canPostVideo, isFalse);
+      expect(patient.canPostFeed, isFalse);
+      expect(patient.canAnswerFaq, isFalse);
+      expect(patient.canManageModerators, isFalse);
+
+      // 2. Operator: Cannot post video or answer FAQ, cannot manage moderators
+      const operatorUser = UserRoles(isOperator: true);
+      expect(operatorUser.canPostVideo, isFalse);
+      expect(operatorUser.canPostFeed, isFalse);
+      expect(operatorUser.canAnswerFaq, isFalse);
+      expect(operatorUser.canManageModerators, isFalse);
+
+      // 3. Doctor: Can post video, feed tips, answer FAQ, but cannot manage moderators
+      const doctor = UserRoles(isDoctor: true);
+      expect(doctor.canPostVideo, isTrue);
+      expect(doctor.canPostFeed, isTrue);
+      expect(doctor.canAnswerFaq, isTrue);
+      expect(doctor.canManageModerators, isFalse);
+
+      // 4. Moderator: Can post video, tips, answer FAQ, but cannot remove/manage moderators
+      const moderator = UserRoles(isModerator: true);
+      expect(moderator.canPostVideo, isTrue);
+      expect(moderator.canPostFeed, isTrue);
+      expect(moderator.canAnswerFaq, isTrue);
+      expect(moderator.canManageModerators, isFalse);
+
+      // 5. Admin: Can do all, and CAN manage/appoint/remove moderators
+      const admin = UserRoles(isAdmin: true);
+      expect(admin.canPostVideo, isTrue);
+      expect(admin.canPostFeed, isTrue);
+      expect(admin.canAnswerFaq, isTrue);
+      expect(admin.canManageModerators, isTrue);
+    });
   });
 }

@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/doctor.dart';
 import 'api_service.dart';
 import 'firestore_config.dart';
@@ -231,19 +232,28 @@ class DataService {
   static Future<void> setDoctorRole({
     required String uid,
     required bool isDoctor,
+    bool isBmdcVerified = false,
     String? doctorProfileId,
+    String? nid,
+    String? bmdcNumber,
   }) {
     if (isFirestore) {
       return FirestoreService.setDoctorRole(
         uid: uid,
         isDoctor: isDoctor,
+        isBmdcVerified: isBmdcVerified,
         doctorProfileId: doctorProfileId,
+        nid: nid,
+        bmdcNumber: bmdcNumber,
       );
     }
     return ApiService.setDoctorRole(
       uid: uid,
       isDoctor: isDoctor,
+      isBmdcVerified: isBmdcVerified,
       doctorProfileId: doctorProfileId,
+      nid: nid,
+      bmdcNumber: bmdcNumber,
     );
   }
 
@@ -251,6 +261,7 @@ class DataService {
     required String uid,
     required String phone,
     String? name,
+    String? nid,
     String? bmdcNumber,
     String? speciality,
   }) {
@@ -259,6 +270,7 @@ class DataService {
         uid: uid,
         phone: phone,
         name: name,
+        nid: nid,
         bmdcNumber: bmdcNumber,
         speciality: speciality,
       );
@@ -267,9 +279,133 @@ class DataService {
       uid: uid,
       phone: phone,
       name: name,
+      nid: nid,
       bmdcNumber: bmdcNumber,
       speciality: speciality,
     );
+  }
+
+  // --- REAL-TIME FEED, VIDEOS & COMMUNITY Q&A ---
+
+  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream({String? typeFilter}) {
+    if (isFirestore) {
+      return FirestoreService.feedPostsStream(typeFilter: typeFilter);
+    }
+    return ApiService.feedPostsStream(typeFilter: typeFilter);
+  }
+
+  static Future<String> createFeedPost({
+    required String type,
+    required String title,
+    String? content,
+    String? youtubeUrl,
+    String? authorName,
+    String? authorRole,
+    bool isBmdcVerified = false,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.createFeedPost(
+        type: type,
+        title: title,
+        content: content,
+        youtubeUrl: youtubeUrl,
+        authorName: authorName,
+        authorRole: authorRole,
+        isBmdcVerified: isBmdcVerified,
+      );
+    }
+    return ApiService.createFeedPost(
+      type: type,
+      title: title,
+      content: content,
+      youtubeUrl: youtubeUrl,
+      authorName: authorName,
+      authorRole: authorRole,
+      isBmdcVerified: isBmdcVerified,
+    );
+  }
+
+  static Future<void> answerQuestion({
+    required String postId,
+    required String answerContent,
+    String? doctorName,
+    String? doctorRole,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.answerQuestion(
+        postId: postId,
+        answerContent: answerContent,
+        doctorName: doctorName,
+        doctorRole: doctorRole,
+      );
+    }
+    return ApiService.answerQuestion(
+      postId: postId,
+      answerContent: answerContent,
+      doctorName: doctorName,
+      doctorRole: doctorRole,
+    );
+  }
+
+  static Future<void> addPostComment({
+    required String postId,
+    required String comment,
+    String? authorName,
+    String? authorRole,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.addPostComment(
+        postId: postId,
+        comment: comment,
+        authorName: authorName,
+        authorRole: authorRole,
+      );
+    }
+    return ApiService.addPostComment(
+      postId: postId,
+      comment: comment,
+      authorName: authorName,
+      authorRole: authorRole,
+    );
+  }
+
+  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(String postId) {
+    if (isFirestore) {
+      return FirestoreService.postCommentsStream(postId);
+    }
+    return ApiService.postCommentsStream(postId);
+  }
+
+  static Future<void> deleteFeedPost(String postId) {
+    if (isFirestore) {
+      return FirestoreService.deleteFeedPost(postId);
+    }
+    return ApiService.deleteFeedPost(postId);
+  }
+
+  // --- MODERATOR MANAGEMENT ---
+
+  static Future<void> setModeratorRole({
+    required String uid,
+    required bool isModerator,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.setModeratorRole(
+        uid: uid,
+        isModerator: isModerator,
+      );
+    }
+    return ApiService.setModeratorRole(
+      uid: uid,
+      isModerator: isModerator,
+    );
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchModerators() {
+    if (isFirestore) {
+      return FirestoreService.fetchModerators();
+    }
+    return ApiService.fetchModerators();
   }
 
   // --- SPECIALTY ACCURACY FEEDBACK ---

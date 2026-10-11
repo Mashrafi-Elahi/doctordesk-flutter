@@ -96,5 +96,26 @@ service cloud.firestore {
       allow create: if true;
       allow read, update, delete: if false;
     }
+
+    // Feed Posts, Real-time Videos & Community Q&A
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isModerator == true
+      );
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+        allow update, delete: if request.auth != null && (
+          resource.data.userId == request.auth.uid ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
+      }
+    }
   }
 }

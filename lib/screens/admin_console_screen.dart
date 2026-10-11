@@ -24,18 +24,23 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   int? _appointmentCount;
   String? _lastActionMessage;
   List<Map<String, dynamic>> _doctorApplications = [];
+  List<Map<String, dynamic>> _moderators = [];
   final TextEditingController _manualUidController = TextEditingController();
+  final TextEditingController _moderatorUidController = TextEditingController();
+  bool _manualGrantVerified = false;
 
   @override
   void initState() {
     super.initState();
     _refreshBackendStats();
     _loadDoctorApplications();
+    _loadModerators();
   }
 
   @override
   void dispose() {
     _manualUidController.dispose();
+    _moderatorUidController.dispose();
     super.dispose();
   }
 
@@ -50,12 +55,36 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     } catch (_) {}
   }
 
-  Future<void> _approveDoctorApplication(String uid) async {
+  Future<void> _loadModerators() async {
+    try {
+      final mods = await DataService.fetchModerators();
+      if (mounted) {
+        setState(() {
+          _moderators = mods;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _approveDoctorApplication(
+    String uid, {
+    bool markVerified = false,
+    String? nid,
+    String? bmdcNumber,
+  }) async {
     setState(() => _loading = true);
     try {
-      await DataService.setDoctorRole(uid: uid, isDoctor: true);
+      await DataService.setDoctorRole(
+        uid: uid,
+        isDoctor: true,
+        isBmdcVerified: markVerified,
+        nid: nid,
+        bmdcNumber: bmdcNumber,
+      );
       setState(() {
-        _lastActionMessage = 'Approved & allocated Doctor role for user $uid in database.';
+        _lastActionMessage = markVerified
+            ? 'Approved & allocated Doctor role with BMDC/NID Verified badge for $uid.'
+            : 'Approved & allocated Doctor role for user $uid in database.';
       });
       await _loadDoctorApplications();
       await _refreshBackendStats();
@@ -82,6 +111,33 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     }
   }
 
+  Future<void> _toggleModeratorRole(String uid, bool grant) async {
+    final isAdmin = AuthService.userRoles.isAdmin;
+    if (!isAdmin) {
+      setState(() {
+        _lastActionMessage = 'Permission Denied: Only System Administrators can add or remove moderators. Moderators cannot remove other moderators.';
+      });
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      await DataService.setModeratorRole(uid: uid, isModerator: grant);
+      setState(() {
+        _lastActionMessage = grant
+            ? 'Granted Moderator role to $uid in database.'
+            : 'Revoked Moderator role from $uid in database.';
+        _moderatorUidController.clear();
+      });
+      await _loadModerators();
+      await _refreshBackendStats();
+    } catch (e) {
+      setState(() => _lastActionMessage = 'Error updating moderator role: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<void> _manualToggleDoctorRole(bool grant) async {
     final uid = _manualUidController.text.trim();
     if (uid.isEmpty) {
@@ -90,10 +146,14 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     }
     setState(() => _loading = true);
     try {
-      await DataService.setDoctorRole(uid: uid, isDoctor: grant);
+      await DataService.setDoctorRole(
+        uid: uid,
+        isDoctor: grant,
+        isBmdcVerified: grant && _manualGrantVerified,
+      );
       setState(() {
         _lastActionMessage = grant
-            ? 'Granted Doctor role to $uid via database.'
+            ? 'Granted Doctor role${_manualGrantVerified ? ' (Verified)' : ''} to $uid via database.'
             : 'Revoked Doctor role from $uid via database.';
         _manualUidController.clear();
       });
@@ -377,11 +437,16 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                     else
                       ..._doctorApplications.map((app) {
                         final uid = app['uid'] ?? '';
+                        final docApp = app['doctorApplication'] as Map<String, dynamic>? ?? {};
                         final name = app['name']?.toString().isNotEmpty == true
                             ? app['name']
-                            : (app['doctorApplication']?['name'] ?? 'Doctor Applicant');
-                        final email = app['email'] ?? app['doctorApplication']?['email'] ?? '';
-                        final phone = app['phone'] ?? app['doctorApplication']?['phone'] ?? '';
+                            : (docApp['name'] ?? 'Doctor Applicant');
+                        final email = app['email'] ?? docApp['email'] ?? '';
+                        final phone = app['phone'] ?? docApp['phone'] ?? '';
+                        final nid = docApp['nid'] ?? app['nid'] ?? '';
+                        final bmdcNumber = docApp['bmdcNumber'] ?? app['bmdcRegNumber'] ?? '';
+                        final hasDocs = docApp['hasProvidedVerificationDocs'] == true ||
+                            (nid.toString().isNotEmpty || bmdcNumber.toString().isNotEmpty);
 
                         return Container(
                           margin: const EdgeInsets.only(top: 8, bottom: 8),
@@ -394,20 +459,69 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('$name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                              const SizedBox(height: 2),
-                              Text('UID: $uid', style: const TextStyle(fontSize: 11, color: Colors.black54)),
-                              if (email.isNotEmpty) Text('Email: $email', style: const TextStyle(fontSize: 11, color: Colors.black54)),
-                              if (phone.isNotEmpty) Text('Phone: $phone', style: const TextStyle(fontSize: 11, color: Colors.black54)),
-                              const SizedBox(height: 8),
                               Row(
                                 children: [
+                                  Expanded(
+                                    child: Text('$name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                  ),
+                                  if (hasDocs)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade100,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.verified, size: 12, color: Colors.green.shade800),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Docs Provided',
+                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade800),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text('UID: $uid', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                              if (phone.isNotEmpty)
+                                Text('Doctor Phone (Required for Login): $phone',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87)),
+                              if (email.isNotEmpty) Text('Email: $email', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                              if (nid.isNotEmpty) Text('NID: $nid', style: const TextStyle(fontSize: 11.5, color: Colors.indigo)),
+                              if (bmdcNumber.isNotEmpty)
+                                Text('BMDC Reg No: $bmdcNumber', style: const TextStyle(fontSize: 11.5, color: Colors.teal)),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  FilledButton.icon(
+                                    icon: const Icon(Icons.verified, size: 16),
+                                    style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
+                                    onPressed: _loading
+                                        ? null
+                                        : () => _approveDoctorApplication(
+                                              uid,
+                                              markVerified: true,
+                                              nid: nid.toString(),
+                                              bmdcNumber: bmdcNumber.toString(),
+                                            ),
+                                    label: const Text('Approve & Verify (BMDC & NID)'),
+                                  ),
                                   FilledButton(
                                     style: FilledButton.styleFrom(backgroundColor: Colors.green),
-                                    onPressed: _loading ? null : () => _approveDoctorApplication(uid),
-                                    child: const Text('Approve Doctor'),
+                                    onPressed: _loading
+                                        ? null
+                                        : () => _approveDoctorApplication(
+                                              uid,
+                                              markVerified: false,
+                                            ),
+                                    child: const Text('Approve Standard'),
                                   ),
-                                  const SizedBox(width: 8),
                                   OutlinedButton(
                                     style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
                                     onPressed: _loading ? null : () => _rejectDoctorApplication(uid),
@@ -427,6 +541,18 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                       style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
                     ),
                     const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: _manualGrantVerified,
+                          onChanged: (val) {
+                            setState(() => _manualGrantVerified = val ?? false);
+                          },
+                        ),
+                        const Text('Include BMDC & NID Verified Status', style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
                     Row(
                       children: [
                         Expanded(
@@ -452,6 +578,132 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                         ),
                       ],
                     ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Moderator Management Section
+            _sectionTitle('MODERATOR APPOINTMENTS & PERMISSIONS'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'System Administrators can appoint and remove moderators. Moderators can post YouTube videos, publish clinical tips, and answer community Q&A. Moderators cannot remove other moderators.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    if (!AuthService.userRoles.isAdmin)
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.lock_outline, size: 18, color: Colors.amber.shade900),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Restricted: You are viewing as a Moderator. Moderators cannot add or remove other moderators.',
+                                style: TextStyle(fontSize: 12, color: Colors.amber.shade900),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Active Moderators (${_moderators.length})',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh, size: 20),
+                          tooltip: 'Refresh moderators',
+                          onPressed: _loading ? null : _loadModerators,
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 1),
+                    if (_moderators.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: Text(
+                            'No moderators appointed yet.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      ..._moderators.map((mod) {
+                        final uid = mod['uid'] ?? '';
+                        final name = mod['name'] ?? 'Moderator User';
+                        final email = mod['email'] ?? '';
+                        final isAdmin = AuthService.userRoles.isAdmin;
+
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const CircleAvatar(
+                            backgroundColor: Colors.deepOrange,
+                            child: Icon(Icons.security, color: Colors.white, size: 18),
+                          ),
+                          title: Text('$name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                          subtitle: Text('UID: $uid${email.isNotEmpty ? ' • $email' : ''}',
+                              style: const TextStyle(fontSize: 11)),
+                          trailing: isAdmin
+                              ? OutlinedButton(
+                                  style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                                  onPressed: _loading ? null : () => _toggleModeratorRole(uid, false),
+                                  child: const Text('Revoke'),
+                                )
+                              : null,
+                        );
+                      }),
+                    if (AuthService.userRoles.isAdmin) ...[
+                      const SizedBox(height: 12),
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Appoint New Moderator (by UID):',
+                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _moderatorUidController,
+                              decoration: const InputDecoration(
+                                hintText: 'Enter user UID to make moderator',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            style: FilledButton.styleFrom(backgroundColor: Colors.deepOrange),
+                            onPressed: _loading
+                                ? null
+                                : () {
+                                    final uid = _moderatorUidController.text.trim();
+                                    if (uid.isNotEmpty) _toggleModeratorRole(uid, true);
+                                  },
+                            child: const Text('Appoint'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

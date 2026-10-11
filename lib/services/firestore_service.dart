@@ -669,11 +669,15 @@ class FirestoreService {
     }
   }
 
-  /// Allocates or revokes the Doctor role in the database for a user (Admin only)
+  /// Allocates or revokes the Doctor role in the database for a user (Admin only).
+  /// If NID and BMDC are provided, verified badge/status can be allocated.
   static Future<void> setDoctorRole({
     required String uid,
     required bool isDoctor,
+    bool isBmdcVerified = false,
     String? doctorProfileId,
+    String? nid,
+    String? bmdcNumber,
   }) async {
     final userRef = _db.collection('users').doc(uid);
     final updates = <String, dynamic>{
@@ -682,32 +686,181 @@ class FirestoreService {
       'doctorApplication.status': isDoctor ? 'approved' : 'revoked',
       'doctorApplication.reviewedAt': FieldValue.serverTimestamp(),
       'doctorApplication.reviewedByUid': _auth.currentUser?.uid,
+      'isBmdcVerified': isBmdcVerified,
     };
+    if (nid != null && nid.isNotEmpty) updates['nid'] = nid;
+    if (bmdcNumber != null && bmdcNumber.isNotEmpty) updates['bmdcRegNumber'] = bmdcNumber;
     if (doctorProfileId != null) {
       updates['doctorProfileId'] = doctorProfileId;
     }
     await userRef.update(updates);
   }
 
-  /// Submits an application for the doctor role to the database
+  /// Submits an application for the doctor role to the database with optional NID and BMDC
   static Future<void> applyForDoctorRole({
     required String uid,
     required String phone,
     String? name,
+    String? nid,
     String? bmdcNumber,
     String? speciality,
   }) async {
     final userRef = _db.collection('users').doc(uid);
+    final hasDocs = (nid != null && nid.isNotEmpty) || (bmdcNumber != null && bmdcNumber.isNotEmpty);
     await userRef.set({
+      'phone': phone,
       'doctorApplication': {
         'status': 'pending',
         'appliedAt': FieldValue.serverTimestamp(),
         'phone': phone,
         'name': name ?? '',
+        'nid': nid ?? '',
         'bmdcNumber': bmdcNumber ?? '',
         'speciality': speciality ?? '',
+        'hasProvidedVerificationDocs': hasDocs,
       },
     }, SetOptions(merge: true));
+  }
+
+  /// Sets or revokes moderator role. Only Admins can execute this.
+  static Future<void> setModeratorRole({
+    required String uid,
+    required bool isModerator,
+  }) async {
+    final userRef = _db.collection('users').doc(uid);
+    await userRef.update({
+      'roles.isModerator': isModerator,
+      'moderatorUpdatedBy': _auth.currentUser?.uid,
+      'moderatorUpdatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Fetches users with moderator role
+  static Future<List<Map<String, dynamic>>> fetchModerators() async {
+    try {
+      final snap = await _db
+          .collection('users')
+          .where('roles.isModerator', isEqualTo: true)
+          .get();
+      return snap.docs.map((doc) => {'uid': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      debugPrint('Firestore fetchModerators error: $e');
+      return [];
+    }
+  }
+
+  // =========================================================================
+  // REAL-TIME FEED & VIDEO POSTS
+  // =========================================================================
+
+  /// Stream of feed posts ordered by newest first
+  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream({String? typeFilter}) {
+    Query<Map<String, dynamic>> query = _db.collection('posts').orderBy('timestamp', descending: true);
+    if (typeFilter != null && typeFilter != 'All') {
+      query = query.where('type', isEqualTo: typeFilter);
+    }
+    return query.snapshots();
+  }
+
+  /// Creates a post in the feed.
+  /// Doctors, Admins, and Moderators can post videos and tips.
+  /// Patients and Operators can ask questions.
+  static Future<String> createFeedPost({
+    required String type, // 'video' | 'tip' | 'question'
+    required String title,
+    String? content,
+    String? youtubeUrl,
+    String? authorName,
+    String? authorRole,
+    bool isBmdcVerified = false,
+  }) async {
+    final user = _auth.currentUser;
+    final uid = user?.uid ?? 'anonymous_user';
+    final name = authorName ?? user?.displayName ?? 'Community Member';
+    final role = authorRole ?? 'patient';
+
+    final docRef = await _db.collection('posts').add({
+      'type': type,
+      'title': title,
+      'content': content ?? '',
+      'youtubeUrl': youtubeUrl ?? '',
+      'userId': uid,
+      'authorName': name,
+      'authorRole': role,
+      'isBmdcVerified': isBmdcVerified,
+      'timestamp': FieldValue.serverTimestamp(),
+      'answer': null,
+      'likesCount': 0,
+      'commentsCount': 0,
+    });
+
+    return docRef.id;
+  }
+
+  /// Answers a community question or FAQ.
+  /// Allowed for Doctors, Admins, and Moderators.
+  static Future<void> answerQuestion({
+    required String postId,
+    required String answerContent,
+    String? doctorName,
+    String? doctorRole,
+  }) async {
+    final name = doctorName ?? _auth.currentUser?.displayName ?? 'Dr. Specialist';
+    final role = doctorRole ?? 'doctor';
+
+    await _db.collection('posts').doc(postId).update({
+      'answer': {
+        'content': answerContent,
+        'authorName': name,
+        'authorRole': role,
+        'authorUid': _auth.currentUser?.uid,
+        'answeredAt': DateTime.now().toIso8601String(),
+      },
+    });
+  }
+
+  /// Adds a comment to a feed post.
+  /// Allowed for all roles (patients, operators, doctors, admins).
+  static Future<void> addPostComment({
+    required String postId,
+    required String comment,
+    String? authorName,
+    String? authorRole,
+  }) async {
+    final uid = _auth.currentUser?.uid ?? 'guest';
+    final name = authorName ?? _auth.currentUser?.displayName ?? 'Community Member';
+    final role = authorRole ?? 'patient';
+
+    final postRef = _db.collection('posts').doc(postId);
+    await postRef.collection('comments').add({
+      'postId': postId,
+      'userId': uid,
+      'authorName': name,
+      'authorRole': role,
+      'comment': comment,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+
+    try {
+      await postRef.update({
+        'commentsCount': FieldValue.increment(1),
+      });
+    } catch (_) {}
+  }
+
+  /// Stream of comments for a specific post
+  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(String postId) {
+    return _db
+        .collection('posts')
+        .doc(postId)
+        .collection('comments')
+        .orderBy('timestamp', descending: false)
+        .snapshots();
+  }
+
+  /// Deletes a post (Author, Moderator, or Admin)
+  static Future<void> deleteFeedPost(String postId) async {
+    await _db.collection('posts').doc(postId).delete();
   }
 
   // =========================================================================

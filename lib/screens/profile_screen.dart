@@ -48,47 +48,63 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _showDoctorApplicationDialog() async {
-    final phoneController = TextEditingController(text: AuthService.currentUser?.phoneNumber ?? '');
-    final bmdcController = TextEditingController();
+    final phoneController = TextEditingController(text: _userProfile?['phone'] ?? AuthService.currentUser?.phoneNumber ?? '');
+    final bmdcController = TextEditingController(text: _userProfile?['bmdcRegNumber'] ?? _userProfile?['doctorApplication']?['bmdcNumber'] ?? '');
+    final nidController = TextEditingController(text: _userProfile?['nid'] ?? _userProfile?['doctorApplication']?['nid'] ?? '');
 
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Row(
           children: [
-            Icon(Icons.medical_services_outlined, color: Colors.blue),
+            Icon(Icons.verified_user, color: Colors.blueAccent),
             SizedBox(width: 8),
             Text('Doctor Application', style: TextStyle(fontSize: 16)),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Doctor role allocation is managed via database review. Enter your BMDC registration number and phone to apply for verification.',
-              style: TextStyle(fontSize: 12.5, color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: phoneController,
-              decoration: const InputDecoration(
-                labelText: 'Phone Number (Required)',
-                border: OutlineInputBorder(),
-                isDense: true,
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Doctor role allocation is managed via the database. Enter your phone number (required to login and stored in database). NID and BMDC are optional for now — if provided, the Verified badge and button will appear on your profile.',
+                style: TextStyle(fontSize: 12.5, color: Colors.grey),
               ),
-              keyboardType: TextInputType.phone,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: bmdcController,
-              decoration: const InputDecoration(
-                labelText: 'BMDC Registration Number',
-                border: OutlineInputBorder(),
-                isDense: true,
+              const SizedBox(height: 16),
+              TextField(
+                controller: phoneController,
+                decoration: const InputDecoration(
+                  labelText: 'Doctor Phone Number (Required)',
+                  hintText: 'Used for doctor account login',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                keyboardType: TextInputType.phone,
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: nidController,
+                decoration: const InputDecoration(
+                  labelText: 'National ID / NID (Optional for now)',
+                  hintText: 'Enables Verified button on approval',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: bmdcController,
+                decoration: const InputDecoration(
+                  labelText: 'BMDC Registration Number (Optional)',
+                  hintText: 'e.g. A-12345',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -109,6 +125,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         await DataService.applyForDoctorRole(
           uid: uid,
           phone: phoneController.text.trim(),
+          nid: nidController.text.trim(),
           bmdcNumber: bmdcController.text.trim(),
           name: AuthService.currentUser?.displayName,
         );
@@ -212,6 +229,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     textAlign: TextAlign.center,
                   ),
                 ),
+                if (widget.role == UserRole.doctor) ...[
+                  const SizedBox(height: 8),
+                  if (_userProfile?['isBmdcVerified'] == true ||
+                      _userProfile?['doctorApplication']?['hasProvidedVerificationDocs'] == true ||
+                      (_userProfile?['bmdcRegNumber']?.toString().isNotEmpty == true) ||
+                      (_userProfile?['nid']?.toString().isNotEmpty == true)) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.green.shade400),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.verified, size: 16, color: Colors.green.shade700),
+                          const SizedBox(width: 6),
+                          Text(
+                            'BMDC & NID Verified Specialist',
+                            style: TextStyle(
+                              color: Colors.green.shade800,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.add_moderator_outlined, size: 16),
+                      label: const Text('Add NID & BMDC to Verify Profile', style: TextStyle(fontSize: 12)),
+                      onPressed: _showDoctorApplicationDialog,
+                    ),
+                  ],
+                ],
                 const SizedBox(height: 16),
 
                 // Multi-role Switcher — Only shows if the user actually has more than one capability
@@ -468,16 +522,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 16),
             _ProfileTile(
               icon: Icons.verified_user_outlined,
-              label: 'BMDC Verification Status: Verified',
+              label: (_userProfile?['isBmdcVerified'] == true ||
+                      _userProfile?['doctorApplication']?['hasProvidedVerificationDocs'] == true ||
+                      (_userProfile?['bmdcRegNumber']?.toString().isNotEmpty == true) ||
+                      (_userProfile?['nid']?.toString().isNotEmpty == true))
+                  ? 'BMDC & NID Verification Status: Verified Specialist'
+                  : 'BMDC & NID Verification Status: Pending / Unverified',
               colorScheme: colorScheme,
               isSignedIn: true,
               onCustomTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const SettingsScreen(role: UserRole.doctor, initialSection: 'bmdc'),
-                  ),
-                );
+                _showDoctorApplicationDialog();
               },
             ),
             _ProfileTile(
