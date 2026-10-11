@@ -1,0 +1,56 @@
+{
+  "Popular Diagnostic Centre Ltd. ": {
+    "location": "Dhanmondi",
+    "lat": 23.7391955,
+    "lng": 90.3824471,
+    "matchedName": "Popular Hospital & Diagnostic Center, ধানমণ্ডি ২, ধানমন্ডি আবাসিক এলাকা, কাঁটাবন, জিগাতলা, ঢাকা, ঢাকা মহানগর, ঢাকা জেলা, ঢাকা বিভাগ, 1205, বাংলাদেশ"
+  },
+  "Universal Medical College Hospital Limited": {
+    "location": "Dhaka",
+    "lat": 23.7766326,
+    "lng": 90.3953894,
+    "matchedName": "Universal Medical College Hospital, 74G/75, নতুন বিমানবন্দর সড়ক, গুলশান, ঢাকা, ঢাকা মহানগর, ঢাকা জেলা, ঢাকা বিভাগ, 2467, বাংলাদেশ"
+  },
+  "Ibn Sina Medical College Hospital ": {
+    "location": "Kallyanpur",
+    "lat": 23.778158,
+    "lng": 90.3620901,
+    "matchedName": "ইবনে সিনা মেডিকেল কলেজ হাসপাতাল, 1/1-B, মিরপুর রোড, ঢাকা হাউজিং, উত্তর শ্যামলী, কল্যাণপুর, ঢাকা, ঢাকা মহানগর, ঢাকা জেলা, ঢাকা বিভাগ, 1207, বাংলাদেশ"
+  },
+  "Ibn Sina Diagnostic & Imaging Center ": {
+    "location": "Dhanmondi",
+    "lat": null,
+    "lng": null,
+    "matchedName": null
+  },
+  "Square Hospitals Ltd": {
+    "location": "Dhaka",
+    "lat": 23.7530278,
+    "lng": 90.3817096,
+    "matchedName": "Square Hospitals, পান্থপথ, লেক সার্কাস, পান্থপথ, ঢাকা, ঢাকা মহানগর, ঢাকা জেলা, ঢাকা বিভাগ, 1215, বাংলাদেশ"
+  },
+  "Green Life Hospital Ltd.": {
+    "location": "Dhaka",
+    "lat": 23.7465086,
+    "lng": 90.3858871,
+    "matchedName": "Green Life Medical College Hospital, Bir Uttam Shafiullah Sarak, Green Rd, Dhaka, Crescent Road, হাতিরপুল, কাঠালবাগান, ঢাকা, ঢাকা মহানগর, ঢাকা জেলা, ঢাকা বিভাগ, 1205, বাংলাদেশ"
+  },
+  "Ibn Sina Diagnostic & Consultation Centre ": {
+    "location": "Uttara",
+    "lat": null,
+    "lng": null,
+    "matchedName": null
+  },
+  "Popular Diagnostic Centre Ltd.": {
+    "location": "English Road",
+    "lat": 22.3609104,
+    "lng": 91.8317715,
+    "matchedName": "Popular Diagnostic Center, K B Fazlul Kader Road, Nasirabad, চট্টগ্রাম, চট্টগ্রাম শহর, চট্টগ্রাম জেলা, চট্টগ্রাম বিভাগ, 4203, বাংলাদেশ"
+  },
+  "Ibn Sina Diagnostic & Consultation Center ": {
+    "location": "Badda",
+    "lat": null,
+    "lng": null,
+    "matchedName": null
+  }
+}

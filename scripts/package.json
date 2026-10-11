@@ -1,0 +1,15 @@
+{
+  "name": "doctordesk-firestore-migration",
+  "version": "1.0.0",
+  "description": "Firestore data migration scripts for DoctorDesk",
+  "main": "migrate_to_firestore.js",
+  "scripts": {
+    "migrate": "node migrate_to_firestore.js"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.0",
+    "dotenv": "^16.3.0",
+    "firebase-admin": "^12.0.0",
+    "geofire-common": "^6.0.0"
+  }
+}

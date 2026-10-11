@@ -97,7 +97,7 @@ class Doctor {
     }
 
     return Doctor(
-      id: json['_id'] ?? '',
+      id: (json['_id'] ?? json['id'] ?? '').toString(),
       name: json['name'] ?? '',
       specialities: (json['specialities'] as List?)?.map((e) => e.toString()).toList() ?? [],
       experienceYears: (json['experienceYears'] as num?)?.toDouble() ?? 0.0,
