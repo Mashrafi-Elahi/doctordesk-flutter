@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
+import '../widgets/first_time_checkin_dialog.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
 import 'feed_screen.dart';
@@ -34,7 +36,16 @@ class MainShellState extends State<MainShell> {
     super.initState();
     _currentRole = widget.initialRole;
     _refreshRoles();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      final skippedDate = prefs.getString('welcome_popup_skipped_date');
+      final now = DateTime.now();
+      final todayStr = '${now.year}-${now.month}-${now.day}';
+
+      if (skippedDate == todayStr) {
+        return; // Suppressed for today
+      }
+
       if (!AuthService.isSignedIn && !AuthService.isGuest) {
         _showInitialAuthPrompt();
       }
@@ -69,97 +80,121 @@ class MainShellState extends State<MainShell> {
   }
 
   void _showInitialAuthPrompt() {
-    showModalBottomSheet(
+    showDialog<void>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      barrierDismissible: true,
       builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Image.asset(
-                  'assets/images/logo.png',
-                  height: 64,
-                  width: 64,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Welcome to DoctorDesk',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Sign in to access your role-specific desk, chambers, and health records, or continue as a guest.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[600], fontSize: 13, height: 1.4),
-              ),
-              const SizedBox(height: 20),
-              AuthEntryButtons(
-                onLogIn: () {
-                  Navigator.pop(ctx);
-                  _showAuthModal(isSignUp: false);
-                },
-                onSignUp: () {
-                  Navigator.pop(ctx);
-                  _showAuthModal(isSignUp: true);
-                },
-                onGoogleSignIn: () async {
-                  try {
-                    final cred = await AuthService.signInWithGoogle();
-                    if (cred != null) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          backgroundColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Cancel / Close button at top right
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: IconButton(
+                      icon: const Icon(Icons.close),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ),
+                  Center(
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      height: 56,
+                      width: 56,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Welcome to DoctorDesk',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Sign in to access your role-specific desk, chambers, and health records, or continue as a guest.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey[600], fontSize: 13, height: 1.35),
+                  ),
+                  const SizedBox(height: 18),
+                  AuthEntryButtons(
+                    onLogIn: () {
+                      Navigator.pop(ctx);
+                      _showAuthModal(isSignUp: false);
+                    },
+                    onSignUp: () {
+                      Navigator.pop(ctx);
+                      _showAuthModal(isSignUp: true);
+                    },
+                    onGoogleSignIn: () async {
+                      try {
+                        final cred = await AuthService.signInWithGoogle();
+                        if (cred != null) {
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          await _refreshRoles();
+                          if (mounted) {
+                            setState(() {});
+                            await showFirstTimeCheckinDialog(context);
+                          }
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Google Sign-in failed: ${e.toString().replaceAll("Exception:", "").trim()}'),
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    onContinueAsGuest: () async {
+                      await AuthService.setGuestMode(true);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      setRole(UserRole.patient);
+                      switchToTab(0);
+                      if (mounted) {
+                        setState(() {});
+                        await showFirstTimeCheckinDialog(context);
+                      }
+                    },
+                    onDemoQuickLogin: () async {
+                      await AuthService.quickLoginDemo();
                       if (ctx.mounted) Navigator.pop(ctx);
                       await _refreshRoles();
-                      if (mounted) setState(() {});
-                    }
-                  } catch (e) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Google Sign-in failed: ${e.toString().replaceAll("Exception:", "").trim()}'),
-                        ),
-                      );
-                    }
-                  }
-                },
-                onContinueAsGuest: () async {
-                  await AuthService.setGuestMode(true);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  setRole(UserRole.patient);
-                  switchToTab(0);
-                  if (mounted) {
-                    setState(() {});
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Continuing as Guest Patient. You can browse specialists and check symptoms freely.'),
-                        behavior: SnackBarBehavior.floating,
+                      setRole(UserRole.doctor);
+                      if (mounted) {
+                        setState(() {});
+                        await showFirstTimeCheckinDialog(context);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  // Skip for today button
+                  Center(
+                    child: TextButton(
+                      onPressed: () async {
+                        final now = DateTime.now();
+                        final todayStr = '${now.year}-${now.month}-${now.day}';
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('welcome_popup_skipped_date', todayStr);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      },
+                      child: Text(
+                        'Skip for today',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                       ),
-                    );
-                  }
-                },
-                onDemoQuickLogin: () async {
-                  await AuthService.quickLoginDemo();
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  await _refreshRoles();
-                  setRole(UserRole.doctor);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Logged in to seeded demo account (Doctor view active)'),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                },
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
@@ -172,7 +207,10 @@ class MainShellState extends State<MainShell> {
       isSignUp: isSignUp,
       onAuthenticated: () async {
         await _refreshRoles();
-        if (mounted) setState(() {});
+        if (mounted) {
+          setState(() {});
+          await showFirstTimeCheckinDialog(context);
+        }
       },
     );
   }

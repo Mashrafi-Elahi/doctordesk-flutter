@@ -13,15 +13,17 @@ void showDoctorDeskAuthModal(
   bool isSignUp = false,
   Future<void> Function()? onAuthenticated,
 }) {
-  showModalBottomSheet<void>(
+  showDialog<void>(
     context: context,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    builder: (ctx) => _AuthModalContent(
-      initialIsSignUp: isSignUp,
-      onAuthenticated: onAuthenticated,
+    barrierDismissible: true,
+    builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      backgroundColor: Colors.white,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      child: _AuthModalContent(
+        initialIsSignUp: isSignUp,
+        onAuthenticated: onAuthenticated,
+      ),
     ),
   );
 }

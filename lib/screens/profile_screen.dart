@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
+import '../widgets/first_time_checkin_dialog.dart';
 import '../services/auth_service.dart';
 import 'settings_screen.dart';
 import 'admin_console_screen.dart';
@@ -72,6 +73,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       onAuthenticated: () async {
         await _loadUserRoles();
         if (mounted) setState(() {});
+        if (context.mounted) {
+          await showFirstTimeCheckinDialog(context);
+        }
       },
     );
   }
