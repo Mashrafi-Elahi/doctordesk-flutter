@@ -373,7 +373,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: colorScheme.primary,
                     borderRadius: BorderRadius.circular(12),
                     child: Tooltip(
-                      message: 'Rule-based Health Assistant',
+                      message: 'Symptom Health Assistant',
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
                         onTap: () {
@@ -839,7 +839,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: SpecialtyFeedbackRow(
                         inputText: _symptomController.text,
                         matchedSpecialty: _matchedSpecialty!,
-                        source: 'rule_based',
+                        source: 'symptom_ai',
                         onSubmitFeedback: ({
                           required String inputText,
                           required String matchedSpecialty,

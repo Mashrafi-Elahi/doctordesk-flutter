@@ -7,7 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../services/rtdb_service.dart';
+import '../services/firestore_service.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
 import '../widgets/trust_score.dart';
@@ -215,16 +215,16 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           }
         : null;
 
-    final eligibility = await RtdbService.checkRatingEligibility(
-      doctorId: widget.doctorId,
-      userId: user.uid,
+    final canRate = await FirestoreService.checkCanReview(
+      widget.doctorId,
+      user.uid,
       doctorData: doctorMap,
     );
 
-    if (!eligibility.canRate && mounted) {
+    if (!canRate && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(eligibility.message ?? 'You are not eligible to rate this profile.'),
+        const SnackBar(
+          content: Text('You cannot rate your own doctor profile.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -242,12 +242,189 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         doctorId: widget.doctorId,
         onSuccess: () {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Rating saved to Realtime Database — thank you!')),
+            const SnackBar(content: Text('Rating saved to reviews — thank you!')),
           );
           _loadReviews();
           _loadDoctor();
         },
       ),
+    );
+  }
+
+  void _showBookingSheet(Doctor doctor) {
+    if (!AuthService.isSignedIn || AuthService.isGuest) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in to book an appointment.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final chambers = doctor.chambers
+        .map((c) => c.hospitalName ?? '')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (chambers.isEmpty) {
+      chambers.add(doctor.chamber?.hospitalName ?? 'Main Consultation Chamber');
+    }
+
+    String selectedChamber = chambers.first;
+    DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
+    TimeOfDay selectedTime = const TimeOfDay(hour: 10, minute: 0);
+    final patientNameCtrl = TextEditingController(
+      text: AuthService.currentUser?.displayName?.isNotEmpty == true
+          ? AuthService.currentUser!.displayName!
+          : 'Patient',
+    );
+    bool isSubmitting = false;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final viewInsets = MediaQuery.of(context).viewInsets;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + viewInsets.bottom),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Book with ${doctor.name}',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: patientNameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Patient Full Name',
+                        prefixIcon: Icon(Icons.person_outline),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedChamber,
+                      decoration: const InputDecoration(
+                        labelText: 'Select Chamber',
+                        prefixIcon: Icon(Icons.location_on_outlined),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: chambers.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                      onChanged: (val) {
+                        if (val != null) setSheetState(() => selectedChamber = val);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.calendar_today, size: 16),
+                            label: Text('${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: selectedDate,
+                                firstDate: DateTime.now(),
+                                lastDate: DateTime.now().add(const Duration(days: 90)),
+                              );
+                              if (picked != null) {
+                                setSheetState(() => selectedDate = picked);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.access_time, size: 16),
+                            label: Text(selectedTime.format(context)),
+                            onPressed: () async {
+                              final picked = await showTimePicker(
+                                context: context,
+                                initialTime: selectedTime,
+                              );
+                              if (picked != null) {
+                                setSheetState(() => selectedTime = picked);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: isSubmitting
+                          ? null
+                          : () async {
+                              setSheetState(() => isSubmitting = true);
+                              final messenger = ScaffoldMessenger.of(context);
+                              try {
+                                final scheduled = DateTime(
+                                  selectedDate.year,
+                                  selectedDate.month,
+                                  selectedDate.day,
+                                  selectedTime.hour,
+                                  selectedTime.minute,
+                                );
+                                await FirestoreService.createAppointment(
+                                  patientName: patientNameCtrl.text.trim().isNotEmpty
+                                      ? patientNameCtrl.text.trim()
+                                      : 'Patient',
+                                  scheduledTime: scheduled,
+                                  chamberId: selectedChamber,
+                                  doctorId: doctor.id,
+                                  status: 'waiting',
+                                );
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                if (mounted) {
+                                  messenger.showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Appointment booked! Check the Appointments tab.'),
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                setSheetState(() => isSubmitting = false);
+                                if (mounted) {
+                                  messenger.showSnackBar(
+                                    SnackBar(content: Text('Booking error: $e')),
+                                  );
+                                }
+                              }
+                            },
+                      child: isSubmitting
+                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text('Confirm Appointment'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -655,14 +832,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: FilledButton(
-            onPressed: null, // Disabled for Monday
+            onPressed: () => _showBookingSheet(doctor),
             style: FilledButton.styleFrom(
               minimumSize: const Size(double.infinity, 52),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: const Text('Book Appointment — Coming Soon'),
+            child: const Text('Book Appointment'),
           ),
         ),
       ),
@@ -1252,15 +1429,15 @@ class _ReviewSheetState extends State<_ReviewSheet> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.bolt, color: Colors.amber, size: 16),
+                  const Icon(Icons.star, color: Colors.amber, size: 16),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       AuthService.userRoles.isDoctor
-                          ? 'Rating as Doctor Specialist (Peer review • Live RTDB sync)'
+                          ? 'Rating as Doctor Specialist (Peer review)'
                           : (AuthService.userRoles.isOperator
-                              ? 'Rating as Chamber Operator (Live RTDB sync)'
-                              : 'Rating as Verified Patient (Live RTDB sync)'),
+                              ? 'Rating as Chamber Operator'
+                              : 'Rating as Verified Patient'),
                       style: TextStyle(fontSize: 11.5, color: Colors.amber.shade900, fontWeight: FontWeight.w500),
                     ),
                   ),
@@ -1384,7 +1561,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                   ? const Center(child: CircularProgressIndicator())
                   : FilledButton(
                       onPressed: _selectedRating > 0 ? _submit : null,
-                      child: const Text('Submit Rating to Realtime Database'),
+                      child: const Text('Submit Rating'),
                     ),
             ),
           ],

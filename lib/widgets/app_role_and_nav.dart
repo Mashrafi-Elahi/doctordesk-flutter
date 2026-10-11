@@ -4,9 +4,7 @@
 // bottom navigation labels/icons, and auth entry points.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
 import '../models/user_role.dart';
-import '../services/auth_service.dart';
 import 'google_sign_in_button.dart';
 
 export '../models/user_role.dart';
@@ -159,7 +157,6 @@ class AuthEntryButtons extends StatelessWidget {
   final VoidCallback onLogIn;
   final VoidCallback onSignUp;
   final VoidCallback onContinueAsGuest;
-  final VoidCallback? onDemoQuickLogin;
   final VoidCallback? onGoogleSignIn;
 
   const AuthEntryButtons({
@@ -167,7 +164,6 @@ class AuthEntryButtons extends StatelessWidget {
     required this.onLogIn,
     required this.onSignUp,
     required this.onContinueAsGuest,
-    this.onDemoQuickLogin,
     this.onGoogleSignIn,
   });
 
@@ -198,30 +194,6 @@ class AuthEntryButtons extends StatelessWidget {
           onPressed: onContinueAsGuest,
           child: const Text('Continue as Guest'),
         ),
-
-        // Dev-only shortcut to jump straight into the seeded demo account
-        // during development. kDebugMode branches are stripped from release
-        // builds by the compiler — this physically does not exist in the
-        // shipped APK.
-        if (kDebugMode) ...[
-          const SizedBox(height: 12),
-          const Divider(),
-          Center(
-            child: Text(
-              'DEV PREVIEW ONLY',
-              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey.shade500),
-            ),
-          ),
-          const SizedBox(height: 4),
-          TextButton.icon(
-            icon: const Icon(Icons.bolt, size: 16),
-            onPressed: onDemoQuickLogin ??
-                () async {
-                  await AuthService.quickLoginDemo();
-                },
-            label: const Text('Quick login: demo account (all roles)'),
-          ),
-        ],
       ],
     );
   }

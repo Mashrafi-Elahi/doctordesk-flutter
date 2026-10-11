@@ -459,6 +459,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: null,
         onPressed: _loadQueue,
         icon: const Icon(Icons.refresh),
         label: const Text('Refresh'),

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:doctordesk/services/rtdb_service.dart';
+import 'package:doctordesk/services/firestore_service.dart';
 import 'package:doctordesk/services/auth_service.dart';
 import 'package:doctordesk/widgets/app_role_and_nav.dart';
 
@@ -11,17 +11,13 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  group('Realtime Database Rating Eligibility Tests', () {
-    test('Guests are disallowed from rating (only checking allowed)', () async {
+  group('Firestore Rating Eligibility Tests', () {
+    test('Unauthenticated/guest users cannot submit reviews', () async {
       await AuthService.setGuestMode(true);
 
-      final result = await RtdbService.checkRatingEligibility(
-        doctorId: 'doctor_1',
-        userId: null,
-      );
+      final canReview = await FirestoreService.checkCanReview('doctor_1', '');
 
-      expect(result.canRate, isFalse);
-      expect(result.message, contains('Guests can only check ratings'));
+      expect(canReview, isFalse);
     });
 
     test('Doctor cannot rate his own claimed profile', () async {

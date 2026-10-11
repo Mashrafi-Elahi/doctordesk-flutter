@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/first_time_checkin_dialog.dart';
@@ -36,16 +35,7 @@ class MainShellState extends State<MainShell> {
     super.initState();
     _currentRole = widget.initialRole;
     _refreshRoles();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final prefs = await SharedPreferences.getInstance();
-      final skippedDate = prefs.getString('welcome_popup_skipped_date');
-      final now = DateTime.now();
-      final todayStr = '${now.year}-${now.month}-${now.day}';
-
-      if (skippedDate == todayStr) {
-        return; // Suppressed for today
-      }
-
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!AuthService.isSignedIn && !AuthService.isGuest) {
         _showInitialAuthPrompt();
       }
@@ -164,33 +154,6 @@ class MainShellState extends State<MainShell> {
                         await showFirstTimeCheckinDialog(context);
                       }
                     },
-                    onDemoQuickLogin: () async {
-                      await AuthService.quickLoginDemo();
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      await _refreshRoles();
-                      setRole(UserRole.doctor);
-                      if (mounted) {
-                        setState(() {});
-                        await showFirstTimeCheckinDialog(context);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  // Skip for today button
-                  Center(
-                    child: TextButton(
-                      onPressed: () async {
-                        final now = DateTime.now();
-                        final todayStr = '${now.year}-${now.month}-${now.day}';
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setString('welcome_popup_skipped_date', todayStr);
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      },
-                      child: Text(
-                        'Skip for today',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-                      ),
-                    ),
                   ),
                 ],
               ),

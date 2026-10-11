@@ -241,7 +241,7 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
             SpecialtyFeedbackRow(
               inputText: query,
               matchedSpecialty: spec,
-              source: 'rule_based',
+              source: 'symptom_ai',
               onSubmitFeedback: ({
                 required String inputText,
                 required String matchedSpecialty,
@@ -303,7 +303,7 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
       setState(() {
         _messages.add(
           ChatMessage(
-            text: 'No exact specialist match found for that description. You can consult a General Physician (GD) or browse our doctor directory.',
+            text: 'I am DoctorDesk Symptom Assistant and only answer health symptoms and doctor matching. Please describe symptoms (e.g. fever, headache, chest pain) to find the right specialist.',
             isUser: false,
             actionWidget: action,
           ),
@@ -340,7 +340,7 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
                 ),
                 const SizedBox(width: 5),
                 Text(
-                  'Rule-based • Instant matching',
+                  'Instant Symptom Matching',
                   style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                 ),
               ],

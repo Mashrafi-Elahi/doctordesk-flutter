@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
@@ -50,7 +51,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _showDoctorApplicationDialog() async {
     final phoneController = TextEditingController(text: _userProfile?['phone'] ?? AuthService.currentUser?.phoneNumber ?? '');
     final bmdcController = TextEditingController(text: _userProfile?['bmdcRegNumber'] ?? _userProfile?['doctorApplication']?['bmdcNumber'] ?? '');
-    final nidController = TextEditingController(text: _userProfile?['nid'] ?? _userProfile?['doctorApplication']?['nid'] ?? '');
 
     final result = await showDialog<bool>(
       context: context,
@@ -68,7 +68,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Doctor role allocation is managed via the database. Enter your phone number (required to login and stored in database). NID and BMDC are optional for now — if provided, the Verified badge and button will appear on your profile.',
+                'Doctor role is allocated via database. Enter your phone number and BMDC registration number.',
                 style: TextStyle(fontSize: 12.5, color: Colors.grey),
               ),
               const SizedBox(height: 16),
@@ -76,22 +76,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 controller: phoneController,
                 decoration: const InputDecoration(
                   labelText: 'Doctor Phone Number (Required)',
-                  hintText: 'Used for doctor account login',
+                  hintText: 'e.g. 017XXXXXXXX',
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
                 keyboardType: TextInputType.phone,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: nidController,
-                decoration: const InputDecoration(
-                  labelText: 'National ID / NID (Optional for now)',
-                  hintText: 'Enables Verified button on approval',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                keyboardType: TextInputType.number,
               ),
               const SizedBox(height: 12),
               TextField(
@@ -125,7 +114,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         await DataService.applyForDoctorRole(
           uid: uid,
           phone: phoneController.text.trim(),
-          nid: nidController.text.trim(),
           bmdcNumber: bmdcController.text.trim(),
           name: AuthService.currentUser?.displayName,
         );
@@ -133,9 +121,189 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Doctor application submitted! Your role will be activated in database after Admin verification.'),
+              content: Text('Doctor application submitted! Admin will review and verify your BMDC.'),
               behavior: SnackBarBehavior.floating,
             ),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _showEditProfileDialog() async {
+    final uid = AuthService.currentUser?.uid;
+    if (uid == null) return;
+
+    final firstNameCtrl = TextEditingController(text: _userProfile?['firstName'] ?? '');
+    final lastNameCtrl = TextEditingController(text: _userProfile?['lastName'] ?? '');
+    final usernameCtrl = TextEditingController(
+      text: _userProfile?['username'] ?? AuthService.currentUser?.displayName ?? '',
+    );
+    final phoneCtrl = TextEditingController(
+      text: _userProfile?['phone'] ?? AuthService.currentUser?.phoneNumber ?? '',
+    );
+    final designationCtrl = TextEditingController(text: _userProfile?['designation'] ?? '');
+    final degreesCtrl = TextEditingController(text: _userProfile?['degrees'] ?? '');
+    final bmdcCtrl = TextEditingController(text: _userProfile?['bmdcRegNumber'] ?? '');
+
+    final isDoctorRole = _userRoles.isDoctor || widget.role == UserRole.doctor;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Profile Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: firstNameCtrl,
+                decoration: const InputDecoration(labelText: 'First Name', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: lastNameCtrl,
+                decoration: const InputDecoration(labelText: 'Last Name', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: usernameCtrl,
+                decoration: const InputDecoration(labelText: 'Username / Display Name', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Phone Number', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: designationCtrl,
+                decoration: const InputDecoration(labelText: 'Designation (e.g. Consultant / Patient)', border: OutlineInputBorder(), isDense: true),
+              ),
+              if (isDoctorRole) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: degreesCtrl,
+                  decoration: const InputDecoration(labelText: 'Degrees (e.g. MBBS, FCPS)', border: OutlineInputBorder(), isDense: true),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: bmdcCtrl,
+                  decoration: const InputDecoration(labelText: 'BMDC Registration ID', border: OutlineInputBorder(), isDense: true),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save Details'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved == true && mounted) {
+      try {
+        final fName = firstNameCtrl.text.trim();
+        final lName = lastNameCtrl.text.trim();
+        final uName = usernameCtrl.text.trim();
+        final fullName = uName.isNotEmpty ? uName : '$fName $lName'.trim();
+
+        final updates = <String, dynamic>{
+          'firstName': fName,
+          'lastName': lName,
+          'username': uName,
+          'name': fullName,
+          'phone': phoneCtrl.text.trim(),
+          'designation': designationCtrl.text.trim(),
+        };
+
+        if (isDoctorRole) {
+          updates['degrees'] = degreesCtrl.text.trim();
+          updates['bmdcRegNumber'] = bmdcCtrl.text.trim();
+        }
+
+        await FirebaseFirestore.instance.collection('users').doc(uid).set(updates, SetOptions(merge: true));
+
+        if (fullName.isNotEmpty) {
+          await AuthService.currentUser?.updateDisplayName(fullName);
+        }
+
+        await _loadUserRoles();
+        if (mounted) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Profile details updated successfully!')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating profile: $e')));
+        }
+      }
+    }
+  }
+
+  Future<void> _showChangePasswordDialog() async {
+    final passCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change Password', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: passCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'New Password (min 6 chars)', border: OutlineInputBorder(), isDense: true),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: confirmCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Confirm New Password', border: OutlineInputBorder(), isDense: true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (passCtrl.text.trim().length < 6) {
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Password must be at least 6 characters.')));
+                return;
+              }
+              if (passCtrl.text.trim() != confirmCtrl.text.trim()) {
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Passwords do not match.')));
+                return;
+              }
+              Navigator.pop(ctx, true);
+            },
+            child: const Text('Update Password'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      try {
+        await AuthService.currentUser?.updatePassword(passCtrl.text.trim());
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Password updated successfully!')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not change password: ${e.toString().replaceAll("Exception:", "").trim()}')),
           );
         }
       }
@@ -317,20 +485,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           );
                         }
-                      },
-                      onDemoQuickLogin: () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        await AuthService.quickLoginDemo();
-                        await _loadUserRoles();
-                        widget.onRoleChanged?.call(UserRole.doctor);
-                        if (!mounted) return;
-                        setState(() {});
-                        messenger.showSnackBar(
-                          const SnackBar(
-                            content: Text('Logged in to seeded demo account (Doctor + Operator views active)'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
                       },
                     ),
                   ),
@@ -593,21 +747,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ],
 
-          const SizedBox(height: 12),
-          _ProfileTile(
-            icon: Icons.admin_panel_settings_outlined,
-            label: 'Admin Console & Backend Control',
-            colorScheme: colorScheme,
-            isSignedIn: true,
-            onCustomTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => AdminConsoleScreen(onRoleChanged: widget.onRoleChanged),
-                ),
-              );
-            },
-          ),
+          if (_isSignedIn) ...[
+            const SizedBox(height: 12),
+            _ProfileTile(
+              icon: Icons.edit_outlined,
+              label: 'Edit Profile Details',
+              colorScheme: colorScheme,
+              isSignedIn: true,
+              onCustomTap: _showEditProfileDialog,
+            ),
+            const SizedBox(height: 6),
+            _ProfileTile(
+              icon: Icons.lock_reset_outlined,
+              label: 'Change Password',
+              colorScheme: colorScheme,
+              isSignedIn: true,
+              onCustomTap: _showChangePasswordDialog,
+            ),
+          ],
+
+          if (_userRoles.isAdmin ||
+              AuthService.currentUser?.uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' ||
+              AuthService.currentUser?.email?.toLowerCase().trim() == 'mashrafeelahi8@gmail.com') ...[
+            const SizedBox(height: 12),
+            _ProfileTile(
+              icon: Icons.admin_panel_settings_outlined,
+              label: 'Admin Console & Database Control',
+              colorScheme: colorScheme,
+              isSignedIn: true,
+              onCustomTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AdminConsoleScreen(onRoleChanged: widget.onRoleChanged),
+                  ),
+                );
+              },
+            ),
+          ],
 
           if (_isSignedIn) ...[
             const SizedBox(height: 12),

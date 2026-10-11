@@ -44,7 +44,7 @@ class _AuthModalContent extends StatefulWidget {
 class _AuthModalContentState extends State<_AuthModalContent> {
   late bool _isSignUp = widget.initialIsSignUp;
   bool _isDoctorRole = false;
-  int _authMethodIndex = 0; // 0 = Email, 1 = Phone Number
+  final int _authMethodIndex = 0; // 0 = Email, 1 = Phone Number
 
   final _emailController = TextEditingController();
   final _passController = TextEditingController();
@@ -392,30 +392,8 @@ class _AuthModalContentState extends State<_AuthModalContent> {
             ],
             const SizedBox(height: 12),
 
-            // Method Toggle: Email vs Phone Number
-            SegmentedButton<int>(
-              segments: const [
-                ButtonSegment(
-                  value: 0,
-                  icon: Icon(Icons.email_outlined, size: 16),
-                  label: Text('Email'),
-                ),
-                ButtonSegment(
-                  value: 1,
-                  icon: Icon(Icons.phone_android, size: 16),
-                  label: Text('Phone OTP'),
-                ),
-              ],
-              selected: {_authMethodIndex},
-              onSelectionChanged: (val) {
-                setState(() {
-                  _authMethodIndex = val.first;
-                  _authError = null;
-                  _infoMessage = null;
-                });
-              },
-            ),
-            const SizedBox(height: 12),
+            // Phone OTP tab is hidden for presentations / SMS limits; defaults to Email
+            // Method Toggle: Email only
 
             // Error display
             if (_authError != null) ...[

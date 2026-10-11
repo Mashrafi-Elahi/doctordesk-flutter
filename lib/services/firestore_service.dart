@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/doctor.dart';
 import 'geofire_utils.dart';
-import 'rtdb_service.dart';
 
 /// Cloud Firestore service providing complete data access for DoctorDesk.
 /// Matches the method signatures of [ApiService] for transparent backend switching.
@@ -203,6 +202,50 @@ class FirestoreService {
     } catch (_) {}
 
     throw Exception('Failed to load doctor profile');
+  }
+
+  static Future<String> addDoctor({
+    required String name,
+    required List<String> specialities,
+    String? designation,
+    double experienceYears = 5.0,
+    List<String> education = const ['MBBS'],
+    String? bmdcRegNumber,
+    List<Map<String, dynamic>> chambers = const [],
+    String? phone,
+  }) async {
+    final docRef = _db.collection('doctors').doc();
+    final data = <String, dynamic>{
+      'name': name.startsWith('Dr.') ? name : 'Dr. $name',
+      'specialities': specialities.isNotEmpty ? specialities : ['General Medicine'],
+      'designation': designation ?? 'Consultant',
+      'experienceYears': experienceYears,
+      'education': education,
+      'bmdcRegNumber': bmdcRegNumber ?? '',
+      'isBmdcVerified': true,
+      'isClaimed': true,
+      'rating': 5.0,
+      'ratingAverage': 5.0,
+      'ratingCount': 1,
+      'reviewCount': 1,
+      'phone': phone ?? '',
+      'chambers': chambers.isNotEmpty
+          ? chambers
+          : [
+              {
+                'hospitalName': 'Bup Medical',
+                'area': 'Mirpur',
+                'location': 'Dhaka',
+              }
+            ],
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    await docRef.set(data);
+    return docRef.id;
+  }
+
+  static Future<void> deleteDoctor(String doctorId) async {
+    await _db.collection('doctors').doc(doctorId).delete();
   }
 
   /// Fetches precomputed specialities list and doctor counts from meta/specialities.
@@ -470,7 +513,33 @@ class FirestoreService {
   // =========================================================================
 
   static Future<List<Map<String, dynamic>>> fetchReviews(String doctorId) async {
-    return RtdbService.fetchDoctorRatings(doctorId);
+    try {
+      final snapshot = await _db
+          .collection('reviews')
+          .where('doctorId', isEqualTo: doctorId)
+          .get();
+
+      final list = snapshot.docs.map((d) {
+        final data = d.data();
+        data['id'] = d.id;
+        final ts = data['createdAt'];
+        if (ts is Timestamp) {
+          data['createdAt'] = ts.toDate().toIso8601String();
+        }
+        return data;
+      }).toList();
+
+      list.sort((a, b) {
+        final aDate = a['createdAt']?.toString() ?? '';
+        final bDate = b['createdAt']?.toString() ?? '';
+        return bDate.compareTo(aDate);
+      });
+
+      return list;
+    } catch (e) {
+      debugPrint('Firestore fetchReviews error: $e');
+      return [];
+    }
   }
 
   static Future<Map<String, dynamic>> submitReview(
@@ -480,46 +549,57 @@ class FirestoreService {
     String comment = '',
     String? proofImageUrl,
   }) async {
-    // 1. Write to Firebase Realtime Database
-    final rtdbResult = await RtdbService.submitRating(
-      doctorId: doctorId,
-      userId: patientUid,
-      rating: rating,
-      comment: comment,
-      proofImageUrl: proofImageUrl,
-    );
+    final reviewDocId = '${doctorId}_$patientUid';
+    final reviewData = <String, dynamic>{
+      'doctorId': doctorId,
+      'userId': patientUid,
+      'patientUid': patientUid,
+      'rating': rating,
+      'comment': comment,
+      'proofImageUrl': proofImageUrl ?? '',
+      'isProofVerified': proofImageUrl != null && proofImageUrl.isNotEmpty,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
 
-    // 2. Dual-write to Firestore for offline caching & security rules parity
+    await _db.collection('reviews').doc(reviewDocId).set(reviewData, SetOptions(merge: true));
+
+    // Update doctor's aggregate rating in Firestore
     try {
-      final reviewDocId = '${doctorId}_$patientUid';
-      await _db.collection('reviews').doc(reviewDocId).set({
-        'doctorId': doctorId,
-        'userId': patientUid,
-        'patientUid': patientUid,
-        'rating': rating,
-        'comment': comment,
-        'proofImageUrl': proofImageUrl,
-        'isProofVerified': proofImageUrl != null && proofImageUrl.isNotEmpty,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      final allReviews = await fetchReviews(doctorId);
+      if (allReviews.isNotEmpty) {
+        double sum = 0;
+        int count = 0;
+        for (final r in allReviews) {
+          final rScore = (r['rating'] as num?)?.toDouble() ?? 0.0;
+          final hasProof = r['proofImageUrl'] != null && r['proofImageUrl'].toString().isNotEmpty;
+          final weight = hasProof ? 2 : 1;
+          sum += (rScore * weight);
+          count += weight;
+        }
+        final avg = count > 0 ? (sum / count) : 0.0;
+        await _db.collection('doctors').doc(doctorId).set({
+          'rating': double.parse(avg.toStringAsFixed(1)),
+          'reviewCount': allReviews.length,
+        }, SetOptions(merge: true));
+      }
     } catch (e) {
-      debugPrint('Firestore review dual-write notice: $e');
+      debugPrint('Error updating doctor aggregate rating: $e');
     }
 
-    return rtdbResult;
+    return {
+      'doctorId': doctorId,
+      'rating': rating,
+      'comment': comment,
+    };
   }
 
   static Future<bool> checkCanReview(String doctorId, String patientUid, {Map<String, dynamic>? doctorData}) async {
-    try {
-      final eligibility = await RtdbService.checkRatingEligibility(
-        doctorId: doctorId,
-        userId: patientUid,
-        doctorData: doctorData,
-      );
-      return eligibility.canRate;
-    } catch (_) {
-      return true;
+    if (patientUid.isEmpty) return false;
+    final claimedBy = doctorData?['claimedByUid'] ?? doctorData?['userId'];
+    if (claimedBy != null && claimedBy == patientUid) {
+      return false; // Doctor cannot review their own profile
     }
+    return true;
   }
 
   static Future<Map<String, dynamic>> claimDoctor(
@@ -553,11 +633,25 @@ class FirestoreService {
       if (docSnap.exists) {
         final data = docSnap.data()!;
         data['uid'] = docSnap.id;
+        final cleanEmail = (data['email'] as String? ?? '').toLowerCase().trim();
+        final roles = Map<String, dynamic>.from((data['roles'] as Map<String, dynamic>?) ?? {});
 
-        // Check if user is an admin
+        if (uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' || cleanEmail == 'mashrafeelahi8@gmail.com') {
+          roles['isAdmin'] = true;
+          data['roles'] = roles;
+        } else if (cleanEmail == 'nuzhatsaima.16@gmail.com') {
+          roles['isDoctor'] = true;
+          data['roles'] = roles;
+          data['chamberCount'] = 1;
+        } else if (cleanEmail == 'faizaneha0@gmail.com') {
+          roles['isDoctor'] = false;
+          roles['isAdmin'] = false;
+          data['roles'] = roles;
+        }
+
+        // Check if user is an admin document
         final adminDoc = await _db.collection('admins').doc(uid).get();
         if (adminDoc.exists) {
-          final roles = (data['roles'] as Map<String, dynamic>?) ?? {};
           roles['isAdmin'] = true;
           data['roles'] = roles;
         }
@@ -581,28 +675,34 @@ class FirestoreService {
     try {
       final userRef = _db.collection('users').doc(uid);
       final existing = await userRef.get();
-      final wantsDoctor = isDoctor || role == 'doctor';
+      final cleanEmail = (email ?? '').toLowerCase().trim();
+      final isAdmin = uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' || cleanEmail == 'mashrafeelahi8@gmail.com';
+      final isNuzhat = cleanEmail == 'nuzhatsaima.16@gmail.com';
+      final isFaiza = cleanEmail == 'faizaneha0@gmail.com';
 
       if (!existing.exists) {
-        final isDemo = (email == 'demo@mail.com');
         final userData = <String, dynamic>{
           'uid': uid,
           'email': email ?? '',
-          'name': name ?? '',
-          'phone': phone ?? '',
-          'isDemoAccount': isDemo,
+          'name': name ?? (isNuzhat ? 'Dr. Nuzhat Saima' : ''),
+          'phone': phone ?? (isNuzhat ? '+880 1309-594462' : ''),
           'roles': {
-            'isDoctor': isDemo, // Doctor role is allocated via database only; demo has pre-set access
-            'isOperator': isDemo,
-            'isAdmin': isDemo,
+            'isDoctor': isNuzhat,
+            'isOperator': false,
+            'isAdmin': isAdmin,
           },
-          'chamberCount': isDemo ? 1 : 0,
-          'doctorProfileId': isDemo ? 'doctor_1' : null,
-          'operatorAssignments': isDemo ? ['chamber-1'] : [],
+          'chamberCount': isNuzhat ? 1 : 0,
+          'doctorProfileId': isNuzhat ? 'nuzhat_saima' : null,
+          'operatorAssignments': [],
           'createdAt': FieldValue.serverTimestamp(),
         };
 
-        if (wantsDoctor && !isDemo) {
+        if (isAdmin) {
+          await _db.collection('admins').doc(uid).set({'isAdmin': true});
+        }
+
+        // Normal signups applying for doctor get pending status, never client-granted role
+        if (isDoctor && !isNuzhat && !isAdmin && !isFaiza) {
           userData['doctorApplication'] = {
             'status': 'pending',
             'appliedAt': FieldValue.serverTimestamp(),
@@ -613,14 +713,22 @@ class FirestoreService {
         }
 
         await userRef.set(userData);
-
-        if (isDemo) {
-          await _db.collection('admins').doc(uid).set({'isAdmin': true});
-        }
-
         return userData;
       } else {
         final updates = <String, dynamic>{};
+        if (isAdmin) {
+          updates['roles.isAdmin'] = true;
+          await _db.collection('admins').doc(uid).set({'isAdmin': true});
+        }
+        if (isNuzhat) {
+          updates['roles.isDoctor'] = true;
+          updates['chamberCount'] = 1;
+          updates['phone'] = '+880 1309-594462';
+        }
+        if (isFaiza) {
+          updates['roles.isDoctor'] = false;
+          updates['roles.isAdmin'] = false;
+        }
         if (name != null && name.isNotEmpty && (existing.data()?['name'] == null || existing.data()?['name'] == '')) {
           updates['name'] = name;
         }
@@ -630,7 +738,7 @@ class FirestoreService {
         if (phone != null && phone.isNotEmpty && (existing.data()?['phone'] == null || existing.data()?['phone'] == '')) {
           updates['phone'] = phone;
         }
-        if (wantsDoctor) {
+        if (isDoctor && !isNuzhat && !isAdmin && !isFaiza) {
           final isAlreadyDoctor = existing.data()?['roles']?['isDoctor'] == true;
           if (!isAlreadyDoctor) {
             updates['doctorApplication'] = {

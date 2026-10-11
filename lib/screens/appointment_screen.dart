@@ -1,5 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'doctors_screen.dart';
 
@@ -17,6 +19,8 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final currentUid = AuthService.currentUser?.uid;
+
     return DefaultTabController(
       initialIndex: widget.initialTabIndex.clamp(0, 1),
       length: 2,
@@ -38,41 +42,180 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
             indicatorColor: theme.colorScheme.primary,
           ),
         ),
-        body: const TabBarView(
-          children: [
-            _EmptyState(
-              icon: Icons.calendar_today_outlined,
-              title: 'No upcoming appointments',
-              subtitle:
-                  'Book a doctor from the Home or Doctors directory to see it here.',
-            ),
-            _EmptyState(
-              icon: Icons.history_outlined,
-              title: 'No past appointments yet',
-              subtitle: 'Your visit history will show up here after consultations.',
-            ),
-          ],
-        ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () {
-            ScaffoldMessenger.of(context).hideCurrentSnackBar();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Booking coming soon — browse doctors to get started'),
-                action: SnackBarAction(
-                  label: 'Browse',
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const DoctorsScreen()),
-                    );
-                  },
-                ),
-                behavior: SnackBarBehavior.floating,
+        body: currentUid == null
+            ? const TabBarView(
+                children: [
+                  _EmptyState(
+                    icon: Icons.calendar_today_outlined,
+                    title: 'Sign in to view appointments',
+                    subtitle: 'Sign in to see and manage your doctor bookings.',
+                  ),
+                  _EmptyState(
+                    icon: Icons.history_outlined,
+                    title: 'No past appointments yet',
+                    subtitle: 'Your visit history will show up here after consultations.',
+                  ),
+                ],
+              )
+            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('appointments')
+                    .where('userId', isEqualTo: currentUid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  final docs = snapshot.data?.docs ?? [];
+                  final upcoming = docs.where((d) {
+                    final status = d.data()['status']?.toString().toLowerCase() ?? '';
+                    return status != 'completed' && status != 'cancelled';
+                  }).toList();
+
+                  final past = docs.where((d) {
+                    final status = d.data()['status']?.toString().toLowerCase() ?? '';
+                    return status == 'completed';
+                  }).toList();
+
+                  return TabBarView(
+                    children: [
+                      upcoming.isEmpty
+                          ? const _EmptyState(
+                              icon: Icons.calendar_today_outlined,
+                              title: 'No upcoming appointments',
+                              subtitle: 'Book a doctor from the Home or Doctors directory to see it here.',
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: upcoming.length,
+                              itemBuilder: (ctx, i) {
+                                final data = upcoming[i].data();
+                                final docName = data['doctorName'] ?? data['doctorId'] ?? 'Specialist Doctor';
+                                final chamber = data['chamberId'] ?? 'Main Chamber';
+                                final patient = data['patientName'] ?? 'Patient';
+                                final status = data['status'] ?? 'waiting';
+                                final pos = data['queuePosition'];
+                                final ts = data['scheduledTime'];
+                                String dateStr = 'Scheduled';
+                                if (ts is Timestamp) {
+                                  final dt = ts.toDate();
+                                  dateStr = '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                }
+
+                                return Card(
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  elevation: 1,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            CircleAvatar(
+                                              backgroundColor: theme.colorScheme.primaryContainer,
+                                              child: Icon(Icons.person, color: theme.colorScheme.primary),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    docName,
+                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                                  ),
+                                                  Text(
+                                                    'Chamber: $chamber',
+                                                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: Colors.blue.shade50,
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(color: Colors.blue.shade200),
+                                              ),
+                                              child: Text(
+                                                status.toUpperCase(),
+                                                style: TextStyle(
+                                                  color: Colors.blue.shade800,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const Divider(height: 24),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
+                                                const SizedBox(width: 6),
+                                                Text(dateStr, style: const TextStyle(fontSize: 13)),
+                                              ],
+                                            ),
+                                            if (pos != null)
+                                              Text(
+                                                'Queue #$pos',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: theme.colorScheme.primary,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          'Patient: $patient',
+                                          style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                      past.isEmpty
+                          ? const _EmptyState(
+                              icon: Icons.history_outlined,
+                              title: 'No past appointments yet',
+                              subtitle: 'Your visit history will show up here after consultations.',
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: past.length,
+                              itemBuilder: (ctx, i) {
+                                final data = past[i].data();
+                                final docName = data['doctorName'] ?? 'Doctor';
+                                return Card(
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  child: ListTile(
+                                    leading: const Icon(Icons.check_circle, color: Colors.green),
+                                    title: Text(docName),
+                                    subtitle: Text('Chamber: ${data['chamberId'] ?? 'General'}'),
+                                  ),
+                                );
+                              },
+                            ),
+                    ],
+                  );
+                },
               ),
+        floatingActionButton: FloatingActionButton(
+          heroTag: null,
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DoctorsScreen()),
             );
           },
-          tooltip: 'Book Appointment',
+          tooltip: 'Browse Doctors & Book',
           child: const Icon(Icons.add),
         ),
       ),

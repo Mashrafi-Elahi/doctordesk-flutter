@@ -275,7 +275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ListTile(
                   leading: const Icon(Icons.shield_outlined),
                   title: const Text('Privacy & Medical Disclaimer'),
-                  subtitle: const Text('Health recommendations are rule-assisted guides'),
+                  subtitle: const Text('Health recommendations are smart AI and clinical guides'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     showDialog(
@@ -283,7 +283,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       builder: (ctx) => AlertDialog(
                         title: const Text('Medical Disclaimer'),
                         content: const Text(
-                          'DoctorDesk provides verified doctor directory discovery, chamber queue management, and rule-based specialty recommendations.\n\nInformation provided in the app is not a substitute for formal clinical diagnosis. Always consult certified medical practitioners for emergencies.',
+                          'DoctorDesk provides verified doctor directory discovery, chamber queue management, and smart specialty recommendations.\n\nInformation provided in the app is not a substitute for formal clinical diagnosis. Always consult certified medical practitioners for emergencies.',
                           style: TextStyle(fontSize: 13, height: 1.4),
                         ),
                         actions: [

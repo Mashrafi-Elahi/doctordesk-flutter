@@ -63,28 +63,54 @@ class AuthService {
     await prefs.setString('user_role', role.name);
   }
 
-  /// Refreshes and returns the additive roles from backend MongoDB
+  /// Refreshes and returns the additive roles from database
   static Future<UserRoles> fetchUserRoles() async {
-    try {
-      final uid = currentUser?.uid ?? 'demo-user-uid';
-      final profile = await ApiService.fetchUserProfile(uid);
-      if (profile != null) {
-        _currentUserRoles = UserRoles.fromJson(profile);
-        return _currentUserRoles;
-      }
-    } catch (e) {
-      debugPrint('Error fetching user roles: $e');
-    }
+    final email = currentUser?.email?.toLowerCase().trim();
+    final uid = currentUser?.uid;
 
-    // If logged in with demo email or anonymous with demo name, default to multi-role demo capability
-    if (currentUser?.email == 'demo@mail.com' || (currentUser?.displayName?.contains('Demo') ?? false)) {
+    if (uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' || email == 'mashrafeelahi8@gmail.com') {
       _currentUserRoles = const UserRoles(
         isDoctor: true,
         isOperator: true,
         isAdmin: true,
         chamberCount: 1,
       );
+      await saveRole(UserRole.admin);
       return _currentUserRoles;
+    }
+
+    if (email == 'nuzhatsaima.16@gmail.com') {
+      _currentUserRoles = const UserRoles(
+        isDoctor: true,
+        isOperator: false,
+        isAdmin: false,
+        chamberCount: 1,
+      );
+      await saveRole(UserRole.doctor);
+      return _currentUserRoles;
+    }
+
+    if (email == 'faizaneha0@gmail.com') {
+      _currentUserRoles = const UserRoles(
+        isDoctor: false,
+        isOperator: false,
+        isAdmin: false,
+        chamberCount: 0,
+      );
+      await saveRole(UserRole.patient);
+      return _currentUserRoles;
+    }
+
+    try {
+      if (uid != null) {
+        final profile = await ApiService.fetchUserProfile(uid);
+        if (profile != null) {
+          _currentUserRoles = UserRoles.fromJson(profile);
+          return _currentUserRoles;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching user roles: $e');
     }
 
     _currentUserRoles = const UserRoles(
@@ -106,17 +132,19 @@ class AuthService {
         email: email.trim(),
         password: password.trim(),
       );
-      if (isDoctor) {
-        await ApiService.syncUser(
-          uid: credential.user!.uid,
-          email: email.trim(),
-          role: 'doctor',
-          isDoctor: true,
-        );
-      }
+      await ApiService.syncUser(
+        uid: credential.user!.uid,
+        email: email.trim(),
+      );
       await fetchUserRoles();
-      if (isDoctor) {
+      if (_currentUserRoles.isAdmin) {
+        await saveRole(UserRole.admin);
+      } else if (_currentUserRoles.isDoctor) {
         await saveRole(UserRole.doctor);
+      } else if (_currentUserRoles.isOperator) {
+        await saveRole(UserRole.operator);
+      } else {
+        await saveRole(UserRole.patient);
       }
       await setGuestMode(false);
       return credential;
@@ -148,12 +176,15 @@ class AuthService {
         email: email.trim(),
         name: name ?? '',
         phone: phone ?? '',
-        role: role ?? (isDoctor ? 'doctor' : 'patient'),
         isDoctor: isDoctor,
       );
       await fetchUserRoles();
-      if (isDoctor) {
+      if (_currentUserRoles.isAdmin) {
+        await saveRole(UserRole.admin);
+      } else if (_currentUserRoles.isDoctor) {
         await saveRole(UserRole.doctor);
+      } else {
+        await saveRole(UserRole.patient);
       }
       await setGuestMode(false);
       return credential;
@@ -183,13 +214,16 @@ class AuthService {
           uid: user.uid,
           email: user.email ?? '',
           name: user.displayName ?? '',
-          role: isDoctor ? 'doctor' : 'patient',
           isDoctor: isDoctor,
         );
       }
       await fetchUserRoles();
-      if (isDoctor) {
+      if (_currentUserRoles.isAdmin) {
+        await saveRole(UserRole.admin);
+      } else if (_currentUserRoles.isDoctor) {
         await saveRole(UserRole.doctor);
+      } else {
+        await saveRole(UserRole.patient);
       }
       await setGuestMode(false);
       return credential;
@@ -258,70 +292,18 @@ class AuthService {
       );
 
       await fetchUserRoles();
-      if (isDoctor) {
+      if (_currentUserRoles.isAdmin) {
+        await saveRole(UserRole.admin);
+      } else if (_currentUserRoles.isDoctor) {
         await saveRole(UserRole.doctor);
+      } else {
+        await saveRole(UserRole.patient);
       }
       await setGuestMode(false);
       return userCred;
     } catch (e) {
       debugPrint('Phone OTP sign-in error: $e');
       rethrow;
-    }
-  }
-
-  /// Real demo account login (demo@mail.com / demo1234)
-  /// Seeds real session linked to seeded Doctor + Chamber + Appointments in MongoDB.
-  static Future<bool> quickLoginDemo() async {
-    const demoEmail = 'demo@mail.com';
-    const demoPassword = 'demo';
-
-    try {
-      UserCredential? cred;
-      try {
-        cred = await _auth.signInWithEmailAndPassword(
-          email: demoEmail,
-          password: demoPassword,
-        );
-      } catch (authError) {
-        // If not in Firebase Auth, create it
-        try {
-          cred = await _auth.createUserWithEmailAndPassword(
-            email: demoEmail,
-            password: demoPassword,
-          );
-        } catch (_) {
-          // Fallback to anonymous demo session if network restricts Firebase
-          cred = await _auth.signInAnonymously();
-        }
-      }
-
-      await cred.user?.updateDisplayName('Dr. Rafiqul Islam (Demo)');
-
-      // Sync with backend user profile
-      if (cred.user != null) {
-        await ApiService.syncUser(
-          uid: cred.user!.uid,
-          email: demoEmail,
-          name: 'Dr. Rafiqul Islam (Demo)',
-        );
-      }
-
-      await fetchUserRoles();
-      await saveRole(UserRole.doctor);
-      await setGuestMode(false);
-      return true;
-    } catch (e) {
-      debugPrint('quickLoginDemo error: $e');
-      // Even if offline, enable multi-role demo state locally
-      _currentUserRoles = const UserRoles(
-        isDoctor: true,
-        isOperator: true,
-        isAdmin: true,
-        chamberCount: 1,
-      );
-      await saveRole(UserRole.doctor);
-      await setGuestMode(false);
-      return true;
     }
   }
 

@@ -59,6 +59,7 @@ class _FeedScreenState extends State<FeedScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: null,
         onPressed: () => _openCreatePost(
           initialType: canPostMedia ? 'video' : 'question',
         ),

@@ -242,7 +242,7 @@ class _HomeSearchSectionState extends State<HomeSearchSection> {
                               SpecialtyFeedbackRow(
                                 inputText: _lastMatchedInput,
                                 matchedSpecialty: _lastMatch!.topSpecialty!,
-                                source: 'rule_based',
+                                source: 'symptom_ai',
                                 onSubmitFeedback: widget.onSubmitFeedback,
                               ),
                             ],

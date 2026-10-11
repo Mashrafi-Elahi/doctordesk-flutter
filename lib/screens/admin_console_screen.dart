@@ -1,10 +1,11 @@
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
 import '../services/firestore_config.dart';
-import '../services/rtdb_service.dart';
+import '../services/firestore_service.dart';
 import '../widgets/app_role_and_nav.dart';
 
 class AdminConsoleScreen extends StatefulWidget {
@@ -108,6 +109,118 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       setState(() => _lastActionMessage = 'Error rejecting doctor application: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _reopenDoctorApplication(String uid) async {
+    setState(() => _loading = true);
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'doctorApplication': {
+          'status': 'under_appeal',
+          'appealedAt': FieldValue.serverTimestamp(),
+        }
+      }, SetOptions(merge: true));
+      setState(() {
+        _lastActionMessage = 'Application for $uid reopened under appeal for review.';
+      });
+      await _loadDoctorApplications();
+      await _refreshBackendStats();
+    } catch (e) {
+      setState(() => _lastActionMessage = 'Error reopening application: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _showAddDoctorDialog() async {
+    final nameCtrl = TextEditingController(text: 'Dr. Nuzhat Saima');
+    final specCtrl = TextEditingController(text: 'General Medicine');
+    final chamberCtrl = TextEditingController(text: 'Bup Medical');
+    final degreeCtrl = TextEditingController(text: 'MBBS');
+    final phoneCtrl = TextEditingController(text: '+880 1309-594462');
+    final bmdcCtrl = TextEditingController(text: 'A-98765');
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Doctor to Directory', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Doctor Name', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: specCtrl,
+                decoration: const InputDecoration(labelText: 'Speciality', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: chamberCtrl,
+                decoration: const InputDecoration(labelText: 'Chamber / Hospital', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: degreeCtrl,
+                decoration: const InputDecoration(labelText: 'Degree (e.g. MBBS)', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: phoneCtrl,
+                decoration: const InputDecoration(labelText: 'Phone Number', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: bmdcCtrl,
+                decoration: const InputDecoration(labelText: 'BMDC Reg Number', border: OutlineInputBorder(), isDense: true),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (nameCtrl.text.trim().isEmpty) return;
+              Navigator.pop(ctx, true);
+            },
+            child: const Text('Add Doctor'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      setState(() => _loading = true);
+      try {
+        final newId = await FirestoreService.addDoctor(
+          name: nameCtrl.text.trim(),
+          specialities: [specCtrl.text.trim().isNotEmpty ? specCtrl.text.trim() : 'General Medicine'],
+          designation: 'Specialist Consultant',
+          education: [degreeCtrl.text.trim().isNotEmpty ? degreeCtrl.text.trim() : 'MBBS'],
+          bmdcRegNumber: bmdcCtrl.text.trim(),
+          phone: phoneCtrl.text.trim(),
+          chambers: [
+            {
+              'hospitalName': chamberCtrl.text.trim().isNotEmpty ? chamberCtrl.text.trim() : 'Bup Medical',
+              'area': 'Mirpur',
+              'location': 'Dhaka',
+            }
+          ],
+        );
+        setState(() {
+          _lastActionMessage = 'Added doctor "${nameCtrl.text.trim()}" successfully (ID: $newId).';
+        });
+        await _refreshBackendStats();
+      } catch (e) {
+        setState(() => _lastActionMessage = 'Error adding doctor: $e');
+      } finally {
+        if (mounted) setState(() => _loading = false);
+      }
     }
   }
 
@@ -507,10 +620,9 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                         : () => _approveDoctorApplication(
                                               uid,
                                               markVerified: true,
-                                              nid: nid.toString(),
                                               bmdcNumber: bmdcNumber.toString(),
                                             ),
-                                    label: const Text('Approve & Verify (BMDC & NID)'),
+                                    label: const Text('Approve (BMDC Verified)'),
                                   ),
                                   FilledButton(
                                     style: FilledButton.styleFrom(backgroundColor: Colors.green),
@@ -521,6 +633,10 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                               markVerified: false,
                                             ),
                                     child: const Text('Approve Standard'),
+                                  ),
+                                  FilledButton.tonal(
+                                    onPressed: _loading ? null : () => _reopenDoctorApplication(uid),
+                                    child: const Text('Appeal / Reopen'),
                                   ),
                                   OutlinedButton(
                                     style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
@@ -577,6 +693,39 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           child: const Text('Revoke'),
                         ),
                       ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Doctor Directory Management Section
+            _sectionTitle('DOCTOR DIRECTORY (ADD & DELETE DOCTOR)'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Doctor Profiles Directory',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        FilledButton.icon(
+                          icon: const Icon(Icons.person_add, size: 16),
+                          label: const Text('Add Doctor'),
+                          onPressed: _showAddDoctorDialog,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Admins can add verified doctors directly or manage profiles in the directory.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
                     ),
                   ],
                 ),
@@ -794,20 +943,20 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.speed, color: Colors.deepOrangeAccent),
-                    title: const Text('Realtime Database Ratings Ping'),
-                    subtitle: const Text(RtdbService.databaseUrl),
+                    leading: const Icon(Icons.star_outline, color: Colors.deepOrangeAccent),
+                    title: const Text('Firestore Reviews Database Check'),
+                    subtitle: const Text('Check reviews collection status'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () async {
                       setState(() => _loading = true);
                       try {
-                        final ratings = await RtdbService.fetchDoctorRatings('doctor_1');
+                        final ratings = await FirestoreService.fetchReviews('doctor_1');
                         setState(() {
                           _lastActionMessage =
-                              'Firebase Realtime Database Connected (${ratings.length} demo ratings retrieved).';
+                              'Cloud Firestore Reviews Connected (${ratings.length} reviews retrieved).';
                         });
                       } catch (e) {
-                        setState(() => _lastActionMessage = 'RTDB Ping error: $e');
+                        setState(() => _lastActionMessage = 'Reviews check error: $e');
                       } finally {
                         setState(() => _loading = false);
                       }
