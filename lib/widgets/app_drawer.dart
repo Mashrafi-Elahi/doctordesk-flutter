@@ -27,7 +27,7 @@ class AppDrawer extends StatelessWidget {
       case UserRole.admin:
         return 'System Administrator';
       case UserRole.patient:
-        return AuthService.isSignedIn ? 'Demo Patient' : 'DoctorDesk Guest';
+        return AuthService.isSignedIn ? 'Demo Patient' : 'DocDesk Guest';
     }
   }
 
