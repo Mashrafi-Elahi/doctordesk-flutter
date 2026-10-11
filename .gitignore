@@ -46,6 +46,7 @@ app.*.map.json
 
 # DoctorDesk Firebase secrets & build outputs
 scripts/node_modules/
+scripts/package-lock.json
 *-sa.json
 build/
 *.apk
