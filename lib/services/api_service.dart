@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/doctor.dart';
+import 'firestore_config.dart';
+import 'firestore_service.dart';
 
 class ApiService {
   static String? _resolvedBaseUrl;
@@ -99,6 +101,15 @@ class ApiService {
     String? search,
     String? speciality,
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchDoctors(
+        page: page,
+        limit: limit,
+        search: search,
+        speciality: speciality,
+      );
+    }
+
     final queryParams = <String, String>{
       'page': page.toString(),
       'limit': limit.toString(),
@@ -174,6 +185,10 @@ class ApiService {
   }
 
   static Future<Doctor> fetchDoctorById(String id) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchDoctorById(id);
+    }
+
     try {
       final response = await getRequest('/doctors/$id');
 
@@ -205,6 +220,10 @@ class ApiService {
   }
 
   static Future<List<Map<String, dynamic>>> fetchSpecialities() async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchSpecialities();
+    }
+
     try {
       final response = await getRequest('/doctors/specialities');
 
@@ -242,6 +261,17 @@ class ApiService {
     int page = 1,
     int limit = 20,
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchNearbyDoctors(
+        lat: lat,
+        lng: lng,
+        radiusKm: radiusKm,
+        speciality: speciality,
+        page: page,
+        limit: limit,
+      );
+    }
+
     final queryParams = <String, String>{
       'lat': lat.toString(),
       'lng': lng.toString(),
@@ -267,6 +297,10 @@ class ApiService {
   }
 
   static Future<List<Map<String, dynamic>>> fetchGeocodeSuggestions(String query) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchGeocodeSuggestions(query);
+    }
+
     final queryString = Uri(queryParameters: {'q': query}).query;
     final response = await getRequest('/geocode/suggest?$queryString');
 
@@ -281,6 +315,10 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>?> fetchTodayFeeling() async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchTodayFeeling();
+    }
+
     try {
       final response = await getRequest('/journal/today');
       if (response.statusCode == 200) {
@@ -298,6 +336,14 @@ class ApiService {
     String? note,
     String? gratitudeText,
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.logFeeling(
+        feeling: feeling,
+        note: note,
+        gratitudeText: gratitudeText,
+      );
+    }
+
     try {
       final response = await postRequest(
         '/journal',
@@ -318,6 +364,10 @@ class ApiService {
   }
 
   static Future<List<Map<String, dynamic>>> fetchJournalEntries() async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchJournalEntries();
+    }
+
     try {
       final response = await getRequest('/journal');
 
@@ -335,6 +385,10 @@ class ApiService {
   /// GET /api/v1/doctors/:id/reviews
   static Future<List<Map<String, dynamic>>> fetchReviews(
       String doctorId) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchReviews(doctorId);
+    }
+
     final response = await getRequest('/doctors/$doctorId/reviews');
 
     if (response.statusCode == 200) {
@@ -358,6 +412,16 @@ class ApiService {
     String comment = '',
     String? proofImageUrl,
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.submitReview(
+        doctorId,
+        patientUid: patientUid,
+        rating: rating,
+        comment: comment,
+        proofImageUrl: proofImageUrl,
+      );
+    }
+
     final body = <String, dynamic>{
       'patientUid': patientUid,
       'rating': rating,
@@ -392,6 +456,15 @@ class ApiService {
     required String claimedByUid,
     String? certificateImageUrl,
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.claimDoctor(
+        doctorId,
+        bmdcRegNumber: bmdcRegNumber,
+        claimedByUid: claimedByUid,
+        certificateImageUrl: certificateImageUrl,
+      );
+    }
+
     final body = <String, dynamic>{
       'bmdcRegNumber': bmdcRegNumber,
       'claimedByUid': claimedByUid,
@@ -426,6 +499,17 @@ class ApiService {
     required bool liked,
     String language = 'unknown',
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      await FirestoreService.submitSpecialtyFeedback(
+        inputText: inputText,
+        matchedSpecialty: matchedSpecialty,
+        source: source,
+        liked: liked,
+        language: language,
+      );
+      return;
+    }
+
     try {
       await postRequest(
         '/specialty-feedback',
@@ -445,6 +529,10 @@ class ApiService {
 
   /// GET /api/v1/users/:uid
   static Future<Map<String, dynamic>?> fetchUserProfile(String uid) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchUserProfile(uid);
+    }
+
     try {
       final response = await getRequest('/users/$uid');
       if (response.statusCode == 200) {
@@ -463,6 +551,14 @@ class ApiService {
     String? email,
     String? name,
   }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.syncUser(
+        uid: uid,
+        email: email,
+        name: name,
+      );
+    }
+
     try {
       final response = await postRequest(
         '/users/sync',
@@ -485,6 +581,10 @@ class ApiService {
 
   /// GET /api/v1/doctors/:id/can-review?patientUid=xxx
   static Future<bool> checkCanReview(String doctorId, String patientUid) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.checkCanReview(doctorId, patientUid);
+    }
+
     try {
       final response = await getRequest('/doctors/$doctorId/can-review?patientUid=$patientUid');
       if (response.statusCode == 200) {
@@ -494,5 +594,100 @@ class ApiService {
     } catch (_) {}
     return true; // fallback to true if offline, backend will guard on submit
   }
+
+  // =========================================================================
+  // APPOINTMENTS & QUEUE MANAGEMENT
+  // =========================================================================
+
+  static Future<List<Map<String, dynamic>>> fetchTodayQueue(String chamberId) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.fetchTodayQueue(chamberId);
+    }
+
+    try {
+      final response = await getRequest('/appointments/today?chamberId=$chamberId');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = json['data'] as List<dynamic>? ?? [];
+        return data.cast<Map<String, dynamic>>();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<Map<String, dynamic>> createAppointment({
+    required String patientName,
+    required DateTime scheduledTime,
+    String? chamberId,
+    String? doctorId,
+    String? operatorNote,
+    String status = 'waiting',
+  }) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.createAppointment(
+        patientName: patientName,
+        scheduledTime: scheduledTime,
+        chamberId: chamberId,
+        doctorId: doctorId,
+        operatorNote: operatorNote,
+        status: status,
+      );
+    }
+
+    final response = await postRequest(
+      '/appointments',
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'patientName': patientName,
+        'scheduledTime': scheduledTime.toIso8601String(),
+        'chamberId': chamberId ?? 'demo-chamber',
+        'doctorId': doctorId,
+        'operatorNote': operatorNote ?? '',
+        'status': status,
+      }),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      return json['data'] as Map<String, dynamic>;
+    }
+    throw Exception('Failed to create appointment');
+  }
+
+  static Future<void> updateAppointment(String id, Map<String, dynamic> updates) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.updateAppointment(id, updates);
+    }
+    await postRequest(
+      '/appointments/$id',
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(updates),
+    );
+  }
+
+  static Future<void> updateQueueOrder(List<Map<String, dynamic>> updates) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.updateQueueOrder(updates);
+    }
+    await postRequest(
+      '/appointments/queue-order',
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'updates': updates}),
+    );
+  }
+
+  static Future<void> deleteAppointment(String id) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.deleteAppointment(id);
+    }
+    await http.delete(Uri.parse('$baseUrl/appointments/$id'));
+  }
+
+  static Future<void> clearAllAppointments() async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.clearAllAppointments();
+    }
+    await http.delete(Uri.parse('$baseUrl/appointments/clear/all'));
+  }
 }
+
 

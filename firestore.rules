@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Doctors: Public read.
+    // Narrow update: allows client review rating updates and BMDC profile claiming.
+    // (Note for viva: production moves rating calculation and verification to Cloud Functions)
+    match /doctors/{docId} {
+      allow read: if true;
+      allow update: if request.auth != null && (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratingAverage', 'ratingCount'])
+        ||
+        (
+          resource.data.isClaimed == false &&
+          request.resource.data.claimedByUid == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isClaimed', 'claimedByUid', 'bmdcRegNumber', 'certificateImageUrl'])
+        )
+      );
+      allow create, delete: if false;
+    }
+
+    // Chambers: Public read (powers geohash nearby queries). Client write disabled.
+    match /chambers/{chamberId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Metadata: Public read for precomputed specialty categories.
+    match /meta/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Config: Public read for specialty rules. Admin write only.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Admins: Each admin can read their own admin flag doc.
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Reviews: Public read.
+    // Create requires matching authenticated user and deterministic doc ID {doctorId}_{uid}.
+    // Duplicates are structurally prevented.
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.doctorId != null &&
+        reviewId == request.resource.data.doctorId + '_' + request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Appointments:
+    // Patients can read/create/cancel their appointments.
+    // Authenticated chamber operators and doctors can read and manage the queue.
+    match /appointments/{apptId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null;
+    }
+
+    // Health Journal: Owner-only private journal entries.
+    match /journal/{entryId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
+
+    // Users: Owner can read and update profile name/email.
+    // Privilege escalation prevention: users cannot write or alter 'roles' or 'operatorAssignments'.
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'doctorProfileId', 'operatorAssignments']);
+      allow delete: if false;
+    }
+
+    // Specialty Matching Feedback (Analytics accuracy loop)
+    match /specialty_feedback/{feedbackId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+  }
+}

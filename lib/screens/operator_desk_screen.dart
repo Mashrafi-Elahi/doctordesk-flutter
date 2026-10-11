@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import '../models/user_role.dart';
 import '../widgets/profile_avatar_button.dart';
 import '../services/api_service.dart';
@@ -94,30 +92,17 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
     });
 
     try {
-      final uri = Uri.parse(
-        '${ApiService.baseUrl}/appointments/today?chamberId=${widget.chamberId}',
-      );
-      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      final data = await ApiService.fetchTodayQueue(widget.chamberId);
+      final entries = data
+          .map((e) => QueueEntry.fromJson(e))
+          .toList();
 
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final data = json['data'] as List<dynamic>? ?? [];
-        final entries = data
-            .map((e) => QueueEntry.fromJson(e as Map<String, dynamic>))
-            .toList();
-
-        _applyQueue(entries);
-        return;
-      } else {
-        setState(() {
-          _loading = false;
-          _errorMessage = 'Server error (${response.statusCode}). Please retry.';
-        });
-      }
+      _applyQueue(entries);
+      return;
     } catch (_) {
       setState(() {
         _loading = false;
-        _errorMessage = 'Could not reach server. Check your connection.';
+        _errorMessage = 'Could not load appointment queue. Check your connection.';
       });
     }
   }
@@ -156,13 +141,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
           .map((e) => {'id': e.value.id, 'queuePosition': e.key + 1})
           .toList();
 
-      await http
-          .patch(
-            Uri.parse('${ApiService.baseUrl}/appointments/queue-order'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'updates': updates}),
-          )
-          .timeout(const Duration(seconds: 8));
+      await ApiService.updateQueueOrder(updates);
     } catch (_) {
       // Local state already updated
     }
@@ -174,13 +153,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
     Map<String, dynamic> fields,
   ) async {
     try {
-      await http
-          .patch(
-            Uri.parse('${ApiService.baseUrl}/appointments/$id'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(fields),
-          )
-          .timeout(const Duration(seconds: 8));
+      await ApiService.updateAppointment(id, fields);
     } catch (_) {
       // Optimistic update
     }
@@ -227,7 +200,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
       }
     });
     try {
-      await http.delete(Uri.parse('${ApiService.baseUrl}/appointments/${entry.id}')).timeout(const Duration(seconds: 6));
+      await ApiService.deleteAppointment(entry.id);
     } catch (_) {}
   }
 
@@ -252,7 +225,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
 
     setState(() => _queue.clear());
     try {
-      await http.delete(Uri.parse('${ApiService.baseUrl}/appointments/clear/all')).timeout(const Duration(seconds: 6));
+      await ApiService.clearAllAppointments();
     } catch (_) {}
   }
 
@@ -303,20 +276,14 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                 final sched = DateTime(now.year, now.month, now.day, selectedTime.hour, selectedTime.minute);
 
                 try {
-                  final res = await ApiService.postRequest(
-                    '/appointments',
-                    headers: {'Content-Type': 'application/json'},
-                    body: jsonEncode({
-                      'patientName': name,
-                      'scheduledTime': sched.toIso8601String(),
-                      'chamberId': widget.chamberId,
-                      'status': 'waiting',
-                      'operatorNote': noteController.text.trim(),
-                    }),
+                  await ApiService.createAppointment(
+                    patientName: name,
+                    scheduledTime: sched,
+                    chamberId: widget.chamberId,
+                    status: 'waiting',
+                    operatorNote: noteController.text.trim(),
                   );
-                  if (res.statusCode == 201 || res.statusCode == 200) {
-                    await _loadQueue();
-                  }
+                  await _loadQueue();
                 } catch (_) {}
               },
               child: const Text('Add Patient'),

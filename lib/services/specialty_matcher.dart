@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 /// Result of a specialty match query.
 class MatchResult {
   final String? topSpecialty;
@@ -32,6 +36,62 @@ class MatchResult {
 /// unusual phrasings. That is an expected, explainable limitation of a
 /// rule-based system.
 class SpecialtyMatcher {
+  static Map<String, String>? _remoteComplaintMap;
+  static int _cachedVersion = 0;
+  static int get cachedVersion => _cachedVersion;
+
+  /// Loads remote rules from config/specialty_rules in Cloud Firestore.
+  /// Rules are grouped by specialty in Firestore for easy console editing:
+  /// { "version": 1, "rules": { "Cardiologist": ["chest pain", ...], ... } }
+  static Future<void> loadRemoteRules() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('config')
+          .doc('specialty_rules')
+          .get();
+
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        final version = (data['version'] as num?)?.toInt() ?? 0;
+        final rawRules = data['rules'];
+
+        if (rawRules is Map) {
+          final newMap = <String, String>{};
+          rawRules.forEach((spec, kws) {
+            if (kws is List) {
+              for (final kw in kws) {
+                if (kw != null) {
+                  newMap[kw.toString().toLowerCase().trim()] = spec.toString();
+                }
+              }
+            }
+          });
+
+          if (newMap.isNotEmpty) {
+            _remoteComplaintMap = newMap;
+            _cachedVersion = version;
+
+            // Cache locally for offline resilience
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('cached_specialty_rules', jsonEncode(newMap));
+              await prefs.setInt('cached_specialty_rules_version', version);
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {
+      // Offline fallback: load cached remote rules from SharedPreferences
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedJson = prefs.getString('cached_specialty_rules');
+        if (cachedJson != null) {
+          final Map<String, dynamic> decoded = jsonDecode(cachedJson);
+          _remoteComplaintMap = decoded.map((k, v) => MapEntry(k, v.toString()));
+        }
+      } catch (_) {}
+    }
+  }
   static final Map<String, String> _complaintMap = {
     // 1. Chest pain / Heart -> Cardiologist
     'chest pain': 'Cardiologist',
@@ -569,7 +629,7 @@ class SpecialtyMatcher {
 
   /// Preloads or initializes specialty symptom dictionary.
   static Future<void> load() async {
-    // Fast in-memory map initialized; ready instantly.
+    loadRemoteRules().ignore();
   }
 
   /// Detects whether input is English ('en'), Bengali script ('bn'), Banglish ('banglish'), or 'unknown'.
@@ -598,14 +658,16 @@ class SpecialtyMatcher {
     final cleaned = normalize(input);
     if (cleaned.isEmpty) return null;
 
+    final activeMap = _remoteComplaintMap ?? _complaintMap;
+
     // Check longest matches first to prioritize specific multi-word complaints
-    final sortedKeys = _complaintMap.keys.toList()
+    final sortedKeys = activeMap.keys.toList()
       ..sort((a, b) => b.length.compareTo(a.length));
 
     final matches = <String>{};
     for (final key in sortedKeys) {
       if (cleaned.contains(key)) {
-        matches.add(_complaintMap[key]!);
+        matches.add(activeMap[key]!);
       }
     }
 

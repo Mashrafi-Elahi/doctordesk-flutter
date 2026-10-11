@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/firestore_config.dart';
 import '../widgets/app_role_and_nav.dart';
 
 class AdminConsoleScreen extends StatefulWidget {
@@ -33,6 +33,25 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     final stopwatch = Stopwatch()..start();
 
     try {
+      if (FirestoreConfig.useFirestore) {
+        await ApiService.fetchSpecialities();
+        stopwatch.stop();
+
+        final qData = await ApiService.fetchTodayQueue('demo-chamber');
+        final dRes = await ApiService.fetchDoctors(limit: 1);
+
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            _serverStatus = 'Online (Cloud Firestore)';
+            _latencyMs = stopwatch.elapsedMilliseconds;
+            _appointmentCount = qData.length;
+            _doctorCount = dRes['total'] ?? 0;
+          });
+        }
+        return;
+      }
+
       final res = await ApiService.getRequest('/health');
       stopwatch.stop();
 
@@ -77,7 +96,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Clear All Appointments?'),
         content: const Text(
-          'This will delete all seeded and live appointments from the MongoDB collection.\n\nYou can re-seed them anytime from this console.',
+          'This will delete all seeded and live appointments from the database.\n\nYou can re-seed them anytime from this console.',
           style: TextStyle(fontSize: 13),
         ),
         actions: [
@@ -95,12 +114,10 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
 
     setState(() => _loading = true);
     try {
-      final res = await http.delete(Uri.parse('${ApiService.baseUrl}/appointments/clear/all'));
-      if (res.statusCode == 200) {
-        setState(() {
-          _lastActionMessage = 'All appointments deleted from MongoDB.';
-        });
-      }
+      await ApiService.clearAllAppointments();
+      setState(() {
+        _lastActionMessage = 'All appointments deleted successfully.';
+      });
     } catch (e) {
       setState(() => _lastActionMessage = 'Clear error: $e');
     }
@@ -113,19 +130,16 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       final sampleNames = ['Karim Uddin', 'Fatema Begum', 'Rahim Mia', 'Nasrin Akter', 'Mohammad Hasan'];
       for (int i = 0; i < sampleNames.length; i++) {
         final t = DateTime.now().add(Duration(minutes: (i + 1) * 30));
-        await ApiService.postRequest(
-          '/appointments',
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'patientName': sampleNames[i],
-            'scheduledTime': t.toIso8601String(),
-            'status': i == 0 ? 'in_progress' : 'waiting',
-            'operatorNote': '',
-          }),
+        await ApiService.createAppointment(
+          patientName: sampleNames[i],
+          scheduledTime: t,
+          status: i == 0 ? 'in_progress' : 'waiting',
+          operatorNote: '',
+          chamberId: 'demo-chamber',
         );
       }
       setState(() {
-        _lastActionMessage = 'Successfully seeded 5 appointments to MongoDB.';
+        _lastActionMessage = 'Successfully seeded 5 appointments.';
       });
     } catch (e) {
       setState(() => _lastActionMessage = 'Seed error: $e');
