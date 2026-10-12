@@ -1,16 +1,26 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/app_role_and_nav.dart';
 import 'api_service.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
+  static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: const ['email', 'profile'],
+  );
 
   static User? get currentUser => _auth.currentUser;
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
 
   static bool get isSignedIn => currentUser != null;
+  static bool get needsEmailVerification {
+    final user = currentUser;
+    return user?.email != null &&
+        user!.email!.isNotEmpty &&
+        !user.emailVerified;
+  }
 
   static UserRoles _currentUserRoles = const UserRoles();
   static UserRoles get userRoles => _currentUserRoles;
@@ -44,6 +54,8 @@ class AuthService {
       isOperator: _currentUserRoles.isOperator,
       isAdmin: true,
       chamberCount: _currentUserRoles.chamberCount,
+      doctorProfileId: _currentUserRoles.doctorProfileId,
+      operatorAssignments: _currentUserRoles.operatorAssignments,
     );
   }
 
@@ -65,41 +77,7 @@ class AuthService {
 
   /// Refreshes and returns the additive roles from database
   static Future<UserRoles> fetchUserRoles() async {
-    final email = currentUser?.email?.toLowerCase().trim();
     final uid = currentUser?.uid;
-
-    if (uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' || email == 'mashrafeelahi8@gmail.com') {
-      _currentUserRoles = const UserRoles(
-        isDoctor: true,
-        isOperator: true,
-        isAdmin: true,
-        chamberCount: 1,
-      );
-      await saveRole(UserRole.admin);
-      return _currentUserRoles;
-    }
-
-    if (email == 'nuzhatsaima.16@gmail.com') {
-      _currentUserRoles = const UserRoles(
-        isDoctor: true,
-        isOperator: false,
-        isAdmin: false,
-        chamberCount: 1,
-      );
-      await saveRole(UserRole.doctor);
-      return _currentUserRoles;
-    }
-
-    if (email == 'faizaneha0@gmail.com') {
-      _currentUserRoles = const UserRoles(
-        isDoctor: false,
-        isOperator: false,
-        isAdmin: false,
-        chamberCount: 0,
-      );
-      await saveRole(UserRole.patient);
-      return _currentUserRoles;
-    }
 
     try {
       if (uid != null) {
@@ -171,6 +149,7 @@ class AuthService {
       if (name != null && name.isNotEmpty) {
         await credential.user?.updateDisplayName(name);
       }
+      await credential.user?.sendEmailVerification();
       await ApiService.syncUser(
         uid: credential.user!.uid,
         email: email.trim(),
@@ -195,17 +174,24 @@ class AuthService {
   }
 
   /// Sign in or Sign up with Google OAuth
-  static Future<UserCredential?> signInWithGoogle({bool isDoctor = false}) async {
+  static Future<UserCredential?> signInWithGoogle(
+      {bool isDoctor = false}) async {
     try {
-      final googleProvider = GoogleAuthProvider();
-      googleProvider.addScope('email');
-      googleProvider.addScope('profile');
-
       UserCredential credential;
       if (kIsWeb) {
+        final googleProvider = GoogleAuthProvider();
+        googleProvider.addScope('email');
+        googleProvider.addScope('profile');
         credential = await _auth.signInWithPopup(googleProvider);
       } else {
-        credential = await _auth.signInWithProvider(googleProvider);
+        final googleUser = await _googleSignIn.signIn();
+        if (googleUser == null) return null;
+        final googleAuth = await googleUser.authentication;
+        final firebaseCredential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken,
+          idToken: googleAuth.idToken,
+        );
+        credential = await _auth.signInWithCredential(firebaseCredential);
       }
 
       final user = credential.user;
@@ -232,7 +218,8 @@ class AuthService {
         debugPrint('Google sign in cancelled by user');
         return null;
       }
-      debugPrint('Google sign in FirebaseAuthException: ${e.code} - ${e.message}');
+      debugPrint(
+          'Google sign in FirebaseAuthException: ${e.code} - ${e.message}');
       rethrow;
     } catch (e) {
       debugPrint('Google Sign-in error: $e');
@@ -240,12 +227,33 @@ class AuthService {
     }
   }
 
+  static Future<void> resendEmailVerification() async {
+    final user = currentUser;
+    if (user == null || user.email == null || user.emailVerified) return;
+    await user.sendEmailVerification();
+  }
+
+  /// Always surface a generic success state in the UI so this call does not
+  /// reveal whether a particular email address owns an account.
+  static Future<void> sendPasswordResetEmail(String email) {
+    return _auth.sendPasswordResetEmail(email: email.trim());
+  }
+
+  /// Refreshes the Firebase Auth user after they return from the email link.
+  static Future<bool> refreshEmailVerification() async {
+    final user = currentUser;
+    if (user == null) return false;
+    await user.reload();
+    return currentUser?.emailVerified ?? false;
+  }
+
   /// Trigger phone verification via SMS OTP
   static Future<void> verifyPhoneNumber({
     required String phoneNumber,
     required void Function(String verificationId) onCodeSent,
     required void Function(FirebaseAuthException error) onVerificationFailed,
-    required void Function(PhoneAuthCredential credential) onVerificationCompleted,
+    required void Function(PhoneAuthCredential credential)
+        onVerificationCompleted,
     void Function(String verificationId)? onCodeAutoRetrievalTimeout,
   }) async {
     await _auth.verifyPhoneNumber(
@@ -309,6 +317,9 @@ class AuthService {
 
   /// Log out from Firebase and reset roles
   static Future<void> signOut() async {
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {}
     try {
       await _auth.signOut();
     } catch (_) {}

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/user_role.dart';
 import '../widgets/profile_avatar_button.dart';
 import '../widgets/chamber_accessibility.dart';
+import '../theme/app_constants.dart';
+import '../theme/app_theme.dart';
 import 'operator_desk_screen.dart';
 
 /// Doctor's Manage Tab — Exactly 2 sections:
@@ -26,6 +28,8 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
       'hasOperator': true,
       'operatorName': 'Popular Diagnostic Desk Operator',
       'operatorEmail': 'operator@mail.com',
+      'isAccessible': true,
+      'accessibilityFeatures': ['Ramp', 'Lift/Elevator', 'Accessible washroom'],
       'wheelchairEntrance': true,
       'wheelchairParking': true,
       'liftAvailable': true,
@@ -40,6 +44,8 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
       'hasOperator': false,
       'operatorName': null,
       'operatorEmail': null,
+      'isAccessible': true,
+      'accessibilityFeatures': ['Ramp', 'Lift/Elevator'],
       'wheelchairEntrance': true,
       'wheelchairParking': false,
       'liftAvailable': true,
@@ -116,73 +122,257 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
   }
 
   void _showAddChamberDialog() {
-    final nameCtrl = TextEditingController();
-    final areaCtrl = TextEditingController();
-    final hoursCtrl = TextEditingController(text: '5:00 PM – 9:00 PM (Sat–Thu)');
-    final feeCtrl = TextEditingController(text: '800');
+    _showChamberDialog();
+  }
+
+  void _showChamberDialog({int? editIndex}) {
+    final isEditing = editIndex != null;
+    final Map<String, dynamic>? existing =
+        isEditing ? _chambers[editIndex] : null;
+
+    final nameCtrl = TextEditingController(text: existing?['name'] ?? '');
+    final areaCtrl = TextEditingController(text: existing?['area'] ?? '');
+    final hoursCtrl = TextEditingController(
+        text: existing?['visitingHours'] ?? '5:00 PM – 9:00 PM (Sat–Thu)');
+    final feeCtrl =
+        TextEditingController(text: existing?['fee']?.toString() ?? '800');
+
+    bool isAccessible = existing?['isAccessible'] == true;
+    final List<String> selectedFeatures = List<String>.from(
+        existing?['accessibilityFeatures'] as List? ?? ['Ramp']);
+
+    const availableFeatures = [
+      'Ramp',
+      'Lift/Elevator',
+      'Accessible washroom',
+      'Ground floor',
+    ];
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Chamber Location'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Hospital / Clinic Name', hintText: 'e.g. Popular Diagnostic'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+            ),
+            title: Text(isEditing ? 'Edit Chamber Location' : 'Add Chamber Location'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'Hospital / Clinic Name',
+                      hintText: 'e.g. Popular Diagnostic',
+                      fillColor: Colors.white,
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                        borderSide: const BorderSide(color: AppColors.borderSubtle),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: areaCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'Area / Location',
+                      hintText: 'e.g. Dhanmondi, Dhaka',
+                      fillColor: Colors.white,
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                        borderSide: const BorderSide(color: AppColors.borderSubtle),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: hoursCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'Visiting Hours',
+                      fillColor: Colors.white,
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                        borderSide: const BorderSide(color: AppColors.borderSubtle),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: feeCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Consultation Fee (৳)',
+                      fillColor: Colors.white,
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                        borderSide: const BorderSide(color: AppColors.borderSubtle),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Disability-friendly chamber toggle
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.background,
+                      borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                      border: Border.all(color: AppColors.borderSubtle),
+                    ),
+                    child: Column(
+                      children: [
+                        SwitchListTile.adaptive(
+                          title: const Text(
+                            'Disability-friendly chamber',
+                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
+                          ),
+                          subtitle: const Text(
+                            'Wheelchair access, ramp or lift',
+                            style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+                          ),
+                          value: isAccessible,
+                          activeTrackColor: AppColors.primary,
+                          onChanged: (val) {
+                            setDialogState(() {
+                              isAccessible = val;
+                              if (val && selectedFeatures.isEmpty) {
+                                selectedFeatures.add('Ramp');
+                              }
+                            });
+                          },
+                        ),
+                        if (isAccessible) ...[
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16),
+                            child: Divider(height: 1),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(Icons.info_outline, size: 14, color: AppColors.textSecondary),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'This is declared by the doctor.',
+                                      style: AppTheme.captionSmall,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: availableFeatures.map((feat) {
+                                    final isSelected = selectedFeatures.contains(feat);
+                                    return FilterChip(
+                                      label: Text(
+                                        feat,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: isSelected ? Colors.white : AppColors.primary,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      selected: isSelected,
+                                      selectedColor: AppColors.primary,
+                                      backgroundColor: AppColors.primaryTint,
+                                      checkmarkColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(AppConstants.radiusChip),
+                                        side: BorderSide(
+                                          color: isSelected ? AppColors.primary : AppColors.borderSubtle,
+                                        ),
+                                      ),
+                                      onSelected: (selected) {
+                                        setDialogState(() {
+                                          if (selected) {
+                                            selectedFeatures.add(feat);
+                                          } else {
+                                            selectedFeatures.remove(feat);
+                                          }
+                                        });
+                                      },
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: areaCtrl,
-                decoration: const InputDecoration(labelText: 'Area / Location', hintText: 'e.g. Dhanmondi, Dhaka'),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: hoursCtrl,
-                decoration: const InputDecoration(labelText: 'Visiting Hours'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: feeCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Consultation Fee (৳)'),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                  ),
+                ),
+                onPressed: () {
+                  final name = nameCtrl.text.trim();
+                  final area = areaCtrl.text.trim();
+                  if (name.isEmpty) return;
+
+                  final chamberData = {
+                    'id': existing?['id'] ??
+                        'chamber-${DateTime.now().millisecondsSinceEpoch}',
+                    'name': name,
+                    'area': area.isEmpty ? 'Dhaka' : area,
+                    'visitingHours': hoursCtrl.text.trim(),
+                    'fee': int.tryParse(feeCtrl.text.trim()) ?? 800,
+                    'hasOperator': existing?['hasOperator'] ?? false,
+                    'operatorName': existing?['operatorName'],
+                    'operatorEmail': existing?['operatorEmail'],
+                    'isAccessible': isAccessible,
+                    'accessibilityFeatures': selectedFeatures,
+                    'wheelchairEntrance': isAccessible,
+                    'wheelchairParking': selectedFeatures.contains('Ramp'),
+                    'liftAvailable': selectedFeatures.contains('Lift/Elevator'),
+                    'accessibleToilet': selectedFeatures.contains('Accessible washroom'),
+                  };
+
+                  setState(() {
+                    if (isEditing) {
+                      _chambers[editIndex] = chamberData;
+                    } else {
+                      _chambers.add(chamberData);
+                    }
+                  });
+
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(isEditing
+                          ? '$name chamber details updated.'
+                          : '$name added to your active chambers.'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+                child: const Text('Save Chamber'),
               ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              final name = nameCtrl.text.trim();
-              final area = areaCtrl.text.trim();
-              if (name.isEmpty) return;
-              setState(() {
-                _chambers.add({
-                  'id': 'chamber-${DateTime.now().millisecondsSinceEpoch}',
-                  'name': name,
-                  'area': area.isEmpty ? 'Dhaka' : area,
-                  'visitingHours': hoursCtrl.text.trim(),
-                  'fee': int.tryParse(feeCtrl.text.trim()) ?? 800,
-                  'hasOperator': false,
-                  'operatorName': null,
-                  'operatorEmail': null,
-                  'wheelchairEntrance': true,
-                  'wheelchairParking': true,
-                  'liftAvailable': true,
-                  'accessibleToilet': true,
-                });
-              });
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('$name added to your active chambers.')),
-              );
-            },
-            child: const Text('Save Chamber'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -303,13 +493,17 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                           ],
                         ),
                       ),
-                      AccessibilityIcon(
-                        accessibility: ChamberAccessibility(
-                          wheelchairEntrance: chamber['wheelchairEntrance'] == true,
-                          wheelchairParking: chamber['wheelchairParking'] == true,
-                          liftAvailable: chamber['liftAvailable'] == true,
-                          accessibleToilet: chamber['accessibleToilet'] == true,
+                      if (chamber['isAccessible'] == true) ...[
+                        const AccessibilityIcon(
+                          isAccessible: true,
+                          showLabel: true,
                         ),
+                        const SizedBox(width: 4),
+                      ],
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, size: 20),
+                        tooltip: 'Edit Chamber',
+                        onPressed: () => _showChamberDialog(editIndex: i),
                       ),
                     ],
                   ),

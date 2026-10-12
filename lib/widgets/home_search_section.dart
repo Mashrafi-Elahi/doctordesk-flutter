@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 import '../services/specialty_matcher.dart';
+import '../screens/health_chat_screen.dart';
 import 'specialty_feedback_widget.dart';
 
 class HomeSearchSection extends StatefulWidget {
@@ -250,10 +251,25 @@ class _HomeSearchSectionState extends State<HomeSearchSection> {
                         ),
                       ] else if (_symptomController.text.isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        Text(
-                          'No specialist suggestion for that input — try a different '
-                          'description or search directly.',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'No local match found. Ask DoctorDesk AI?',
+                                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (_) => const HealthChatScreen()),
+                                );
+                              },
+                              icon: const Icon(Icons.auto_awesome, size: 16),
+                              label: const Text('Ask AI'),
+                            ),
+                          ],
                         ),
                       ],
 

@@ -4,7 +4,7 @@ import '../widgets/profile_avatar_button.dart';
 import '../services/api_service.dart';
 
 // ---------------------------------------------------------------------------
-// Local data model — mirrors the MongoDB Appointment schema fields we need.
+// Local view model for the Firestore appointment fields used by the desk.
 // ---------------------------------------------------------------------------
 
 class QueueEntry {
@@ -93,16 +93,15 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
 
     try {
       final data = await ApiService.fetchTodayQueue(widget.chamberId);
-      final entries = data
-          .map((e) => QueueEntry.fromJson(e))
-          .toList();
+      final entries = data.map((e) => QueueEntry.fromJson(e)).toList();
 
       _applyQueue(entries);
       return;
     } catch (_) {
       setState(() {
         _loading = false;
-        _errorMessage = 'Could not load appointment queue. Check your connection.';
+        _errorMessage =
+            'Could not load appointment queue. Check your connection.';
       });
     }
   }
@@ -209,9 +208,12 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Clear All Appointments?'),
-        content: const Text('This will remove all hardcoded and current appointments from the queue.'),
+        content: const Text(
+            'This will remove all hardcoded and current appointments from the queue.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -244,7 +246,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
             children: [
               TextField(
                 controller: nameController,
-                decoration: const InputDecoration(labelText: 'Patient Name', hintText: 'e.g. John Doe'),
+                decoration: const InputDecoration(
+                    labelText: 'Patient Name', hintText: 'e.g. John Doe'),
               ),
               const SizedBox(height: 12),
               ListTile(
@@ -253,7 +256,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                 title: Text('Scheduled Time: ${selectedTime.format(context)}'),
                 trailing: TextButton(
                   onPressed: () async {
-                    final t = await showTimePicker(context: context, initialTime: selectedTime);
+                    final t = await showTimePicker(
+                        context: context, initialTime: selectedTime);
                     if (t != null) setDlgState(() => selectedTime = t);
                   },
                   child: const Text('Change'),
@@ -261,19 +265,23 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
               ),
               TextField(
                 controller: noteController,
-                decoration: const InputDecoration(labelText: 'Desk Note (Optional)'),
+                decoration:
+                    const InputDecoration(labelText: 'Desk Note (Optional)'),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
             FilledButton(
               onPressed: () async {
                 final name = nameController.text.trim();
                 if (name.isEmpty) return;
                 Navigator.pop(ctx);
                 final now = DateTime.now();
-                final sched = DateTime(now.year, now.month, now.day, selectedTime.hour, selectedTime.minute);
+                final sched = DateTime(now.year, now.month, now.day,
+                    selectedTime.hour, selectedTime.minute);
 
                 try {
                   await ApiService.createAppointment(
@@ -321,14 +329,19 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   title: Text('Time: ${selectedTime.format(context)}'),
                   trailing: TextButton(
                     onPressed: () async {
-                      final t = await showTimePicker(context: context, initialTime: selectedTime);
+                      final t = await showTimePicker(
+                          context: context, initialTime: selectedTime);
                       if (t != null) setDlgState(() => selectedTime = t);
                     },
                     child: const Text('Pick Time'),
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text('Status:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                const Text('Status:',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey)),
                 const SizedBox(height: 6),
                 Wrap(
                   spacing: 8,
@@ -344,7 +357,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                 TextField(
                   controller: noteController,
                   maxLines: 2,
-                  decoration: const InputDecoration(labelText: 'Desk Note', border: OutlineInputBorder()),
+                  decoration: const InputDecoration(
+                      labelText: 'Desk Note', border: OutlineInputBorder()),
                 ),
               ],
             ),
@@ -363,7 +377,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
               onPressed: () {
                 final newName = nameController.text.trim();
                 final now = entry.scheduledTime;
-                final newTime = DateTime(now.year, now.month, now.day, selectedTime.hour, selectedTime.minute);
+                final newTime = DateTime(now.year, now.month, now.day,
+                    selectedTime.hour, selectedTime.minute);
                 final newNote = noteController.text.trim();
 
                 setState(() {
@@ -477,7 +492,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text('Loading live patient queue...', style: TextStyle(color: Colors.grey)),
+            Text('Loading live patient queue...',
+                style: TextStyle(color: Colors.grey)),
           ],
         ),
       );
@@ -495,7 +511,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
               const SizedBox(height: 16),
               Text(
                 'Error loading queue',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: cs.error),
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 16, color: cs.error),
               ),
               const SizedBox(height: 6),
               Text(
@@ -523,7 +540,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.event_available_outlined, size: 56, color: Colors.grey[350]),
+              Icon(Icons.event_available_outlined,
+                  size: 56, color: Colors.grey[350]),
               const SizedBox(height: 16),
               Text(
                 'No patients in queue today.',
@@ -561,7 +579,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
             children: [
               Text(
                 'Live Queue (${_queue.length})',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -573,7 +592,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   ),
                   const SizedBox(width: 4),
                   IconButton(
-                    icon: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
+                    icon: const Icon(Icons.delete_sweep_outlined,
+                        color: Colors.redAccent),
                     tooltip: 'Clear all/hardcoded appointments',
                     onPressed: _clearAllAppointments,
                   ),
@@ -645,14 +665,27 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                       icon: Icon(
-                        entry.status == 'done' ? Icons.check_circle : Icons.radio_button_unchecked,
-                        color: entry.status == 'done' ? const Color(0xFF16A34A) : Colors.grey.shade400,
+                        entry.status == 'done'
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                        color: entry.status == 'done'
+                            ? const Color(0xFF16A34A)
+                            : Colors.grey.shade400,
                         size: 24,
                       ),
-                      tooltip: entry.status == 'done' ? 'Mark as Waiting' : 'Tick as Done',
+                      tooltip: entry.status == 'done'
+                          ? 'Mark as Waiting'
+                          : 'Tick as Done',
                       onPressed: () {
-                        final nextStatus = entry.status == 'done' ? 'waiting' : 'done';
+                        final nextStatus =
+                            entry.status == 'done' ? 'waiting' : 'done';
                         setState(() => entry.status = nextStatus);
                         _patchAppointment(entry.id, {'status': nextStatus});
                       },
@@ -666,13 +699,18 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                 ),
                 title: Text(
                   entry.patientName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
-                    decoration: entry.status == 'done' ? TextDecoration.lineThrough : null,
+                    decoration: entry.status == 'done'
+                        ? TextDecoration.lineThrough
+                        : null,
                     color: entry.status == 'done' ? Colors.grey : null,
                   ),
                 ),
                 subtitle: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       _formatTime(entry.scheduledTime),
@@ -690,11 +728,23 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Edit details',
-                      icon: Icon(Icons.edit_outlined, size: 18, color: Colors.grey[700]),
+                      icon: Icon(Icons.edit_outlined,
+                          size: 18, color: Colors.grey[700]),
                       onPressed: () => _showEditAppointmentDialog(entry),
                     ),
                     IconButton(
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      padding: EdgeInsets.zero,
                       tooltip: expanded ? 'Hide note' : 'Add / view note',
                       icon: Icon(
                         expanded ? Icons.notes : Icons.edit_note_outlined,
@@ -707,7 +757,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                     ReorderableDragStartListener(
                       index: index,
                       child: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 8),
+                        padding: EdgeInsets.symmetric(horizontal: 4),
                         child: Icon(Icons.drag_handle, color: Colors.grey),
                       ),
                     ),

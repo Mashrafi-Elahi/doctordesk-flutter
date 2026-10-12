@@ -2,16 +2,29 @@ import 'dart:io';
 
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/doctor.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
+import '../services/tts_service.dart';
+import '../theme/app_constants.dart';
+import '../theme/app_theme.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/chamber_accessibility.dart';
-import '../widgets/trust_score.dart';
-import 'package:flutter_tts/flutter_tts.dart';
+
+String _reviewErrorMessage(Object error) {
+  final raw = error.toString();
+  if (raw.contains('permission-denied')) {
+    return 'Review was blocked by Firebase rules. Deploy the latest firestore.rules, then try again.';
+  }
+  if (raw.contains('network')) {
+    return 'Network error while saving the review. Check your connection and try again.';
+  }
+  return 'Failed to save review. Please try again.';
+}
 
 class DoctorDetailScreen extends StatefulWidget {
   final String doctorId;
@@ -30,81 +43,17 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   List<Map<String, dynamic>> _reviews = [];
   bool _isReviewsLoading = true;
 
-  final FlutterTts _flutterTts = FlutterTts();
-  bool _isPlayingTts = false;
-
   @override
   void initState() {
     super.initState();
-    _initTts();
     _loadDoctor();
     _loadReviews();
   }
 
-  void _initTts() {
-    _flutterTts.setCompletionHandler(() {
-      if (mounted) setState(() => _isPlayingTts = false);
-    });
-    _flutterTts.setErrorHandler((_) {
-      if (mounted) setState(() => _isPlayingTts = false);
-    });
-  }
-
   @override
   void dispose() {
-    _flutterTts.stop();
+    TtsService.instance.stop();
     super.dispose();
-  }
-
-  Future<void> _toggleTts(Doctor doctor) async {
-    if (_isPlayingTts) {
-      await _flutterTts.stop();
-      if (mounted) setState(() => _isPlayingTts = false);
-      return;
-    }
-
-    final speech = StringBuffer();
-    speech.write('${doctor.name}. ');
-    if (doctor.designation != null && doctor.designation!.isNotEmpty) {
-      speech.write('${doctor.designation}. ');
-    }
-    if (doctor.isBmdcVerified) {
-      speech.write('BMDC Verified Specialist. ');
-    }
-    if (doctor.specialities.isNotEmpty) {
-      speech.write('Specialities: ${doctor.specialities.join(", ")}. ');
-    }
-    if (doctor.experienceYears > 0) {
-      speech.write('${doctor.experienceYears.toInt()} years of experience. ');
-    }
-    if (doctor.ratingCount > 0) {
-      speech.write('Rating: ${doctor.ratingAverage?.toStringAsFixed(1) ?? "-"} stars out of ${doctor.ratingCount} reviews. ');
-    } else {
-      speech.write('Not rated yet. ');
-    }
-    if (doctor.chambers.isNotEmpty) {
-      speech.write('Chambers: ');
-      for (final c in doctor.chambers) {
-        if (c.hospitalName != null) speech.write('${c.hospitalName}. ');
-        if (c.area != null) speech.write('${c.area}. ');
-        if (c.accessibility != null && c.accessibility!.tier != AccessibilityTier.none) {
-          speech.write('Wheelchair accessible chamber. ');
-        }
-      }
-    }
-    if (_reviews.isNotEmpty) {
-      speech.write('Recent reviews: ');
-      for (final r in _reviews.take(2)) {
-        if (r['comment'] != null && (r['comment'] as String).isNotEmpty) {
-          speech.write('${r["comment"]}. ');
-        }
-      }
-    }
-
-    setState(() => _isPlayingTts = true);
-    await _flutterTts.setLanguage('en-US');
-    await _flutterTts.setSpeechRate(0.48);
-    await _flutterTts.speak(speech.toString());
   }
 
   Future<void> _loadDoctor() async {
@@ -146,11 +95,13 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         : 'medical professional';
     buffer.write('${doctor.name} is a $primarySpec');
     if (doctor.experienceYears > 0) {
-      buffer.write(' with ${doctor.experienceYears.toInt()} years of experience');
+      buffer
+          .write(' with ${doctor.experienceYears.toInt()} years of experience');
     }
     buffer.write('.');
     if (doctor.education.isNotEmpty) {
-      buffer.write(' They hold qualifications in ${doctor.education.join(", ")}.');
+      buffer.write(
+          ' They hold qualifications in ${doctor.education.join(", ")}.');
     }
     if (doctor.concentrations.isNotEmpty) {
       buffer.write(
@@ -198,7 +149,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Guests can only check ratings. Please sign in as a Patient, Operator, or Doctor to rate.'),
+            content: Text(
+                'Guests can only check ratings. Please sign in as a Patient, Operator, or Doctor to rate.'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -242,7 +194,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         doctorId: widget.doctorId,
         onSuccess: () {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Rating saved to reviews — thank you!')),
+            const SnackBar(
+                content: Text('Rating saved to reviews — thank you!')),
           );
           _loadReviews();
           _loadDoctor();
@@ -256,6 +209,18 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please log in to book an appointment.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (!doctor.isClaimed ||
+        doctor.claimedByUid == null ||
+        doctor.claimedByUid!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'This doctor profile is not claimed yet, so appointments are unavailable.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -302,7 +267,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       children: [
                         Text(
                           'Book with ${doctor.name}',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16),
                         ),
                         IconButton(
                           icon: const Icon(Icons.close),
@@ -329,9 +295,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                         border: OutlineInputBorder(),
                         isDense: true,
                       ),
-                      items: chambers.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                      items: chambers
+                          .map(
+                              (c) => DropdownMenuItem(value: c, child: Text(c)))
+                          .toList(),
                       onChanged: (val) {
-                        if (val != null) setSheetState(() => selectedChamber = val);
+                        if (val != null) {
+                          setSheetState(() => selectedChamber = val);
+                        }
                       },
                     ),
                     const SizedBox(height: 12),
@@ -340,13 +311,15 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                         Expanded(
                           child: OutlinedButton.icon(
                             icon: const Icon(Icons.calendar_today, size: 16),
-                            label: Text('${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
+                            label: Text(
+                                '${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
                             onPressed: () async {
                               final picked = await showDatePicker(
                                 context: context,
                                 initialDate: selectedDate,
                                 firstDate: DateTime.now(),
-                                lastDate: DateTime.now().add(const Duration(days: 90)),
+                                lastDate: DateTime.now()
+                                    .add(const Duration(days: 90)),
                               );
                               if (picked != null) {
                                 setSheetState(() => selectedDate = picked);
@@ -388,9 +361,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   selectedTime.minute,
                                 );
                                 await FirestoreService.createAppointment(
-                                  patientName: patientNameCtrl.text.trim().isNotEmpty
-                                      ? patientNameCtrl.text.trim()
-                                      : 'Patient',
+                                  patientName:
+                                      patientNameCtrl.text.trim().isNotEmpty
+                                          ? patientNameCtrl.text.trim()
+                                          : 'Patient',
                                   scheduledTime: scheduled,
                                   chamberId: selectedChamber,
                                   doctorId: doctor.id,
@@ -400,7 +374,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                 if (mounted) {
                                   messenger.showSnackBar(
                                     const SnackBar(
-                                      content: Text('Appointment booked! Check the Appointments tab.'),
+                                      content: Text(
+                                          'Appointment booked! Check the Appointments tab.'),
                                       behavior: SnackBarBehavior.floating,
                                     ),
                                   );
@@ -409,13 +384,17 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                 setSheetState(() => isSubmitting = false);
                                 if (mounted) {
                                   messenger.showSnackBar(
-                                    SnackBar(content: Text('Booking error: $e')),
+                                    SnackBar(
+                                        content: Text('Booking error: $e')),
                                   );
                                 }
                               }
                             },
                       child: isSubmitting
-                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : const Text('Confirm Appointment'),
                     ),
                   ],
@@ -435,7 +414,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
 
     if (_isLoading) {
       return Scaffold(
@@ -453,7 +431,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.wifi_off_rounded, size: 48, color: theme.colorScheme.error),
+                Icon(Icons.wifi_off_rounded,
+                    size: 48, color: theme.colorScheme.error),
                 const SizedBox(height: 16),
                 Text(
                   'No Internet Connection',
@@ -495,353 +474,434 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         : '?';
 
     return Scaffold(
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Doctor Profile'),
-        actions: [
-          IconButton(
-            icon: Icon(_isPlayingTts ? Icons.stop_circle : Icons.volume_up),
-            tooltip: _isPlayingTts ? 'Stop reading' : 'Read profile aloud (TTS)',
-            color: _isPlayingTts ? colorScheme.error : null,
-            onPressed: () => _toggleTts(doctor),
-          ),
-        ],
+        title: Text(
+          'Doctor Profile',
+          style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+        ),
       ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Header ────────────────────────────────────────────────────
+            // ── 1. Hero Card (radius 24, gradient from primaryTint to primary) ────
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(24),
-              color: Colors.white,
-              child: Column(
-                children: [
-                  CircleAvatar(
-                    radius: 44,
-                    backgroundColor: colorScheme.primaryContainer,
-                    child: Text(
-                      initials,
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w600,
-                        color: colorScheme.onPrimaryContainer,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          doctor.name,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      // BMDC badge — ONLY shown when verified
-                      if (doctor.isBmdcVerified) ...[
-                        const SizedBox(width: 8),
-                        Tooltip(
-                          message: 'BMDC Verified',
-                          child: Icon(Icons.verified,
-                              color: colorScheme.primary, size: 22),
-                        ),
-                      ],
-                    ],
-                  ),
-                  if (doctor.designation != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      doctor.designation!,
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                  if (doctor.specialities.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      doctor.specialities.join(', '),
-                      style: TextStyle(
-                        color: colorScheme.primary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  Semantics(
-                    button: true,
-                    label: _isPlayingTts
-                        ? 'Stop reading doctor profile'
-                        : 'Read doctor profile aloud with speech synthesizer',
-                    child: FilledButton.tonalIcon(
-                      icon: Icon(_isPlayingTts ? Icons.stop : Icons.volume_up, size: 18),
-                      label: Text(_isPlayingTts ? 'Stop Voice' : 'Read Aloud (Voice)'),
-                      style: FilledButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        foregroundColor: _isPlayingTts ? colorScheme.error : colorScheme.primary,
-                        backgroundColor: _isPlayingTts
-                            ? colorScheme.errorContainer
-                            : colorScheme.primaryContainer.withValues(alpha: 0.5),
-                      ),
-                      onPressed: () => _toggleTts(doctor),
-                    ),
-                  ),
-                ],
+              margin: const EdgeInsets.all(AppConstants.screenPadding),
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppConstants.radiusHero),
+                gradient: const LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [AppColors.primaryTint, AppColors.primaryLight],
+                ),
+                boxShadow: AppConstants.elevatedShadow,
               ),
-            ),
-
-            // ── Stats row & Trust Score ───────────────────────────────────────────────
-            Container(
-              color: Colors.white,
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-              child: Column(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatItem(
-                          icon: Icons.work_outline,
-                          label: 'Experience',
-                          value: doctor.experienceYears > 0
-                              ? '${doctor.experienceYears.toInt()} years'
-                              : 'Not specified',
+                  // Left column
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          doctor.name,
+                          style: GoogleFonts.poppins(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      Container(
-                        width: 1,
-                        height: 40,
-                        color: Colors.grey[200],
-                      ),
-                      Expanded(
-                        child: _StatItem(
-                          icon: Icons.star_outline,
-                          label: 'Rating',
-                          // Honest rating state
-                          value: doctor.ratingCount > 0
-                              ? '★ ${doctor.ratingAverage?.toStringAsFixed(1) ?? "-"} (${doctor.ratingCount})'
-                              : 'Not rated yet',
-                          valueColor: doctor.ratingCount > 0
-                              ? Colors.amber[700]
-                              : Colors.grey[500],
+                        if (doctor.specialities.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            doctor.specialities.join(', '),
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.primaryDark,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            const Icon(Icons.star, size: 16, color: AppColors.star),
+                            const SizedBox(width: 4),
+                            Text(
+                              doctor.ratingCount > 0
+                                  ? '${doctor.ratingAverage?.toStringAsFixed(1) ?? "-"} (${doctor.ratingCount} Reviews)'
+                                  : 'N/A',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 12),
+                        // Outlined "BOOK" button
+                        OutlinedButton(
+                          onPressed: () => _showBookingSheet(doctor),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: AppColors.primary, width: 1.5),
+                            backgroundColor: Colors.white,
+                            foregroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: Text(
+                            'BOOK',
+                            style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        if (doctor.chambers.isNotEmpty || doctor.chamber != null) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            doctor.chambers.isNotEmpty
+                                ? doctor.chambers.map((c) => c.hospitalName).whereType<String>().join(', ')
+                                : (doctor.chamber?.hospitalName ?? ''),
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: AppColors.textPrimary.withValues(alpha: 0.8),
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  const Divider(height: 1),
-                  const SizedBox(height: 12),
-                  ScoreBadge(
-                    score: TrustScore(
-                      ratingAverage: doctor.ratingAverage,
-                      ratingCount: doctor.ratingCount,
+                  const SizedBox(width: 14),
+                  // Right: circular/large avatar area
+                  SizedBox(
+                    width: 76,
+                    height: 76,
+                    child: CircleAvatar(
+                      radius: 38,
+                      backgroundColor: Colors.white,
+                      backgroundImage: (doctor.certificateImageUrl != null &&
+                              doctor.certificateImageUrl!.isNotEmpty)
+                          ? NetworkImage(doctor.certificateImageUrl!)
+                          : null,
+                      child: (doctor.certificateImageUrl == null ||
+                              doctor.certificateImageUrl!.isEmpty)
+                          ? Text(
+                              initials,
+                              style: GoogleFonts.poppins(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.primary,
+                              ),
+                            )
+                          : null,
                     ),
                   ),
                 ],
               ),
             ),
 
-            const SizedBox(height: 8),
+            // ── 2. Stat chips row (equal width, outlined, no invented numbers) ────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+              child: Row(
+                children: [
+                  if (doctor.experienceYears > 0)
+                    _buildStatChip(
+                      icon: Icons.work_outline,
+                      value: '${doctor.experienceYears.toInt()} Years',
+                      label: 'Experience',
+                    ),
+                  if (doctor.experienceYears > 0 && doctor.ratingCount > 0)
+                    const SizedBox(width: 10),
+                  if (doctor.ratingCount > 0)
+                    _buildStatChip(
+                      icon: Icons.rate_review_outlined,
+                      value: '${doctor.ratingCount}',
+                      label: 'Reviews',
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppConstants.sectionGap),
 
-            // ── About ─────────────────────────────────────────────────────
-            _SectionCard(
-              title: 'About',
-              child: Text(
-                _buildAboutText(doctor),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  height: 1.5,
-                  color: Colors.grey[700],
+            // ── 3. About {name} ──────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+              child: _SectionCard(
+                title: 'About ${doctor.name}',
+                child: Text(
+                  _buildAboutText(doctor),
+                  style: AppTheme.body,
                 ),
               ),
             ),
 
-            // ── Education ─────────────────────────────────────────────────
-            _SectionCard(
-              title: 'Education',
-              child: doctor.education.isNotEmpty
-                  ? Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: doctor.education
-                          .map((deg) => Chip(
-                                label: Text(deg,
-                                    style: const TextStyle(fontSize: 13)),
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: VisualDensity.compact,
-                              ))
-                          .toList(),
-                    )
-                  : Text('Not specified',
-                      style: TextStyle(color: Colors.grey[500])),
+            // ── 4. Experience bullet list ─────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+              child: _SectionCard(
+                title: 'Experience',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (doctor.experienceYears > 0)
+                      _buildBulletItem('Over ${doctor.experienceYears.toInt()} years of professional clinical practice'),
+                    if (doctor.education.isNotEmpty)
+                      _buildBulletItem('Qualified: ${doctor.education.join(", ")}'),
+                    if (doctor.concentrations.isNotEmpty)
+                      _buildBulletItem('Clinical Focus: ${doctor.concentrations.join(", ")}'),
+                    if (doctor.isBmdcVerified)
+                      _buildBulletItem('BMDC & NID Verified Specialist'),
+                    if (doctor.experienceYears <= 0 && doctor.education.isEmpty)
+                      _buildBulletItem('Specialist medical practitioner with registered credentials'),
+                  ],
+                ),
+              ),
             ),
 
-            // ── Specialities ──────────────────────────────────────────────
+            // ── 5. Specialities (filled primary chips, wrapping) ───────────
             if (doctor.specialities.isNotEmpty)
-              _SectionCard(
-                title: 'Specialities',
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: doctor.specialities
-                      .map((s) => Chip(
-                            label: Text(s,
-                                style: const TextStyle(fontSize: 13)),
-                            backgroundColor: colorScheme.primaryContainer
-                                .withValues(alpha: 0.5),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            visualDensity: VisualDensity.compact,
-                          ))
-                      .toList(),
-                ),
-              ),
-
-            // ── Areas of Focus ────────────────────────────────────────────
-            if (doctor.concentrations.isNotEmpty)
-              _SectionCard(
-                title: 'Areas of Focus',
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: doctor.concentrations
-                      .map((c) => Chip(
-                            label: Text(c,
-                                style: const TextStyle(fontSize: 13)),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            visualDensity: VisualDensity.compact,
-                          ))
-                      .toList(),
-                ),
-              ),
-
-            // ── Chambers ──────────────────────────────────────────────────
-            _SectionCard(
-              title: 'Chambers',
-              child: doctor.chambers.isNotEmpty
-                  ? Column(
-                      children: doctor.chambers.map((chamber) {
-                        return Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[50],
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.grey.shade200),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+                child: _SectionCard(
+                  title: 'Specialities',
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: doctor.specialities.map((s) {
+                      return Chip(
+                        label: Text(
+                          s,
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white,
                           ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(Icons.location_on_outlined,
-                                  color: colorScheme.primary, size: 20),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                        ),
+                        backgroundColor: AppColors.primary,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AppConstants.radiusChip),
+                        ),
+                        side: BorderSide.none,
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+
+            // ── 6. Chambers (with accessibility details) ───────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+              child: _SectionCard(
+                title: 'Chambers',
+                child: doctor.chambers.isNotEmpty
+                    ? Column(
+                        children: doctor.chambers.map((chamber) {
+                          return Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+                              border: Border.all(color: AppColors.borderSubtle),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    if (chamber.hospitalName != null &&
-                                        chamber.hospitalName!.isNotEmpty)
-                                      Row(
+                                    const Icon(Icons.location_on_outlined,
+                                        color: AppColors.primary, size: 20),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Expanded(
-                                            child: Text(
-                                              chamber.hospitalName!,
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 14,
-                                              ),
-                                            ),
+                                          Text(
+                                            chamber.hospitalName ?? 'Consultation Chamber',
+                                            style: AppTheme.cardTitle,
                                           ),
-                                          if (chamber.accessibility != null) ...[
-                                            const SizedBox(width: 8),
-                                            AccessibilityIcon(
-                                              accessibility: chamber.accessibility!,
+                                          if (chamber.area != null && chamber.area!.isNotEmpty) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              chamber.area!,
+                                              style: AppTheme.body,
+                                            ),
+                                          ],
+                                          if (chamber.location != null && chamber.location!.isNotEmpty) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              chamber.location!,
+                                              style: AppTheme.caption,
                                             ),
                                           ],
                                         ],
                                       ),
-                                    if (chamber.area != null &&
-                                        chamber.area!.isNotEmpty) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        chamber.area!,
-                                        style: TextStyle(
-                                          color: Colors.grey[600],
-                                          fontSize: 13,
-                                        ),
+                                    ),
+                                    if (chamber.isAccessible)
+                                      const AccessibilityIcon(
+                                        isAccessible: true,
+                                        showLabel: true,
                                       ),
-                                    ],
-                                    if (chamber.location != null &&
-                                        chamber.location!.isNotEmpty) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        chamber.location!,
-                                        style: TextStyle(
-                                          color: Colors.grey[500],
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ],
                                   ],
                                 ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    )
-                  : Row(
-                      children: [
-                        Icon(Icons.info_outline,
-                            size: 18, color: Colors.grey[400]),
-                        const SizedBox(width: 8),
-                        Text('No chamber information available',
-                            style: TextStyle(color: Colors.grey[500])),
-                      ],
-                    ),
+                                // Accessibility detail features & disclaimer
+                                if (chamber.isAccessible) ...[
+                                  const SizedBox(height: 10),
+                                  const Divider(height: 1),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.info_outline, size: 14, color: AppColors.textSecondary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'This is declared by the doctor.',
+                                        style: AppTheme.captionSmall,
+                                      ),
+                                    ],
+                                  ),
+                                  if (chamber.accessibilityFeatures.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 6,
+                                      children: chamber.accessibilityFeatures.map((feat) {
+                                        return Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primaryTint,
+                                            borderRadius: BorderRadius.circular(10),
+                                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                                          ),
+                                          child: Text(
+                                            feat,
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w500,
+                                              color: AppColors.primary,
+                                            ),
+                                          ),
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ],
+                                ],
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      )
+                    : Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 18, color: Colors.grey[400]),
+                          const SizedBox(width: 8),
+                          Text('No chamber information available', style: AppTheme.caption),
+                        ],
+                      ),
+              ),
             ),
 
-            // ── Reviews ───────────────────────────────────────────────────
-            _SectionCard(
-              title: 'Reviews',
-              child: _buildReviewsContent(),
+            // ── 7. Patient Reviews ─────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+              child: _SectionCard(
+                title: 'Patient Reviews',
+                child: _buildReviewsContent(),
+              ),
             ),
 
-            // ── Claim this profile ────────────────────────────────────────
+            // ── 8. Claim this profile ──────────────────────────────────────
             if (!doctor.isClaimed)
-              _SectionCard(
-                title: 'Claim this profile',
-                child: _buildClaimContent(doctor),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
+                child: _SectionCard(
+                  title: 'Claim this profile',
+                  child: _buildClaimContent(doctor),
+                ),
               ),
 
-            const SizedBox(height: 100), // Space for bottom button
+            const SizedBox(height: 100), // Reserve bottom space for floating/fixed button
           ],
         ),
       ),
       bottomNavigationBar: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppConstants.screenPadding),
           child: FilledButton(
             onPressed: () => _showBookingSheet(doctor),
             style: FilledButton.styleFrom(
-              minimumSize: const Size(double.infinity, 52),
+              minimumSize: const Size(double.infinity, 50),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(AppConstants.radiusButton),
               ),
             ),
-            child: const Text('Book Appointment'),
+            child: Text(
+              'Book Appointment',
+              style: AppTheme.buttonText,
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildStatChip({required IconData icon, required String value, required String label}) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+          border: Border.all(color: AppColors.primary, width: 1.0),
+          boxShadow: AppConstants.softShadow,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 20, color: AppColors.primary),
+            const SizedBox(height: 4),
+            Text(
+              value,
+              style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              label,
+              style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textSecondary),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBulletItem(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('• ', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.primary)),
+          Expanded(
+            child: Text(text, style: AppTheme.body),
+          ),
+        ],
       ),
     );
   }
@@ -886,9 +946,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           )
         else
           Column(
-            children: _reviews
-                .map((review) => _ReviewCard(review: review))
-                .toList(),
+            children:
+                _reviews.map((review) => _ReviewCard(review: review)).toList(),
           ),
         const SizedBox(height: 12),
         if (!isSignedIn) ...[
@@ -901,7 +960,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
             ),
             child: Row(
               children: [
-                Icon(Icons.visibility_outlined, size: 18, color: Colors.grey.shade700),
+                Icon(Icons.visibility_outlined,
+                    size: 18, color: Colors.grey.shade700),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -910,8 +970,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                   ),
                 ),
                 TextButton(
-                  onPressed: () => showDoctorDeskAuthModal(context, isSignUp: false),
-                  child: const Text('Sign In', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  onPressed: () =>
+                      showDoctorDeskAuthModal(context, isSignUp: false),
+                  child: const Text('Sign In',
+                      style:
+                          TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                 ),
               ],
             ),
@@ -977,8 +1040,18 @@ class _ReviewCard extends StatelessWidget {
     try {
       final dt = DateTime.parse(isoString);
       const months = [
-        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
       ];
       return '${dt.day} ${months[dt.month - 1]} ${dt.year}';
     } catch (_) {
@@ -992,102 +1065,108 @@ class _ReviewCard extends StatelessWidget {
     final String comment = (review['comment'] as String?) ?? '';
     final bool isProofVerified = review['isProofVerified'] == true;
     final String dateStr = _formatDate(review['createdAt'] as String?);
-
+    final String raterName = (review['raterName'] as String?)?.isNotEmpty == true
+        ? (review['raterName'] as String)
+        : 'Patient';
     final String? raterRole = review['raterRole'] as String?;
-    final String? raterName = review['raterName'] as String?;
+
+    final initials = raterName.isNotEmpty ? raterName[0].toUpperCase() : 'P';
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: AppConstants.cardGap),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+        border: Border.all(color: AppColors.borderSubtle),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              // Star row
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: AppColors.primaryLight,
+                child: Text(
+                  initials,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            raterName,
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (raterRole == 'doctor') ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryTint,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Specialist',
+                              style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.primary),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (dateStr.isNotEmpty)
+                      Text(
+                        dateStr,
+                        style: AppTheme.captionSmall,
+                      ),
+                  ],
+                ),
+              ),
               Row(
                 children: List.generate(5, (i) {
                   return Icon(
                     i < rating ? Icons.star : Icons.star_border,
-                    size: 18,
-                    color: Colors.amber[700],
+                    size: 16,
+                    color: AppColors.star,
                   );
                 }),
               ),
-              const SizedBox(width: 8),
-              if (raterRole == 'doctor')
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.blue.shade200),
-                  ),
-                  child: const Text(
-                    'Doctor Specialist',
-                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.blue),
-                  ),
-                )
-              else if (raterRole == 'operator')
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.indigo.shade50,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.indigo.shade200),
-                  ),
-                  child: const Text(
-                    'Desk Operator',
-                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.indigo),
-                  ),
-                ),
-              const SizedBox(width: 6),
-              // Verified chip
-              if (isProofVerified)
-                const Chip(
-                  padding: EdgeInsets.zero,
-                  labelPadding: EdgeInsets.symmetric(horizontal: 6),
-                  avatar: Icon(Icons.check_circle,
-                      size: 14, color: Color(0xFF2E7D32)),
-                  label: Text(
-                    'Verified visit',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF2E7D32),
-                    ),
-                  ),
-                  backgroundColor: Color(0xFFE8F5E9),
-                  side: BorderSide(color: Color(0xFFA5D6A7)),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                ),
-              const Spacer(),
-              if (dateStr.isNotEmpty)
-                Text(
-                  dateStr,
-                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                ),
             ],
           ),
-          if (raterName != null && raterName.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              raterName,
-              style: TextStyle(color: Colors.grey[800], fontSize: 11.5, fontWeight: FontWeight.w500),
+          if (isProofVerified) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.check_circle, size: 13, color: AppColors.success),
+                const SizedBox(width: 4),
+                Text('Verified visit', style: AppTheme.captionSmall.copyWith(color: AppColors.success, fontWeight: FontWeight.w600)),
+              ],
             ),
           ],
           if (comment.isNotEmpty) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               comment,
-              style: TextStyle(color: Colors.grey[700], fontSize: 13),
+              style: AppTheme.body,
             ),
           ],
         ],
@@ -1141,8 +1220,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
       _certDownloadUrl = null;
     });
 
-    final ref =
-        FirebaseStorage.instance.ref('claims/$uid/certificate.jpg');
+    final ref = FirebaseStorage.instance.ref('claims/$uid/certificate.jpg');
     final task = ref.putFile(_certFile!);
 
     task.snapshotEvents.listen((snapshot) {
@@ -1241,8 +1319,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
             children: [
               IconButton.outlined(
                 icon: const Icon(Icons.upload_file),
-                onPressed:
-                    _uploadProgress != null ? null : _pickAndUploadCert,
+                onPressed: _uploadProgress != null ? null : _pickAndUploadCert,
                 tooltip: 'Upload certificate or ID photo',
               ),
               const SizedBox(width: 12),
@@ -1266,9 +1343,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(6),
                                 child: Image.file(_certFile!,
-                                    width: 48,
-                                    height: 48,
-                                    fit: BoxFit.cover),
+                                    width: 48, height: 48, fit: BoxFit.cover),
                               ),
                               const SizedBox(width: 8),
                               const Icon(Icons.check_circle,
@@ -1276,8 +1351,7 @@ class _ClaimSheetState extends State<_ClaimSheet> {
                               const SizedBox(width: 4),
                               Text('Uploaded',
                                   style: TextStyle(
-                                      color: Colors.green[700],
-                                      fontSize: 13)),
+                                      color: Colors.green[700], fontSize: 13)),
                             ],
                           )
                         : Text(
@@ -1348,8 +1422,8 @@ class _ReviewSheetState extends State<_ReviewSheet> {
       _proofDownloadUrl = null;
     });
 
-    final ref = FirebaseStorage.instance
-        .ref('reviews/$uid/${widget.doctorId}.jpg');
+    final ref =
+        FirebaseStorage.instance.ref('reviews/$uid/${widget.doctorId}.jpg');
     final task = ref.putFile(_proofFile!);
 
     task.snapshotEvents.listen((snapshot) {
@@ -1387,7 +1461,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
       if (!mounted) return;
       setState(() => _isSubmitting = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to submit review: $e')),
+        SnackBar(content: Text(_reviewErrorMessage(e))),
       );
     }
   }
@@ -1438,7 +1512,10 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                           : (AuthService.userRoles.isOperator
                               ? 'Rating as Chamber Operator'
                               : 'Rating as Verified Patient'),
-                      style: TextStyle(fontSize: 11.5, color: Colors.amber.shade900, fontWeight: FontWeight.w500),
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: Colors.amber.shade900,
+                          fontWeight: FontWeight.w500),
                     ),
                   ),
                 ],
@@ -1529,9 +1606,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                                 ClipRRect(
                                   borderRadius: BorderRadius.circular(6),
                                   child: Image.file(_proofFile!,
-                                      width: 48,
-                                      height: 48,
-                                      fit: BoxFit.cover),
+                                      width: 48, height: 48, fit: BoxFit.cover),
                                 ),
                                 const SizedBox(width: 8),
                                 const Icon(Icons.check_circle,
@@ -1575,44 +1650,6 @@ class _ReviewSheetState extends State<_ReviewSheet> {
 // Shared helper widgets
 // ════════════════════════════════════════════════════════════════════════════
 
-class _StatItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color? valueColor;
-
-  const _StatItem({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Icon(icon, size: 20, color: Colors.grey[500]),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-            color: valueColor,
-          ),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(color: Colors.grey[500], fontSize: 12),
-        ),
-      ],
-    );
-  }
-}
-
 class _SectionCard extends StatelessWidget {
   final String title;
   final Widget child;
@@ -1623,18 +1660,19 @@ class _SectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(0, 0, 0, 8),
-      padding: const EdgeInsets.all(20),
-      color: Colors.white,
+      margin: const EdgeInsets.only(bottom: AppConstants.sectionGap),
+      padding: const EdgeInsets.all(AppConstants.screenPadding),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+        boxShadow: AppConstants.softShadow,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             title,
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 16,
-            ),
+            style: AppTheme.sectionTitle,
           ),
           const SizedBox(height: 12),
           child,

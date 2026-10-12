@@ -14,6 +14,7 @@ dependencies:
   google_fonts: ^6.1.0
   firebase_core: ^4.14.0
   firebase_auth: ^6.6.1
+  google_sign_in: ^6.3.0
   firebase_storage: ^13.5.0
   image_picker: ^1.1.2
   flutter_tts: ^4.2.2
@@ -36,3 +37,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    - assets/dhaka_places.json
+    - assets/data/

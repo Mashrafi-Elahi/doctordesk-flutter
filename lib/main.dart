@@ -1,13 +1,17 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'models/user_role.dart';
 import 'services/auth_service.dart';
 import 'services/specialty_matcher.dart';
+import 'services/app_language.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/main_shell.dart';
+import 'theme/app_theme.dart';
+
+import 'package:flutter/rendering.dart';
+import 'services/tts_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +26,8 @@ void main() async {
 
   await AuthService.loadGuestMode();
   await AuthService.fetchUserRoles();
+  await AppLanguage.load();
+  await TtsService.instance.init();
 
   final prefs = await SharedPreferences.getInstance();
   final bool hasSeenOnboarding = prefs.getBool('hasSeenOnboarding') ?? false;
@@ -31,6 +37,20 @@ void main() async {
     hasSeenOnboarding: hasSeenOnboarding,
     initialRole: initialRole,
   ));
+}
+
+class TtsNavigationObserver extends NavigatorObserver {
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPush(route, previousRoute);
+    TtsService.instance.stop();
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPop(route, previousRoute);
+    TtsService.instance.stop();
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -48,51 +68,88 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'DocDesk',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF3B6FA0),
-          brightness: Brightness.light,
-        ),
-        textTheme: GoogleFonts.interTextTheme(Theme.of(context).textTheme),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF8F6F3),
-        cardTheme: CardThemeData(
-          elevation: 1,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          color: Colors.white,
-        ),
-        appBarTheme: const AppBarTheme(
-          centerTitle: false,
-          elevation: 0,
-          scrolledUnderElevation: 1,
-          backgroundColor: Color(0xFFF8F6F3),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Color(0xFF3B6FA0)),
-          ),
-        ),
-        chipTheme: ChipThemeData(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-        navigationBarTheme: NavigationBarThemeData(
-          labelTextStyle: WidgetStateProperty.all(
-            const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
-          ),
-        ),
+      theme: AppTheme.lightTheme,
+      locale: Locale(AppLanguage.code.value),
+      supportedLocales: const [Locale('en'), Locale('bn')],
+      navigatorObservers: [TtsNavigationObserver()],
+      builder: (context, child) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: TtsService.instance.isReadAloudEnabled,
+          builder: (context, isReadAloud, _) {
+            if (!isReadAloud) return child ?? const SizedBox.shrink();
+            return _ReadAloudGestureWrapper(child: child ?? const SizedBox.shrink());
+          },
+        );
+      },
+      home: ValueListenableBuilder<String>(
+        valueListenable: AppLanguage.code,
+        builder: (_, __, ___) => hasSeenOnboarding
+            ? MainShell(initialRole: initialRole)
+            : const OnboardingScreen(),
       ),
-      home: hasSeenOnboarding ? MainShell(initialRole: initialRole) : const OnboardingScreen(),
+    );
+  }
+}
+
+class _ReadAloudGestureWrapper extends StatefulWidget {
+  final Widget child;
+  const _ReadAloudGestureWrapper({required this.child});
+
+  @override
+  State<_ReadAloudGestureWrapper> createState() => _ReadAloudGestureWrapperState();
+}
+
+class _ReadAloudGestureWrapperState extends State<_ReadAloudGestureWrapper> {
+  DateTime? _lastTapTime;
+  Offset? _lastTapPosition;
+
+  void _handleTap(PointerDownEvent event) {
+    final now = DateTime.now();
+    final isDoubleTap = _lastTapTime != null &&
+        now.difference(_lastTapTime!).inMilliseconds < 350 &&
+        _lastTapPosition != null &&
+        (event.position - _lastTapPosition!).distance < 40;
+
+    _lastTapTime = now;
+    _lastTapPosition = event.position;
+
+    if (!isDoubleTap) {
+      // Single tap: Read aloud target element's semantics label or text
+      final text = _findTextAt(event.position);
+      if (text != null && text.isNotEmpty) {
+        TtsService.instance.speak(text);
+      }
+    }
+  }
+
+  String? _findTextAt(Offset globalPosition) {
+    try {
+      final hitTestResult = HitTestResult();
+      WidgetsBinding.instance.hitTestInView(hitTestResult, globalPosition, View.of(context).viewId);
+      for (final entry in hitTestResult.path) {
+        final target = entry.target;
+        if (target is RenderParagraph) {
+          final text = target.text.toPlainText().trim();
+          if (text.isNotEmpty) return text;
+        }
+        if (target is RenderObject) {
+          final semantics = target.debugSemantics;
+          if (semantics != null) {
+            if (semantics.label.trim().isNotEmpty) return semantics.label.trim();
+            if (semantics.value.trim().isNotEmpty) return semantics.value.trim();
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handleTap,
+      child: widget.child,
     );
   }
 }

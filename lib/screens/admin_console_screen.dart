@@ -67,25 +67,14 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     } catch (_) {}
   }
 
-  Future<void> _approveDoctorApplication(
-    String uid, {
-    bool markVerified = false,
-    String? nid,
-    String? bmdcNumber,
-  }) async {
+  Future<void> _approveDoctorApplication(String uid) async {
     setState(() => _loading = true);
     try {
-      await DataService.setDoctorRole(
-        uid: uid,
-        isDoctor: true,
-        isBmdcVerified: markVerified,
-        nid: nid,
-        bmdcNumber: bmdcNumber,
-      );
+      final doctorProfileId =
+          await DataService.approveDoctorApplication(uid: uid);
       setState(() {
-        _lastActionMessage = markVerified
-            ? 'Approved & allocated Doctor role with BMDC/NID Verified badge for $uid.'
-            : 'Approved & allocated Doctor role for user $uid in database.';
+        _lastActionMessage =
+            'Approved doctor application and linked directory profile $doctorProfileId.';
       });
       await _loadDoctorApplications();
       await _refreshBackendStats();
@@ -101,12 +90,14 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     try {
       await DataService.setDoctorRole(uid: uid, isDoctor: false);
       setState(() {
-        _lastActionMessage = 'Doctor application rejected/revoked for user $uid in database.';
+        _lastActionMessage =
+            'Doctor application rejected/revoked for user $uid in database.';
       });
       await _loadDoctorApplications();
       await _refreshBackendStats();
     } catch (e) {
-      setState(() => _lastActionMessage = 'Error rejecting doctor application: $e');
+      setState(
+          () => _lastActionMessage = 'Error rejecting doctor application: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -122,7 +113,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
         }
       }, SetOptions(merge: true));
       setState(() {
-        _lastActionMessage = 'Application for $uid reopened under appeal for review.';
+        _lastActionMessage =
+            'Application for $uid reopened under appeal for review.';
       });
       await _loadDoctorApplications();
       await _refreshBackendStats();
@@ -133,64 +125,187 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     }
   }
 
-  Future<void> _showAddDoctorDialog() async {
-    final nameCtrl = TextEditingController(text: 'Dr. Nuzhat Saima');
-    final specCtrl = TextEditingController(text: 'General Medicine');
+  Future<void> _showAddDoctorDialog({Map<String, dynamic>? applicant}) async {
+    final applicantDoc = applicant?['doctorApplication'] as Map? ?? {};
+    final initialName = (applicantDoc['name'] ?? applicant?['name'] ?? '').toString();
+    final initialSpec = (applicantDoc['speciality'] ?? '').toString();
+    final initialPhone = (applicantDoc['phone'] ?? applicant?['phone'] ?? '').toString();
+    final initialBmdc = (applicantDoc['bmdcNumber'] ?? applicant?['bmdcRegNumber'] ?? '').toString();
+
+    String? selectedApplicantUid = applicant?['uid']?.toString();
+
+    final nameCtrl = TextEditingController(
+      text: initialName.isNotEmpty ? (initialName.startsWith('Dr.') ? initialName : 'Dr. $initialName') : '',
+    );
+    final specCtrl = TextEditingController(
+      text: initialSpec.isNotEmpty ? initialSpec : 'General Medicine',
+    );
     final chamberCtrl = TextEditingController(text: 'Bup Medical');
     final degreeCtrl = TextEditingController(text: 'MBBS');
-    final phoneCtrl = TextEditingController(text: '+880 1309-594462');
-    final bmdcCtrl = TextEditingController(text: 'A-98765');
+    final phoneCtrl = TextEditingController(text: initialPhone);
+    final bmdcCtrl = TextEditingController(text: initialBmdc);
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Doctor to Directory', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Doctor Name', border: OutlineInputBorder(), isDense: true),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: specCtrl,
-                decoration: const InputDecoration(labelText: 'Speciality', border: OutlineInputBorder(), isDense: true),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: chamberCtrl,
-                decoration: const InputDecoration(labelText: 'Chamber / Hospital', border: OutlineInputBorder(), isDense: true),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: degreeCtrl,
-                decoration: const InputDecoration(labelText: 'Degree (e.g. MBBS)', border: OutlineInputBorder(), isDense: true),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: phoneCtrl,
-                decoration: const InputDecoration(labelText: 'Phone Number', border: OutlineInputBorder(), isDense: true),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: bmdcCtrl,
-                decoration: const InputDecoration(labelText: 'BMDC Reg Number', border: OutlineInputBorder(), isDense: true),
-              ),
-            ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(
+            selectedApplicantUid != null
+                ? 'Review & Create Doctor Profile'
+                : 'Add Doctor to Directory',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (applicant == null && _doctorApplications.isNotEmpty) ...[
+                  DropdownButtonFormField<String?>(
+                    initialValue: selectedApplicantUid,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Link to Pending Applicant',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('None (Unclaimed Directory Profile)'),
+                      ),
+                      ..._doctorApplications.map((app) {
+                        final docApp = app['doctorApplication'] as Map? ?? {};
+                        final aName = (docApp['name'] ?? app['name'] ?? 'Applicant').toString();
+                        final aPhone = (docApp['phone'] ?? app['phone'] ?? '').toString();
+                        final aEmail = (app['email'] ?? '').toString();
+                        final sub = aPhone.isNotEmpty ? aPhone : aEmail;
+                        return DropdownMenuItem<String?>(
+                          value: app['uid']?.toString(),
+                          child: Text('$aName ($sub)', overflow: TextOverflow.ellipsis),
+                        );
+                      }),
+                    ],
+                    onChanged: (val) {
+                      setDialogState(() {
+                        selectedApplicantUid = val;
+                        if (val != null) {
+                          final match = _doctorApplications.firstWhere(
+                            (a) => a['uid']?.toString() == val,
+                            orElse: () => {},
+                          );
+                          if (match.isNotEmpty) {
+                            final mApp = match['doctorApplication'] as Map? ?? {};
+                            final mName = (mApp['name'] ?? match['name'] ?? '').toString();
+                            final mPhone = (mApp['phone'] ?? match['phone'] ?? '').toString();
+                            final mBmdc = (mApp['bmdcNumber'] ?? match['bmdcRegNumber'] ?? '').toString();
+                            final mSpec = (mApp['speciality'] ?? '').toString();
+                            if (mName.isNotEmpty) {
+                              nameCtrl.text = mName.startsWith('Dr.') ? mName : 'Dr. $mName';
+                            }
+                            if (mPhone.isNotEmpty) phoneCtrl.text = mPhone;
+                            if (mBmdc.isNotEmpty) bmdcCtrl.text = mBmdc;
+                            if (mSpec.isNotEmpty) specCtrl.text = mSpec;
+                          }
+                        }
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (selectedApplicantUid != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.green.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.link, size: 16, color: Colors.green.shade800),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Will link directory profile to UID: $selectedApplicantUid',
+                            style: TextStyle(fontSize: 11.5, color: Colors.green.shade900),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Doctor Name (e.g. Dr. Jane Doe)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: specCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Speciality (e.g. General Medicine)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: chamberCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Chamber / Hospital (e.g. Bup Medical)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: degreeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Degree (e.g. MBBS)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: phoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Phone Number (e.g. +880 1...)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: bmdcCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'BMDC Reg Number (e.g. A-98765)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (nameCtrl.text.trim().isEmpty) return;
+                Navigator.pop(ctx, true);
+              },
+              child: Text(selectedApplicantUid != null ? 'Add & Link Doctor' : 'Add Doctor'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              if (nameCtrl.text.trim().isEmpty) return;
-              Navigator.pop(ctx, true);
-            },
-            child: const Text('Add Doctor'),
-          ),
-        ],
       ),
     );
 
@@ -199,22 +314,34 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       try {
         final newId = await FirestoreService.addDoctor(
           name: nameCtrl.text.trim(),
-          specialities: [specCtrl.text.trim().isNotEmpty ? specCtrl.text.trim() : 'General Medicine'],
+          specialities: [
+            specCtrl.text.trim().isNotEmpty
+                ? specCtrl.text.trim()
+                : 'General Medicine'
+          ],
           designation: 'Specialist Consultant',
-          education: [degreeCtrl.text.trim().isNotEmpty ? degreeCtrl.text.trim() : 'MBBS'],
+          education: [
+            degreeCtrl.text.trim().isNotEmpty ? degreeCtrl.text.trim() : 'MBBS'
+          ],
           bmdcRegNumber: bmdcCtrl.text.trim(),
           phone: phoneCtrl.text.trim(),
+          applicantUid: selectedApplicantUid,
           chambers: [
             {
-              'hospitalName': chamberCtrl.text.trim().isNotEmpty ? chamberCtrl.text.trim() : 'Bup Medical',
+              'hospitalName': chamberCtrl.text.trim().isNotEmpty
+                  ? chamberCtrl.text.trim()
+                  : 'Bup Medical',
               'area': 'Mirpur',
               'location': 'Dhaka',
             }
           ],
         );
         setState(() {
-          _lastActionMessage = 'Added doctor "${nameCtrl.text.trim()}" successfully (ID: $newId).';
+          _lastActionMessage = selectedApplicantUid != null
+              ? 'Added doctor "${nameCtrl.text.trim()}" (ID: $newId) and linked to applicant $selectedApplicantUid.'
+              : 'Added doctor "${nameCtrl.text.trim()}" successfully (ID: $newId).';
         });
+        await _loadDoctorApplications();
         await _refreshBackendStats();
       } catch (e) {
         setState(() => _lastActionMessage = 'Error adding doctor: $e');
@@ -228,7 +355,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     final isAdmin = AuthService.userRoles.isAdmin;
     if (!isAdmin) {
       setState(() {
-        _lastActionMessage = 'Permission Denied: Only System Administrators can add or remove moderators. Moderators cannot remove other moderators.';
+        _lastActionMessage =
+            'Permission Denied: Only System Administrators can add or remove moderators. Moderators cannot remove other moderators.';
       });
       return;
     }
@@ -308,7 +436,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
 
       int apptCount = 0;
       try {
-        final qRes = await ApiService.getRequest('/appointments/today?chamberId=demo-chamber');
+        final qRes = await ApiService.getRequest(
+            '/appointments/today?chamberId=demo-chamber');
         if (qRes.statusCode == 200) {
           final qData = jsonDecode(qRes.body)['data'] as List?;
           apptCount = qData?.length ?? 0;
@@ -324,7 +453,9 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       if (mounted) {
         setState(() {
           _loading = false;
-          _serverStatus = res.statusCode == 200 ? 'Online & Healthy' : 'Status code: ${res.statusCode}';
+          _serverStatus = res.statusCode == 200
+              ? 'Online & Healthy'
+              : 'Status code: ${res.statusCode}';
           _latencyMs = stopwatch.elapsedMilliseconds;
           _appointmentCount = apptCount;
           _doctorCount = docCount;
@@ -351,7 +482,9 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
           style: TextStyle(fontSize: 13),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -378,7 +511,13 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   Future<void> _seedDemoAppointments() async {
     setState(() => _loading = true);
     try {
-      final sampleNames = ['Karim Uddin', 'Fatema Begum', 'Rahim Mia', 'Nasrin Akter', 'Mohammad Hasan'];
+      final sampleNames = [
+        'Karim Uddin',
+        'Fatema Begum',
+        'Rahim Mia',
+        'Nasrin Akter',
+        'Mohammad Hasan'
+      ];
       for (int i = 0; i < sampleNames.length; i++) {
         final t = DateTime.now().add(Duration(minutes: (i + 1) * 30));
         await ApiService.createAppointment(
@@ -406,7 +545,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
           children: [
             Icon(Icons.terminal, color: Colors.blueAccent),
             SizedBox(width: 8),
-            Text('Admin Console', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('Admin Console',
+                style: TextStyle(fontWeight: FontWeight.bold)),
           ],
         ),
         actions: [
@@ -422,10 +562,11 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // Server Node.js + MongoDB Status Card
+            // Active Firebase backend status card.
             Card(
               color: const Color(0xFF1E293B),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -439,33 +580,46 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                             color: Colors.green.withValues(alpha: 0.2),
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.dns, color: Colors.greenAccent, size: 22),
+                          child: const Icon(Icons.dns,
+                              color: Colors.greenAccent, size: 22),
                         ),
                         const SizedBox(width: 12),
-                        Expanded(
+                        const Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
-                                'DoctorDesk Node.js API',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                              Text(
+                                'DoctorDesk Firebase',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16),
                               ),
                               Text(
-                                ApiService.baseUrl,
-                                style: const TextStyle(color: Colors.grey, fontSize: 11),
+                                'Cloud Firestore shared backend',
+                                style:
+                                    TextStyle(color: Colors.grey, fontSize: 11),
                               ),
                             ],
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: _serverStatus.contains('Online') ? Colors.green : Colors.red,
+                            color: _serverStatus.contains('Online')
+                                ? Colors.green
+                                : Colors.red,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
-                            _serverStatus.contains('Online') ? 'ONLINE' : 'ERROR',
-                            style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            _serverStatus.contains('Online')
+                                ? 'ONLINE'
+                                : 'ERROR',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold),
                           ),
                         ),
                       ],
@@ -476,10 +630,21 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        _metric('MongoDB', 'Connected', Colors.greenAccent),
-                        _metric('Latency', _latencyMs != null ? '$_latencyMs ms' : '--', Colors.amberAccent),
-                        _metric('Doctors', _doctorCount != null ? '$_doctorCount' : '--', Colors.cyanAccent),
-                        _metric('Queue', _appointmentCount != null ? '$_appointmentCount' : '--', Colors.purpleAccent),
+                        _metric('Firestore', 'Connected', Colors.greenAccent),
+                        _metric(
+                            'Latency',
+                            _latencyMs != null ? '$_latencyMs ms' : '--',
+                            Colors.amberAccent),
+                        _metric(
+                            'Doctors',
+                            _doctorCount != null ? '$_doctorCount' : '--',
+                            Colors.cyanAccent),
+                        _metric(
+                            'Queue',
+                            _appointmentCount != null
+                                ? '$_appointmentCount'
+                                : '--',
+                            Colors.purpleAccent),
                       ],
                     ),
                   ],
@@ -498,10 +663,13 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                    const Icon(Icons.info_outline,
+                        color: Colors.blue, size: 20),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(_lastActionMessage!, style: const TextStyle(fontSize: 12.5, color: Colors.blue)),
+                      child: Text(_lastActionMessage!,
+                          style: const TextStyle(
+                              fontSize: 12.5, color: Colors.blue)),
                     ),
                   ],
                 ),
@@ -527,7 +695,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                       children: [
                         Text(
                           'Pending Applications (${_doctorApplications.length})',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         IconButton(
                           icon: const Icon(Icons.refresh, size: 20),
@@ -550,16 +719,21 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                     else
                       ..._doctorApplications.map((app) {
                         final uid = app['uid'] ?? '';
-                        final docApp = app['doctorApplication'] as Map<String, dynamic>? ?? {};
+                        final docApp =
+                            app['doctorApplication'] as Map<String, dynamic>? ??
+                                {};
                         final name = app['name']?.toString().isNotEmpty == true
                             ? app['name']
                             : (docApp['name'] ?? 'Doctor Applicant');
                         final email = app['email'] ?? docApp['email'] ?? '';
                         final phone = app['phone'] ?? docApp['phone'] ?? '';
                         final nid = docApp['nid'] ?? app['nid'] ?? '';
-                        final bmdcNumber = docApp['bmdcNumber'] ?? app['bmdcRegNumber'] ?? '';
-                        final hasDocs = docApp['hasProvidedVerificationDocs'] == true ||
-                            (nid.toString().isNotEmpty || bmdcNumber.toString().isNotEmpty);
+                        final bmdcNumber =
+                            docApp['bmdcNumber'] ?? app['bmdcRegNumber'] ?? '';
+                        final hasDocs =
+                            docApp['hasProvidedVerificationDocs'] == true ||
+                                (nid.toString().isNotEmpty ||
+                                    bmdcNumber.toString().isNotEmpty);
 
                         return Container(
                           margin: const EdgeInsets.only(top: 8, bottom: 8),
@@ -575,11 +749,15 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                               Row(
                                 children: [
                                   Expanded(
-                                    child: Text('$name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                    child: Text('$name',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14)),
                                   ),
                                   if (hasDocs)
                                     Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
                                       decoration: BoxDecoration(
                                         color: Colors.green.shade100,
                                         borderRadius: BorderRadius.circular(6),
@@ -587,11 +765,16 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          Icon(Icons.verified, size: 12, color: Colors.green.shade800),
+                                          Icon(Icons.verified,
+                                              size: 12,
+                                              color: Colors.green.shade800),
                                           const SizedBox(width: 4),
                                           Text(
                                             'Docs Provided',
-                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade800),
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.green.shade800),
                                           ),
                                         ],
                                       ),
@@ -599,48 +782,59 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                 ],
                               ),
                               const SizedBox(height: 2),
-                              Text('UID: $uid', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                              Text('UID: $uid',
+                                  style: const TextStyle(
+                                      fontSize: 11, color: Colors.black54)),
                               if (phone.isNotEmpty)
-                                Text('Doctor Phone (Required for Login): $phone',
-                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87)),
-                              if (email.isNotEmpty) Text('Email: $email', style: const TextStyle(fontSize: 11, color: Colors.black54)),
-                              if (nid.isNotEmpty) Text('NID: $nid', style: const TextStyle(fontSize: 11.5, color: Colors.indigo)),
+                                Text(
+                                    'Doctor Phone (Required for Login): $phone',
+                                    style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87)),
+                              if (email.isNotEmpty)
+                                Text('Email: $email',
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Colors.black54)),
+                              if (nid.isNotEmpty)
+                                Text('NID: $nid',
+                                    style: const TextStyle(
+                                        fontSize: 11.5, color: Colors.indigo)),
                               if (bmdcNumber.isNotEmpty)
-                                Text('BMDC Reg No: $bmdcNumber', style: const TextStyle(fontSize: 11.5, color: Colors.teal)),
+                                Text('BMDC Reg No: $bmdcNumber',
+                                    style: const TextStyle(
+                                        fontSize: 11.5, color: Colors.teal)),
                               const SizedBox(height: 10),
                               Wrap(
                                 spacing: 8,
                                 runSpacing: 8,
                                 children: [
-                                  FilledButton.icon(
-                                    icon: const Icon(Icons.verified, size: 16),
-                                    style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-                                    onPressed: _loading
-                                        ? null
-                                        : () => _approveDoctorApplication(
-                                              uid,
-                                              markVerified: true,
-                                              bmdcNumber: bmdcNumber.toString(),
-                                            ),
-                                    label: const Text('Approve (BMDC Verified)'),
-                                  ),
                                   FilledButton(
-                                    style: FilledButton.styleFrom(backgroundColor: Colors.green),
+                                    style: FilledButton.styleFrom(
+                                        backgroundColor: Colors.green),
                                     onPressed: _loading
                                         ? null
-                                        : () => _approveDoctorApplication(
-                                              uid,
-                                              markVerified: false,
-                                            ),
-                                    child: const Text('Approve Standard'),
+                                        : () => _approveDoctorApplication(uid),
+                                    child: const Text('Approve Application'),
                                   ),
                                   FilledButton.tonal(
-                                    onPressed: _loading ? null : () => _reopenDoctorApplication(uid),
+                                    onPressed: _loading
+                                        ? null
+                                        : () => _showAddDoctorDialog(applicant: app),
+                                    child: const Text('Review & Create Profile'),
+                                  ),
+                                  FilledButton.tonal(
+                                    onPressed: _loading
+                                        ? null
+                                        : () => _reopenDoctorApplication(uid),
                                     child: const Text('Appeal / Reopen'),
                                   ),
                                   OutlinedButton(
-                                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                                    onPressed: _loading ? null : () => _rejectDoctorApplication(uid),
+                                    style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.red),
+                                    onPressed: _loading
+                                        ? null
+                                        : () => _rejectDoctorApplication(uid),
                                     child: const Text('Reject'),
                                   ),
                                 ],
@@ -654,7 +848,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                     const SizedBox(height: 8),
                     const Text(
                       'Manual Doctor Role Assignment (by UID):',
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 12.5),
                     ),
                     const SizedBox(height: 8),
                     Row(
@@ -665,7 +860,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                             setState(() => _manualGrantVerified = val ?? false);
                           },
                         ),
-                        const Text('Include BMDC & NID Verified Status', style: TextStyle(fontSize: 12)),
+                        const Text('Include BMDC & NID Verified Status',
+                            style: TextStyle(fontSize: 12)),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -683,13 +879,18 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                         ),
                         const SizedBox(width: 8),
                         FilledButton(
-                          onPressed: _loading ? null : () => _manualToggleDoctorRole(true),
+                          onPressed: _loading
+                              ? null
+                              : () => _manualToggleDoctorRole(true),
                           child: const Text('Grant'),
                         ),
                         const SizedBox(width: 4),
                         OutlinedButton(
-                          style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                          onPressed: _loading ? null : () => _manualToggleDoctorRole(false),
+                          style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red),
+                          onPressed: _loading
+                              ? null
+                              : () => _manualToggleDoctorRole(false),
                           child: const Text('Revoke'),
                         ),
                       ],
@@ -713,7 +914,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                       children: [
                         const Text(
                           'Doctor Profiles Directory',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         FilledButton.icon(
                           icon: const Icon(Icons.person_add, size: 16),
@@ -757,12 +959,14 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.lock_outline, size: 18, color: Colors.amber.shade900),
+                            Icon(Icons.lock_outline,
+                                size: 18, color: Colors.amber.shade900),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 'Restricted: You are viewing as a Moderator. Moderators cannot add or remove other moderators.',
-                                style: TextStyle(fontSize: 12, color: Colors.amber.shade900),
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.amber.shade900),
                               ),
                             ),
                           ],
@@ -773,7 +977,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                       children: [
                         Text(
                           'Active Moderators (${_moderators.length})',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         IconButton(
                           icon: const Icon(Icons.refresh, size: 20),
@@ -804,15 +1009,22 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           contentPadding: EdgeInsets.zero,
                           leading: const CircleAvatar(
                             backgroundColor: Colors.deepOrange,
-                            child: Icon(Icons.security, color: Colors.white, size: 18),
+                            child: Icon(Icons.security,
+                                color: Colors.white, size: 18),
                           ),
-                          title: Text('$name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-                          subtitle: Text('UID: $uid${email.isNotEmpty ? ' • $email' : ''}',
+                          title: Text('$name',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 13.5)),
+                          subtitle: Text(
+                              'UID: $uid${email.isNotEmpty ? ' • $email' : ''}',
                               style: const TextStyle(fontSize: 11)),
                           trailing: isAdmin
                               ? OutlinedButton(
-                                  style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                                  onPressed: _loading ? null : () => _toggleModeratorRole(uid, false),
+                                  style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.red),
+                                  onPressed: _loading
+                                      ? null
+                                      : () => _toggleModeratorRole(uid, false),
                                   child: const Text('Revoke'),
                                 )
                               : null,
@@ -824,7 +1036,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                       const SizedBox(height: 8),
                       const Text(
                         'Appoint New Moderator (by UID):',
-                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 12.5),
                       ),
                       const SizedBox(height: 8),
                       Row(
@@ -841,12 +1054,16 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           ),
                           const SizedBox(width: 8),
                           FilledButton(
-                            style: FilledButton.styleFrom(backgroundColor: Colors.deepOrange),
+                            style: FilledButton.styleFrom(
+                                backgroundColor: Colors.deepOrange),
                             onPressed: _loading
                                 ? null
                                 : () {
-                                    final uid = _moderatorUidController.text.trim();
-                                    if (uid.isNotEmpty) _toggleModeratorRole(uid, true);
+                                    final uid =
+                                        _moderatorUidController.text.trim();
+                                    if (uid.isNotEmpty) {
+                                      _toggleModeratorRole(uid, true);
+                                    }
                                   },
                             child: const Text('Appoint'),
                           ),
@@ -865,20 +1082,26 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
+                    leading: const Icon(Icons.delete_sweep_outlined,
+                        color: Colors.redAccent),
                     title: const Text('Clear All Appointments'),
-                    subtitle: const Text('Deletes all seeded and live patient appointments from MongoDB'),
+                    subtitle: const Text(
+                        'Deletes all seeded and live patient appointments from Firestore'),
                     trailing: FilledButton.tonal(
-                      style: FilledButton.styleFrom(backgroundColor: Colors.red.shade50),
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade50),
                       onPressed: _loading ? null : _clearAllAppointments,
-                      child: const Text('Purge', style: TextStyle(color: Colors.red)),
+                      child: const Text('Purge',
+                          style: TextStyle(color: Colors.red)),
                     ),
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.playlist_add, color: Colors.green),
+                    leading:
+                        const Icon(Icons.playlist_add, color: Colors.green),
                     title: const Text('Seed 5 Sample Appointments'),
-                    subtitle: const Text('Populates live chamber queue with fresh test appointments'),
+                    subtitle: const Text(
+                        'Populates live chamber queue with fresh test appointments'),
                     trailing: FilledButton.tonal(
                       onPressed: _loading ? null : _seedDemoAppointments,
                       child: const Text('Seed'),
@@ -895,39 +1118,48 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.medical_services_outlined, color: Colors.blue),
+                    leading: const Icon(Icons.medical_services_outlined,
+                        color: Colors.blue),
                     title: const Text('Switch to Doctor Portal'),
-                    subtitle: const Text('Active chamber management and live patient queue view'),
+                    subtitle: const Text(
+                        'Active chamber management and live patient queue view'),
                     onTap: () {
                       widget.onRoleChanged?.call(UserRole.doctor);
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Switched to Doctor portal view')),
+                        const SnackBar(
+                            content: Text('Switched to Doctor portal view')),
                       );
                     },
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.desktop_windows_outlined, color: Colors.indigo),
+                    leading: const Icon(Icons.desktop_windows_outlined,
+                        color: Colors.indigo),
                     title: const Text('Switch to Operator Desk'),
-                    subtitle: const Text('Reception queue desk for patient check-ins and tickets'),
+                    subtitle: const Text(
+                        'Reception queue desk for patient check-ins and tickets'),
                     onTap: () {
                       widget.onRoleChanged?.call(UserRole.operator);
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Switched to Operator Desk view')),
+                        const SnackBar(
+                            content: Text('Switched to Operator Desk view')),
                       );
                     },
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.person_outline, color: Colors.teal),
+                    leading:
+                        const Icon(Icons.person_outline, color: Colors.teal),
                     title: const Text('Switch to Guest Patient Mode'),
-                    subtitle: const Text('Clean guest view without doctor/operator tabs'),
+                    subtitle: const Text(
+                        'Clean guest view without doctor/operator tabs'),
                     onTap: () async {
                       await AuthService.setGuestMode(true);
                       widget.onRoleChanged?.call(UserRole.patient);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Switched to Guest Patient view')),
+                          const SnackBar(
+                              content: Text('Switched to Guest Patient view')),
                         );
                       }
                     },
@@ -943,20 +1175,23 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.star_outline, color: Colors.deepOrangeAccent),
+                    leading: const Icon(Icons.star_outline,
+                        color: Colors.deepOrangeAccent),
                     title: const Text('Firestore Reviews Database Check'),
                     subtitle: const Text('Check reviews collection status'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () async {
                       setState(() => _loading = true);
                       try {
-                        final ratings = await FirestoreService.fetchReviews('doctor_1');
+                        final ratings =
+                            await FirestoreService.fetchReviews('doctor_1');
                         setState(() {
                           _lastActionMessage =
                               'Cloud Firestore Reviews Connected (${ratings.length} reviews retrieved).';
                         });
                       } catch (e) {
-                        setState(() => _lastActionMessage = 'Reviews check error: $e');
+                        setState(() =>
+                            _lastActionMessage = 'Reviews check error: $e');
                       } finally {
                         setState(() => _loading = false);
                       }
@@ -972,16 +1207,20 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.cleaning_services_outlined, color: Colors.grey),
+                    leading: const Icon(Icons.cleaning_services_outlined,
+                        color: Colors.grey),
                     title: const Text('Reset All Local App Storage'),
-                    subtitle: const Text('Clears SharedPreferences roles, guest mode, and mood keys'),
+                    subtitle: const Text(
+                        'Clears SharedPreferences roles, guest mode, and mood keys'),
                     onTap: () async {
                       await AuthService.signOut();
                       await AuthService.setGuestMode(true);
                       widget.onRoleChanged?.call(UserRole.patient);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('All local app storage reset to clean state.')),
+                          const SnackBar(
+                              content: Text(
+                                  'All local app storage reset to clean state.')),
                         );
                       }
                     },
@@ -998,7 +1237,9 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   Widget _metric(String label, String value, Color color) {
     return Column(
       children: [
-        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+        Text(value,
+            style: TextStyle(
+                color: color, fontWeight: FontWeight.bold, fontSize: 14)),
         const SizedBox(height: 2),
         Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
       ],

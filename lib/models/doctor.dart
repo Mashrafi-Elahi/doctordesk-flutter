@@ -1,16 +1,26 @@
 import '../widgets/chamber_accessibility.dart';
 
 class Chamber {
+  final String? id;
   final String? hospitalName;
   final String? area;
   final String? location;
+  final String? visitingHours;
+  final int? fee;
   final ChamberAccessibility? accessibility;
+  final bool isAccessible;
+  final List<String> accessibilityFeatures;
 
   Chamber({
+    this.id,
     this.hospitalName,
     this.area,
     this.location,
+    this.visitingHours,
+    this.fee,
     this.accessibility,
+    this.isAccessible = false,
+    this.accessibilityFeatures = const [],
   });
 
   factory Chamber.fromJson(Map<String, dynamic> json) {
@@ -21,19 +31,41 @@ class Chamber {
       accessibility = ChamberAccessibility.fromJson(json);
     }
 
+    final bool rawIsAccessible = (json['isAccessible'] as bool?) ??
+        (accessibility?.wheelchairEntrance == true);
+
+    final List<String> features = [];
+    if (json['accessibilityFeatures'] != null && json['accessibilityFeatures'] is List) {
+      features.addAll((json['accessibilityFeatures'] as List).map((e) => e.toString()));
+    } else {
+      if (json['wheelchairEntrance'] == true) features.add('Ramp');
+      if (json['liftAvailable'] == true) features.add('Lift/Elevator');
+      if (json['accessibleToilet'] == true) features.add('Accessible washroom');
+    }
+
     return Chamber(
-      hospitalName: json['hospitalName'] as String?,
+      id: json['id'] as String?,
+      hospitalName: (json['hospitalName'] ?? json['name']) as String?,
       area: json['area'] as String?,
       location: json['location'] as String?,
+      visitingHours: json['visitingHours'] as String?,
+      fee: (json['fee'] as num?)?.toInt(),
       accessibility: accessibility,
+      isAccessible: rawIsAccessible,
+      accessibilityFeatures: features,
     );
   }
 
   Map<String, dynamic> toJson() => {
+    if (id != null) 'id': id,
     'hospitalName': hospitalName,
     'area': area,
     'location': location,
+    if (visitingHours != null) 'visitingHours': visitingHours,
+    if (fee != null) 'fee': fee,
     'accessibility': accessibility?.toJson(),
+    'isAccessible': isAccessible,
+    'accessibilityFeatures': accessibilityFeatures,
   };
 }
 
@@ -77,6 +109,11 @@ class Doctor {
     this.chamber,
     this.distance,
   });
+
+  bool get hasAccessibleChamber {
+    if (chamber?.isAccessible == true) return true;
+    return chambers.any((c) => c.isAccessible);
+  }
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
     List<Chamber> parsedChambers = [];

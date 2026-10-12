@@ -5,6 +5,8 @@
 
 import 'package:flutter/material.dart';
 import '../models/user_role.dart';
+import '../services/app_language.dart';
+import '../theme/app_constants.dart';
 import 'google_sign_in_button.dart';
 
 export '../models/user_role.dart';
@@ -17,6 +19,8 @@ class UserRoles {
   final bool isAdmin;
   final bool isModerator;
   final int chamberCount; // 0 means "hide Manage/Desk tab entirely"
+  final String? doctorProfileId;
+  final List<String> operatorAssignments;
 
   const UserRoles({
     this.isDoctor = false,
@@ -24,6 +28,8 @@ class UserRoles {
     this.isAdmin = false,
     this.isModerator = false,
     this.chamberCount = 0,
+    this.doctorProfileId,
+    this.operatorAssignments = const [],
   });
 
   factory UserRoles.fromJson(Map<String, dynamic> json) {
@@ -33,7 +39,12 @@ class UserRoles {
       isOperator: roles['isOperator'] == true,
       isAdmin: roles['isAdmin'] == true,
       isModerator: roles['isModerator'] == true,
-      chamberCount: (json['chamberCount'] as int?) ?? 0,
+      chamberCount: (json['chamberCount'] as num?)?.toInt() ?? 0,
+      doctorProfileId: json['doctorProfileId']?.toString(),
+      operatorAssignments: (json['operatorAssignments'] as List?)
+              ?.map((value) => value.toString())
+              .toList() ??
+          const [],
     );
   }
 
@@ -61,10 +72,10 @@ class UserRoles {
 /// from here instead of hardcoding a label — this prevents drifting across screens.
 class AppBottomNavConfig {
   static String thirdTabLabel(AppRole role) => switch (role) {
-        AppRole.patient => 'Appointments',
-        AppRole.doctor => 'Manage',
-        AppRole.operator => 'Desk',
-        AppRole.admin => 'Admin',
+        AppRole.patient => tr('Appointments'),
+        AppRole.doctor => tr('Manage'),
+        AppRole.operator => tr('Desk'),
+        AppRole.admin => tr('Admin'),
       };
 
   static IconData thirdTabIcon(AppRole role) => switch (role) {
@@ -81,13 +92,9 @@ class AppBottomNavConfig {
         AppRole.admin => Icons.admin_panel_settings,
       };
 
-  /// Doctor/operator only see their management tab if they actually have a
-  /// chamber to manage. Patient's Appointments tab always shows. Admin console always shows.
+  /// Doctor/operator always see their respective tab when in that role so
+  /// they can add/manage chambers and run desk queues. Patient's Appointments tab always shows. Admin console always shows.
   static bool showThirdTab(AppRole role, UserRoles roles) {
-    if (role == AppRole.admin) return true;
-    if (role == AppRole.doctor || role == AppRole.operator) {
-      return roles.chamberCount > 0;
-    }
     return true;
   }
 }
@@ -107,10 +114,10 @@ class RoleSwitcher extends StatelessWidget {
   });
 
   String _label(AppRole r) => switch (r) {
-        AppRole.patient => 'Patient view',
-        AppRole.doctor => 'Doctor view',
-        AppRole.operator => 'Operator view',
-        AppRole.admin => 'Admin Console',
+        AppRole.patient => tr('Patient'),
+        AppRole.doctor => tr('Doctor'),
+        AppRole.operator => tr('Operator'),
+        AppRole.admin => tr('Admin'),
       };
 
   @override
@@ -119,31 +126,65 @@ class RoleSwitcher extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(16),
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+        boxShadow: AppConstants.softShadow,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'ACTIVE PORTAL VIEW',
+          const Text(
+            'ACTIVE PORTAL',
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 1.1,
-              color: Colors.grey.shade600,
+              color: AppColors.textSecondary,
             ),
           ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            children: roles.availableRoles.map((r) {
-              return ChoiceChip(
-                label: Text(_label(r)),
-                selected: current == r,
-                onSelected: (_) => onSwitch(r),
-              );
-            }).toList(),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: roles.availableRoles.map((r) {
+                final isSelected = current == r;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(AppConstants.radiusChip),
+                    onTap: () => onSwitch(r),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isSelected ? AppColors.primaryTint : Colors.transparent,
+                        borderRadius: BorderRadius.circular(AppConstants.radiusChip),
+                        border: Border.all(
+                          color: isSelected ? AppColors.primary : AppColors.borderSubtle,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isSelected) ...[
+                            const Icon(Icons.check, size: 16, color: AppColors.primary),
+                            const SizedBox(width: 6),
+                          ],
+                          Text(
+                            _label(r),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                              color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
           ),
         ],
       ),

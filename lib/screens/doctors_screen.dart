@@ -22,12 +22,13 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
   List<Doctor> _doctors = [];
   List<String> _specialities = ['All'];
   String _selectedSpeciality = 'All';
-  
+  bool _accessibleOnly = false;
+
   bool _isLoading = false;
   bool _isLoadingMore = false;
   bool _isOffline = false;
   String? _error;
-  
+
   int _currentPage = 1;
   int _totalPages = 1;
   final int _limit = 20;
@@ -62,7 +63,8 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
       if (!_isLoadingMore && _currentPage < _totalPages) {
         _currentPage++;
         _fetchDoctors(loadMore: true);
@@ -73,13 +75,29 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
   Future<void> _fetchSpecialities() async {
     try {
       final specs = await ApiService.fetchSpecialities();
+      final matchingSpeciality = widget.initialQuery == null
+          ? null
+          : specs
+              .map((spec) => spec['speciality']?.toString() ?? '')
+              .cast<String?>()
+              .firstWhere(
+                (spec) =>
+                    spec != null &&
+                    spec.toLowerCase() == widget.initialQuery!.toLowerCase(),
+                orElse: () => null,
+              );
+      if (!mounted) return;
       setState(() {
         _specialities = ['All', ...specs.map((s) => s['speciality'] as String)];
-        if (widget.initialQuery != null && _specialities.contains(widget.initialQuery)) {
-          _selectedSpeciality = widget.initialQuery!;
+        if (matchingSpeciality != null) {
+          _selectedSpeciality = matchingSpeciality;
           _searchController.clear();
         }
       });
+      if (matchingSpeciality != null) {
+        _currentPage = 1;
+        _fetchDoctors();
+      }
     } catch (e) {
       // Handle silently for now
     }
@@ -119,7 +137,8 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
       });
     } catch (e) {
       setState(() {
-        _error = 'No Internet Connection\nPlease check your network connection and try again.';
+        _error =
+            'No Internet Connection\nPlease check your network connection and try again.';
         _isLoading = false;
         _isLoadingMore = false;
       });
@@ -146,30 +165,43 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
           ),
           SizedBox(
             height: 50,
-            child: ListView.builder(
+            child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              itemCount: _specialities.length,
-              itemBuilder: (context, index) {
-                final spec = _specialities[index];
-                final isSelected = _selectedSpeciality == spec;
-                return Padding(
+              children: [
+                Padding(
                   padding: const EdgeInsets.only(right: 8.0),
-                  child: ChoiceChip(
-                    label: Text(spec),
-                    selected: isSelected,
+                  child: FilterChip(
+                    avatar: const Icon(Icons.accessible, size: 16, color: Color(0xFF2E7D32)),
+                    label: const Text('Accessible only'),
+                    selected: _accessibleOnly,
                     onSelected: (selected) {
-                      if (selected) {
-                        setState(() {
-                          _selectedSpeciality = spec;
-                          _currentPage = 1;
-                        });
-                        _fetchDoctors();
-                      }
+                      setState(() {
+                        _accessibleOnly = selected;
+                      });
                     },
                   ),
-                );
-              },
+                ),
+                ..._specialities.map((spec) {
+                  final isSelected = _selectedSpeciality == spec;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: ChoiceChip(
+                      label: Text(spec),
+                      selected: isSelected,
+                      onSelected: (selected) {
+                        if (selected) {
+                          setState(() {
+                            _selectedSpeciality = spec;
+                            _currentPage = 1;
+                          });
+                          _fetchDoctors();
+                        }
+                      },
+                    ),
+                  );
+                }),
+              ],
             ),
           ),
           Expanded(
@@ -192,7 +224,8 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.wifi_off_rounded, size: 52, color: Theme.of(context).colorScheme.error),
+              Icon(Icons.wifi_off_rounded,
+                  size: 52, color: Theme.of(context).colorScheme.error),
               const SizedBox(height: 14),
               Text(
                 'No Internet Connection',
@@ -223,14 +256,21 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
       );
     }
 
-    if (_doctors.isEmpty) {
+    final displayDoctors = _accessibleOnly
+        ? _doctors.where((d) => d.hasAccessibleChamber).toList()
+        : _doctors;
+
+    if (displayDoctors.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.search_off, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
-            Text('No doctors found', style: TextStyle(color: Colors.grey[600], fontSize: 18)),
+            Text(
+              _accessibleOnly ? 'No accessible doctors found' : 'No doctors found',
+              style: TextStyle(color: Colors.grey[600], fontSize: 18),
+            ),
           ],
         ),
       );
@@ -250,7 +290,8 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
             ),
             child: Row(
               children: [
-                Icon(Icons.cloud_off_rounded, size: 18, color: Colors.amber.shade900),
+                Icon(Icons.cloud_off_rounded,
+                    size: 18, color: Colors.amber.shade900),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -269,16 +310,16 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
           child: ListView.builder(
             controller: _scrollController,
             padding: const EdgeInsets.all(16.0),
-            itemCount: _doctors.length + (_isLoadingMore ? 1 : 0),
+            itemCount: displayDoctors.length + (_isLoadingMore ? 1 : 0),
             itemBuilder: (context, index) {
-              if (index == _doctors.length) {
+              if (index == displayDoctors.length) {
                 return const Padding(
                   padding: EdgeInsets.all(16.0),
                   child: Center(child: CircularProgressIndicator()),
                 );
               }
 
-              final doctor = _doctors[index];
+              final doctor = displayDoctors[index];
               return _DoctorListCard(doctor: doctor);
             },
           ),
@@ -296,7 +337,7 @@ class _DoctorListCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
@@ -304,7 +345,8 @@ class _DoctorListCard extends StatelessWidget {
         onTap: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => DoctorDetailScreen(doctorId: doctor.id)),
+            MaterialPageRoute(
+                builder: (_) => DoctorDetailScreen(doctorId: doctor.id)),
           );
         },
         child: Padding(
@@ -334,7 +376,8 @@ class _DoctorListCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             doctor.name,
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -342,7 +385,8 @@ class _DoctorListCard extends StatelessWidget {
                         if (doctor.isBmdcVerified)
                           const Padding(
                             padding: EdgeInsets.only(left: 4.0),
-                            child: Icon(Icons.verified, color: Colors.blue, size: 16),
+                            child: Icon(Icons.verified,
+                                color: Colors.blue, size: 16),
                           ),
                       ],
                     ),
@@ -362,19 +406,21 @@ class _DoctorListCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          Icon(Icons.local_hospital_outlined, size: 14, color: Colors.grey[600]),
+                          Icon(Icons.local_hospital_outlined,
+                              size: 14, color: Colors.grey[600]),
                           const SizedBox(width: 4),
                           Expanded(
                             child: Text(
                               doctor.chamber!.hospitalName!,
-                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                              style: TextStyle(
+                                  color: Colors.grey[600], fontSize: 12),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          if (doctor.chamber?.accessibility != null) ...[
+                          if (doctor.hasAccessibleChamber) ...[
                             const SizedBox(width: 6),
-                            AccessibilityIcon(accessibility: doctor.chamber!.accessibility!),
+                            const AccessibilityIcon(isAccessible: true),
                           ],
                         ],
                       ),
@@ -382,16 +428,25 @@ class _DoctorListCard extends StatelessWidget {
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        Icon(Icons.star, size: 16, color: doctor.ratingCount > 0 ? Colors.amber : Colors.grey[400]),
+                        Icon(Icons.star,
+                            size: 16,
+                            color: doctor.ratingCount > 0
+                                ? Colors.amber
+                                : Colors.grey[400]),
                         const SizedBox(width: 4),
                         Text(
                           doctor.ratingCount > 0
-                              ? (doctor.bayesianRating?.toStringAsFixed(1) ?? 'N/A')
+                              ? (doctor.bayesianRating?.toStringAsFixed(1) ??
+                                  'N/A')
                               : 'Not rated yet',
                           style: TextStyle(
                             fontSize: 12,
-                            fontWeight: doctor.ratingCount > 0 ? FontWeight.bold : FontWeight.normal,
-                            color: doctor.ratingCount > 0 ? Colors.black87 : Colors.grey[500],
+                            fontWeight: doctor.ratingCount > 0
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: doctor.ratingCount > 0
+                                ? Colors.black87
+                                : Colors.grey[500],
                           ),
                         ),
                       ],

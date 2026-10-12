@@ -1,12 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../theme/app_constants.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/first_time_checkin_dialog.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
+import '../services/app_language.dart';
+import '../services/tts_service.dart';
 import 'settings_screen.dart';
 import 'admin_console_screen.dart';
+import '../widgets/health_documents_widget.dart';
 
 class ProfileScreen extends StatefulWidget {
   final UserRole role;
@@ -49,8 +55,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _showDoctorApplicationDialog() async {
-    final phoneController = TextEditingController(text: _userProfile?['phone'] ?? AuthService.currentUser?.phoneNumber ?? '');
-    final bmdcController = TextEditingController(text: _userProfile?['bmdcRegNumber'] ?? _userProfile?['doctorApplication']?['bmdcNumber'] ?? '');
+    final phoneController = TextEditingController(
+        text: _userProfile?['phone'] ??
+            AuthService.currentUser?.phoneNumber ??
+            '');
+    final bmdcController = TextEditingController(
+        text: _userProfile?['bmdcRegNumber'] ??
+            _userProfile?['doctorApplication']?['bmdcNumber'] ??
+            '');
 
     final result = await showDialog<bool>(
       context: context,
@@ -96,7 +108,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () {
               if (phoneController.text.trim().isEmpty) return;
@@ -121,7 +135,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Doctor application submitted! Admin will review and verify your BMDC.'),
+              content: Text(
+                  'Doctor application submitted! Admin will review and verify your BMDC.'),
               behavior: SnackBarBehavior.floating,
             ),
           );
@@ -134,70 +149,102 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final uid = AuthService.currentUser?.uid;
     if (uid == null) return;
 
-    final firstNameCtrl = TextEditingController(text: _userProfile?['firstName'] ?? '');
-    final lastNameCtrl = TextEditingController(text: _userProfile?['lastName'] ?? '');
+    final firstNameCtrl =
+        TextEditingController(text: _userProfile?['firstName'] ?? '');
+    final lastNameCtrl =
+        TextEditingController(text: _userProfile?['lastName'] ?? '');
     final usernameCtrl = TextEditingController(
-      text: _userProfile?['username'] ?? AuthService.currentUser?.displayName ?? '',
+      text: _userProfile?['username'] ??
+          AuthService.currentUser?.displayName ??
+          '',
     );
     final phoneCtrl = TextEditingController(
-      text: _userProfile?['phone'] ?? AuthService.currentUser?.phoneNumber ?? '',
+      text:
+          _userProfile?['phone'] ?? AuthService.currentUser?.phoneNumber ?? '',
     );
-    final designationCtrl = TextEditingController(text: _userProfile?['designation'] ?? '');
-    final degreesCtrl = TextEditingController(text: _userProfile?['degrees'] ?? '');
-    final bmdcCtrl = TextEditingController(text: _userProfile?['bmdcRegNumber'] ?? '');
+    final designationCtrl =
+        TextEditingController(text: _userProfile?['designation'] ?? '');
+    final degreesCtrl =
+        TextEditingController(text: _userProfile?['degrees'] ?? '');
+    final bmdcCtrl =
+        TextEditingController(text: _userProfile?['bmdcRegNumber'] ?? '');
 
     final isDoctorRole = _userRoles.isDoctor || widget.role == UserRole.doctor;
 
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Edit Profile Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        title: const Text('Edit Profile Details',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: firstNameCtrl,
-                decoration: const InputDecoration(labelText: 'First Name', border: OutlineInputBorder(), isDense: true),
+                decoration: const InputDecoration(
+                    labelText: 'First Name',
+                    border: OutlineInputBorder(),
+                    isDense: true),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: lastNameCtrl,
-                decoration: const InputDecoration(labelText: 'Last Name', border: OutlineInputBorder(), isDense: true),
+                decoration: const InputDecoration(
+                    labelText: 'Last Name',
+                    border: OutlineInputBorder(),
+                    isDense: true),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: usernameCtrl,
-                decoration: const InputDecoration(labelText: 'Username / Display Name', border: OutlineInputBorder(), isDense: true),
+                decoration: const InputDecoration(
+                    labelText: 'Username / Display Name',
+                    border: OutlineInputBorder(),
+                    isDense: true),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: phoneCtrl,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Phone Number', border: OutlineInputBorder(), isDense: true),
+                decoration: const InputDecoration(
+                    labelText: 'Phone Number',
+                    border: OutlineInputBorder(),
+                    isDense: true),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: designationCtrl,
-                decoration: const InputDecoration(labelText: 'Designation (e.g. Consultant / Patient)', border: OutlineInputBorder(), isDense: true),
+                decoration: const InputDecoration(
+                    labelText: 'Designation (e.g. Consultant / Patient)',
+                    border: OutlineInputBorder(),
+                    isDense: true),
               ),
               if (isDoctorRole) ...[
                 const SizedBox(height: 10),
                 TextField(
                   controller: degreesCtrl,
-                  decoration: const InputDecoration(labelText: 'Degrees (e.g. MBBS, FCPS)', border: OutlineInputBorder(), isDense: true),
+                  decoration: const InputDecoration(
+                      labelText: 'Degrees (e.g. MBBS, FCPS)',
+                      border: OutlineInputBorder(),
+                      isDense: true),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: bmdcCtrl,
-                  decoration: const InputDecoration(labelText: 'BMDC Registration ID', border: OutlineInputBorder(), isDense: true),
+                  decoration: const InputDecoration(
+                      labelText: 'BMDC Registration ID',
+                      border: OutlineInputBorder(),
+                      isDense: true),
                 ),
               ],
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Save Details'),
@@ -227,7 +274,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           updates['bmdcRegNumber'] = bmdcCtrl.text.trim();
         }
 
-        await FirebaseFirestore.instance.collection('users').doc(uid).set(updates, SetOptions(merge: true));
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .set(updates, SetOptions(merge: true));
 
         if (fullName.isNotEmpty) {
           await AuthService.currentUser?.updateDisplayName(fullName);
@@ -237,12 +287,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (mounted) {
           setState(() {});
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Profile details updated successfully!')),
+            const SnackBar(
+                content: Text('Profile details updated successfully!')),
           );
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating profile: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error updating profile: $e')));
         }
       }
     }
@@ -255,33 +307,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Change Password', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        title: const Text('Change Password',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: passCtrl,
               obscureText: true,
-              decoration: const InputDecoration(labelText: 'New Password (min 6 chars)', border: OutlineInputBorder(), isDense: true),
+              decoration: const InputDecoration(
+                  labelText: 'New Password (min 6 chars)',
+                  border: OutlineInputBorder(),
+                  isDense: true),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: confirmCtrl,
               obscureText: true,
-              decoration: const InputDecoration(labelText: 'Confirm New Password', border: OutlineInputBorder(), isDense: true),
+              decoration: const InputDecoration(
+                  labelText: 'Confirm New Password',
+                  border: OutlineInputBorder(),
+                  isDense: true),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () {
               if (passCtrl.text.trim().length < 6) {
-                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Password must be at least 6 characters.')));
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                    content: Text('Password must be at least 6 characters.')));
                 return;
               }
               if (passCtrl.text.trim() != confirmCtrl.text.trim()) {
-                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Passwords do not match.')));
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Passwords do not match.')));
                 return;
               }
               Navigator.pop(ctx, true);
@@ -303,7 +366,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not change password: ${e.toString().replaceAll("Exception:", "").trim()}')),
+            SnackBar(
+                content: Text(
+                    'Could not change password: ${e.toString().replaceAll("Exception:", "").trim()}')),
           );
         }
       }
@@ -312,14 +377,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   String _getRoleDisplayName() {
     final user = AuthService.currentUser;
+    final profileName = _userProfile?['name']?.toString().trim();
+    if (profileName != null && profileName.isNotEmpty) return profileName;
     if (user?.displayName != null && user!.displayName!.isNotEmpty) {
       return user.displayName!;
     }
+    if (user?.email != null && user!.email!.isNotEmpty) {
+      return user.email!.split('@').first;
+    }
     return switch (widget.role) {
-      UserRole.doctor => 'Dr. Rafiqul Islam',
-      UserRole.operator => 'Popular Diagnostic Desk Operator',
-      UserRole.admin => 'System Administrator',
-      UserRole.patient => _isSignedIn ? 'Karim Rahman' : 'Guest Patient',
+      UserRole.doctor => 'Doctor',
+      UserRole.operator => 'Chamber Operator',
+      UserRole.admin => 'Administrator',
+      UserRole.patient => 'Guest Patient',
     };
   }
 
@@ -331,7 +401,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       UserRole.doctor => 'BMDC Verified Specialist • Active Doctor Account',
       UserRole.operator => 'Live Chamber Queue Desk • Active Operator Account',
       UserRole.admin => 'Backend Controller • Database & Server Operations',
-      UserRole.patient => 'Medical records, mood journal, and appointments synced',
+      UserRole.patient =>
+        tr('Medical records, mood journal, and appointments synced'),
     };
   }
 
@@ -351,8 +422,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     final title = switch (widget.role) {
       UserRole.doctor => 'Doctor Profile & Chambers',
       UserRole.operator => 'Chamber Desk Profile',
@@ -360,507 +429,662 @@ class _ProfileScreenState extends State<ProfileScreen> {
       UserRole.patient => 'Patient Profile',
     };
 
+    final emailOrPhone = AuthService.currentUser?.email?.isNotEmpty == true
+        ? AuthService.currentUser!.email!
+        : (AuthService.currentUser?.phoneNumber?.isNotEmpty == true
+            ? AuthService.currentUser!.phoneNumber!
+            : _getRoleSubtitle());
+
+    final List<_SettingsItem> settingsItems = [
+      if (_isSignedIn) ...[
+        _SettingsItem(
+          icon: Icons.person_outline,
+          title: 'Profile Details',
+          onTap: _showEditProfileDialog,
+        ),
+        _SettingsItem(
+          icon: Icons.lock_reset_outlined,
+          title: 'Change Password',
+          onTap: _showChangePasswordDialog,
+        ),
+      ],
+      if (widget.role == UserRole.patient)
+        _SettingsItem(
+          icon: Icons.settings_outlined,
+          title: 'Settings',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const SettingsScreen(role: UserRole.patient)),
+          ),
+        )
+      else if (widget.role == UserRole.doctor)
+        _SettingsItem(
+          icon: Icons.tune_outlined,
+          title: 'Practice Settings',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const SettingsScreen(role: UserRole.doctor)),
+          ),
+        )
+      else if (widget.role == UserRole.operator)
+        _SettingsItem(
+          icon: Icons.desk_outlined,
+          title: 'Desk Settings',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const SettingsScreen(role: UserRole.operator)),
+          ),
+        ),
+      _SettingsItem(
+        icon: Icons.notifications_outlined,
+        title: 'Notifications',
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => SettingsScreen(
+                    role: widget.role,
+                    initialSection: 'notifications',
+                  )),
+        ),
+      ),
+      _SettingsItem(
+        icon: Icons.language_outlined,
+        title: 'Language',
+        onTap: () => _pickLanguageDialog(context),
+      ),
+      _SettingsItem(
+        icon: Icons.help_outline,
+        title: 'Help & FAQ',
+        onTap: () => _showHelpDialog(context),
+      ),
+      _SettingsItem(
+        icon: Icons.shield_outlined,
+        title: 'Terms & Privacy',
+        onTap: () => _showTermsDialog(context),
+      ),
+      if (_userRoles.isAdmin)
+        _SettingsItem(
+          icon: Icons.admin_panel_settings_outlined,
+          title: 'Admin Console & Database Control',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  AdminConsoleScreen(onRoleChanged: widget.onRoleChanged),
+            ),
+          ),
+        ),
+    ];
+
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const SizedBox(height: 8),
-          Center(
-            child: Column(
-              children: [
-                CircleAvatar(
-                  radius: 40,
-                  backgroundColor: colorScheme.primaryContainer,
-                  child: Icon(
-                    widget.role == UserRole.doctor
-                        ? Icons.local_hospital_outlined
-                        : widget.role == UserRole.operator
-                            ? Icons.business_outlined
-                            : Icons.person,
-                    size: 40,
-                    color: colorScheme.onPrimaryContainer,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+          children: [
+            const SizedBox(height: 8),
+            // Top Hero
+            Center(
+              child: Column(
+                children: [
+                  CircleAvatar(
+                    radius: 48,
+                    backgroundColor: AppColors.primaryTint,
+                    child: Icon(
+                      widget.role == UserRole.doctor
+                          ? Icons.local_hospital_outlined
+                          : widget.role == UserRole.operator
+                              ? Icons.business_outlined
+                              : Icons.person,
+                      size: 48,
+                      color: AppColors.primary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _getRoleDisplayName(),
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 4),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                  child: Text(
-                    _getRoleSubtitle(),
-                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                  const SizedBox(height: 12),
+                  Text(
+                    _getRoleDisplayName(),
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 18,
+                      color: AppColors.textPrimary,
+                    ),
                     textAlign: TextAlign.center,
                   ),
-                ),
-                if (widget.role == UserRole.doctor) ...[
-                  const SizedBox(height: 8),
-                  if (_userProfile?['isBmdcVerified'] == true ||
-                      _userProfile?['doctorApplication']?['hasProvidedVerificationDocs'] == true ||
-                      (_userProfile?['bmdcRegNumber']?.toString().isNotEmpty == true) ||
-                      (_userProfile?['nid']?.toString().isNotEmpty == true)) ...[
+                  const SizedBox(height: 4),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: Text(
+                      emailOrPhone,
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  if (widget.role == UserRole.doctor) ...[
+                    const SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.green.shade50,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.green.shade400),
+                        color: AppColors.success.withValues(alpha: 0.08),
+                        borderRadius:
+                            BorderRadius.circular(AppConstants.radiusChip),
+                        border: Border.all(color: AppColors.success, width: 1),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.verified, size: 16, color: Colors.green.shade700),
+                          const Icon(Icons.check_circle,
+                              size: 16, color: AppColors.success),
                           const SizedBox(width: 6),
                           Text(
                             'BMDC & NID Verified Specialist',
-                            style: TextStyle(
-                              color: Colors.green.shade800,
-                              fontWeight: FontWeight.bold,
+                            style: GoogleFonts.poppins(
+                              color: AppColors.success,
+                              fontWeight: FontWeight.w600,
                               fontSize: 12,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  ] else ...[
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.add_moderator_outlined, size: 16),
-                      label: const Text('Add NID & BMDC to Verify Profile', style: TextStyle(fontSize: 12)),
-                      onPressed: _showDoctorApplicationDialog,
-                    ),
                   ],
-                ],
-                const SizedBox(height: 16),
-
-                // Multi-role Switcher — Only shows if the user actually has more than one capability
-                if (_isSignedIn && _userRoles.hasMultipleRoles) ...[
-                  RoleSwitcher(
-                    roles: _userRoles,
-                    current: widget.role,
-                    onSwitch: (newRole) {
-                      widget.onRoleChanged?.call(newRole);
-                      setState(() {});
-                    },
-                  ),
                   const SizedBox(height: 16),
-                ],
 
-                // If signed out: Auth Entry Buttons (Log In, Sign Up, Guest, and Dev Quick Login)
-                if (!_isSignedIn) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: AuthEntryButtons(
-                      onLogIn: () => _showAuthModal(context, isSignUp: false),
-                      onSignUp: () => _showAuthModal(context, isSignUp: true),
-                      onGoogleSignIn: () async {
-                        try {
-                          final cred = await AuthService.signInWithGoogle();
-                          if (cred != null) {
-                            await _loadUserRoles();
-                            if (mounted) setState(() {});
+                  // Multi-role Switcher
+                  if (_isSignedIn && _userRoles.hasMultipleRoles) ...[
+                    RoleSwitcher(
+                      roles: _userRoles,
+                      current: widget.role,
+                      onSwitch: (newRole) {
+                        widget.onRoleChanged?.call(newRole);
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // If signed out: Auth Entry Buttons
+                  if (!_isSignedIn) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: AuthEntryButtons(
+                        onLogIn: () => _showAuthModal(context, isSignUp: false),
+                        onSignUp: () => _showAuthModal(context, isSignUp: true),
+                        onGoogleSignIn: () async {
+                          try {
+                            final cred = await AuthService.signInWithGoogle();
+                            if (cred != null) {
+                              await _loadUserRoles();
+                              if (mounted) setState(() {});
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      'Google Sign-in failed: ${e.toString().replaceAll("Exception:", "").trim()}'),
+                                ),
+                              );
+                            }
                           }
-                        } catch (e) {
+                        },
+                        onContinueAsGuest: () async {
+                          await AuthService.setGuestMode(true);
+                          widget.onRoleChanged?.call(UserRole.patient);
+                          widget.onTabSwitch?.call(0);
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Google Sign-in failed: ${e.toString().replaceAll("Exception:", "").trim()}'),
+                              const SnackBar(
+                                content: Text(
+                                    'Continuing as Guest Patient. You can search doctors and check symptoms freely.'),
+                                behavior: SnackBarBehavior.floating,
                               ),
                             );
                           }
-                        }
-                      },
-                      onContinueAsGuest: () async {
-                        await AuthService.setGuestMode(true);
-                        widget.onRoleChanged?.call(UserRole.patient);
-                        widget.onTabSwitch?.call(0);
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Continuing as Guest Patient. You can search doctors and check symptoms freely.'),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-              ],
-            ),
-          ),
-
-          if (widget.role == UserRole.patient) ...[
-            // Medical records & reports upload card
-            Card(
-              color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.2)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.folder_shared_outlined, color: colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Medical History & Reports',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: colorScheme.onSurface,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Keep your lab reports, prescriptions, and test history up to date so you can easily send them to your doctor via chat during active appointments.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: colorScheme.onSurfaceVariant,
-                        height: 1.4,
+                        },
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(_isSignedIn
-                                ? 'Report upload ready — select file from device storage.'
-                                : 'Sign in to sync uploaded medical reports.'),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.upload_file_outlined, size: 18),
-                      label: const Text('Upload Medical Report'),
-                    ),
+                    const SizedBox(height: 16),
                   ],
-                ),
+                ],
               ),
             ),
-            if (_isSignedIn && !_userRoles.isDoctor) ...[
-              if (_userProfile?['doctorApplication']?['status'] == 'pending') ...[
+
+            // Role-specific section
+            if (widget.role == UserRole.patient) ...[
+              const HealthDocumentsWidget(),
+              const SizedBox(height: 16),
+              if (_isSignedIn && !_userRoles.isDoctor) ...[
                 Card(
-                  color: Colors.amber.shade50,
+                  color: AppColors.surface,
+                  elevation: 0,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(color: Colors.amber.shade300),
+                    borderRadius:
+                        BorderRadius.circular(AppConstants.radiusCard),
+                    side: const BorderSide(
+                        color: AppColors.borderSubtle, width: 1),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    padding: const EdgeInsets.all(AppConstants.screenPadding),
+                    child: Row(
                       children: [
-                        Row(
-                          children: [
-                            Icon(Icons.hourglass_top, color: Colors.amber.shade900),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Doctor Application Pending',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.amber.shade900,
-                              ),
-                            ),
-                          ],
+                        const CircleAvatar(
+                          radius: 20,
+                          backgroundColor: AppColors.primaryTint,
+                          child: Icon(Icons.medical_services_outlined,
+                              color: AppColors.primary, size: 20),
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Your application to become a doctor specialist is recorded in the database. An admin will review and allocate your Doctor role.',
-                          style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Are you a Doctor?',
+                                  style: AppTheme.cardTitle),
+                              const SizedBox(height: 2),
+                              Text(
+                                  'Apply for BMDC verification & directory listing.',
+                                  style: AppTheme.caption),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                  AppConstants.radiusButton),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          onPressed: _showDoctorApplicationDialog,
+                          child: const Text('Apply'),
                         ),
                       ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ] else ...[
-                Card(
-                  color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.2)),
-                  ),
-                  child: ListTile(
-                    leading: Icon(Icons.medical_services_outlined, color: colorScheme.primary),
-                    title: const Text('Are you a Doctor?'),
-                    subtitle: const Text('Apply for doctor verification. Role is allocated via database approval.'),
-                    trailing: FilledButton.tonal(
-                      onPressed: _showDoctorApplicationDialog,
-                      child: const Text('Apply'),
                     ),
                   ),
                 ),
                 const SizedBox(height: 16),
               ],
+            ] else if (widget.role == UserRole.doctor) ...[
+              Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(AppConstants.screenPadding),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Practice Overview', style: AppTheme.sectionTitle),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Chambers', style: AppTheme.caption),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${_userRoles.chamberCount > 0 ? _userRoles.chamberCount : (_userProfile?['chamberCount'] ?? 1)}',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("Today's Patients",
+                                      style: AppTheme.caption),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '0',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                  AppConstants.radiusButton),
+                            ),
+                          ),
+                          onPressed: () {
+                            widget.onTabSwitch?.call(2);
+                          },
+                          child: const Text('Manage Practice'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ] else if (widget.role == UserRole.operator) ...[
+              Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(AppConstants.screenPadding),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Desk Status', style: AppTheme.sectionTitle),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Assigned Chamber',
+                                      style: AppTheme.caption),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _userProfile?['operatorChamberName'] ??
+                                        'Central Clinic Desk',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("Today's Queue",
+                                      style: AppTheme.caption),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '3 Waiting',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                  AppConstants.radiusButton),
+                            ),
+                          ),
+                          onPressed: () {
+                            widget.onTabSwitch?.call(2);
+                          },
+                          child: const Text('Open Desk'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
             ],
-            _ProfileTile(
-              icon: Icons.edit_outlined,
-              label: 'Edit Profile Details',
-              colorScheme: colorScheme,
-              isSignedIn: _isSignedIn,
-              onCustomTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => SettingsScreen(role: widget.role),
+
+            // Settings List Card
+            _buildSettingsGroup(settingsItems),
+
+            // Log Out Button
+            if (_isSignedIn) ...[
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                    side: const BorderSide(color: AppColors.error, width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(AppConstants.radiusButton),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                );
-              },
-            ),
-            _ProfileTile(
-              icon: Icons.favorite_outline,
-              label: 'Saved Doctors',
-              colorScheme: colorScheme,
-              isSignedIn: _isSignedIn,
-            ),
-            _ProfileTile(
-              icon: Icons.rate_review_outlined,
-              label: 'My Reviews',
-              colorScheme: colorScheme,
-              isSignedIn: _isSignedIn,
-            ),
-            _ProfileTile(
-              icon: Icons.settings_outlined,
-              label: 'Settings',
-              colorScheme: colorScheme,
-              isSignedIn: _isSignedIn,
-              onCustomTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => SettingsScreen(role: widget.role),
+                  icon: const Icon(Icons.logout, size: 18),
+                  label: Text(
+                    'Log Out',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.error,
+                    ),
                   ),
-                );
-              },
-            ),
-          ] else if (widget.role == UserRole.doctor) ...[
-            // Doctor Chamber Profile Box
-            Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.apartment, color: colorScheme.primary),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Chamber Profile & Schedule',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  onPressed: () async {
+                    await AuthService.signOut();
+                    widget.onRoleChanged?.call(UserRole.patient);
+                    if (context.mounted) {
+                      setState(() {
+                        _userRoles = const UserRoles();
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content:
+                              Text('Logged out. You are now browsing as guest.'),
+                          behavior: SnackBarBehavior.floating,
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Manage your chamber locations, visiting hours, and consultation fees from the Manage tab.',
-                      style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
-                    ),
-                  ],
+                      );
+                    }
+                  },
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            _ProfileTile(
-              icon: Icons.verified_user_outlined,
-              label: (_userProfile?['isBmdcVerified'] == true ||
-                      _userProfile?['doctorApplication']?['hasProvidedVerificationDocs'] == true ||
-                      (_userProfile?['bmdcRegNumber']?.toString().isNotEmpty == true) ||
-                      (_userProfile?['nid']?.toString().isNotEmpty == true))
-                  ? 'BMDC & NID Verification Status: Verified Specialist'
-                  : 'BMDC & NID Verification Status: Pending / Unverified',
-              colorScheme: colorScheme,
-              isSignedIn: true,
-              onCustomTap: () {
-                _showDoctorApplicationDialog();
-              },
-            ),
-            _ProfileTile(
-              icon: Icons.settings_outlined,
-              label: 'Practice Settings',
-              colorScheme: colorScheme,
-              isSignedIn: true,
-              onCustomTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const SettingsScreen(role: UserRole.doctor),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsGroup(List<_SettingsItem> items) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+        boxShadow: AppConstants.softShadow,
+      ),
+      child: Column(
+        children: items.asMap().entries.map((entry) {
+          final index = entry.key;
+          final item = entry.value;
+          final isLast = index == items.length - 1;
+
+          return Column(
+            children: [
+              ListTile(
+                leading: Icon(item.icon, color: AppColors.primary, size: 22),
+                title: Text(
+                  item.title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textPrimary,
                   ),
-                );
-              },
-            ),
-          ] else if (widget.role == UserRole.operator) ...[
-            // Operator Chamber Desk Box
-            Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.meeting_room_outlined, color: colorScheme.primary),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Chamber Desk Management',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Manage patient check-ins, serial tickets, and doctor chamber queues from the Desk tab.',
-                      style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
-                    ),
-                  ],
                 ),
+                trailing: const Icon(Icons.chevron_right,
+                    size: 20, color: AppColors.textSecondary),
+                onTap: item.onTap,
               ),
-            ),
-            const SizedBox(height: 16),
-            _ProfileTile(
-              icon: Icons.settings_outlined,
-              label: 'Desk Settings',
-              colorScheme: colorScheme,
-              isSignedIn: true,
-              onCustomTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const SettingsScreen(role: UserRole.operator),
-                  ),
-                );
-              },
-            ),
-          ],
+              if (!isLast)
+                const Divider(
+                  height: 1,
+                  indent: 56,
+                  endIndent: 16,
+                  color: AppColors.primaryTint,
+                ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
 
-          if (_isSignedIn) ...[
-            const SizedBox(height: 12),
-            _ProfileTile(
-              icon: Icons.edit_outlined,
-              label: 'Edit Profile Details',
-              colorScheme: colorScheme,
-              isSignedIn: true,
-              onCustomTap: _showEditProfileDialog,
-            ),
-            const SizedBox(height: 6),
-            _ProfileTile(
-              icon: Icons.lock_reset_outlined,
-              label: 'Change Password',
-              colorScheme: colorScheme,
-              isSignedIn: true,
-              onCustomTap: _showChangePasswordDialog,
-            ),
-          ],
+  void _pickLanguageDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Choose Language'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () {
+              AppLanguage.setLanguage('English');
+              TtsService.instance.setLocale('en');
+              Navigator.pop(ctx);
+              setState(() {});
+            },
+            child: const Text('English (US)'),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              AppLanguage.setLanguage('Bengali');
+              TtsService.instance.setLocale('bn');
+              Navigator.pop(ctx);
+              setState(() {});
+            },
+            child: const Text('বাংলা (Bengali)'),
+          ),
+        ],
+      ),
+    );
+  }
 
-          if (_userRoles.isAdmin ||
-              AuthService.currentUser?.uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' ||
-              AuthService.currentUser?.email?.toLowerCase().trim() == 'mashrafeelahi8@gmail.com') ...[
-            const SizedBox(height: 12),
-            _ProfileTile(
-              icon: Icons.admin_panel_settings_outlined,
-              label: 'Admin Console & Database Control',
-              colorScheme: colorScheme,
-              isSignedIn: true,
-              onCustomTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AdminConsoleScreen(onRoleChanged: widget.onRoleChanged),
-                  ),
-                );
-              },
-            ),
-          ],
+  void _showHelpDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Help & FAQ'),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'How do I find a doctor?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'Use the search bar on Home to search by name or enter symptoms to automatically find the right specialist.',
+                style: TextStyle(fontSize: 13),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'What is Read Aloud mode?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'When enabled in Accessibility settings, tapping an item reads it aloud, and double-tapping opens it.',
+                style: TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
 
-          if (_isSignedIn) ...[
-            const SizedBox(height: 12),
-            _ProfileTile(
-              icon: Icons.logout,
-              label: 'Log Out',
-              colorScheme: colorScheme,
-              isDestructive: true,
-              isSignedIn: _isSignedIn,
-              onCustomTap: () async {
-                await AuthService.signOut();
-                widget.onRoleChanged?.call(UserRole.patient);
-                if (context.mounted) {
-                  setState(() {
-                    _userRoles = const UserRoles();
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Logged out. You are now browsing as guest.'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                }
-              },
-            ),
-          ],
+  void _showTermsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Terms & Privacy'),
+        content: const Text(
+          'DoctorDesk provides verified doctor discovery, chamber queue management, and health records synchronization.\n\nMedical recommendations are algorithmic guides and do not replace professional medical diagnosis.',
+          style: TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
         ],
       ),
     );
   }
 }
 
-class _ProfileTile extends StatelessWidget {
+class _SettingsItem {
   final IconData icon;
-  final String label;
-  final ColorScheme colorScheme;
-  final bool isDestructive;
-  final bool isSignedIn;
-  final VoidCallback? onCustomTap;
+  final String title;
+  final VoidCallback onTap;
 
-  const _ProfileTile({
+  const _SettingsItem({
     required this.icon,
-    required this.label,
-    required this.colorScheme,
-    this.isDestructive = false,
-    this.isSignedIn = false,
-    this.onCustomTap,
+    required this.title,
+    required this.onTap,
   });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = isDestructive ? Colors.redAccent : null;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 6),
-      child: ListTile(
-        leading: Icon(icon, color: color),
-        title: Text(label, style: TextStyle(color: color, fontSize: 15)),
-        trailing: isDestructive
-            ? null
-            : Icon(Icons.chevron_right, color: Colors.grey[400]),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        onTap: onCustomTap ??
-            () {
-              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    isDestructive
-                        ? (isSignedIn ? 'Logging out...' : 'You are currently browsing as a guest.')
-                        : (isSignedIn ? '$label settings open.' : 'Sign in to access $label.'),
-                  ),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            },
-      ),
-    );
-  }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/api_service.dart';
+import '../services/dhaka_locations.dart';
 
 /// Shows a first-time check-in dialog prompting the user for:
 /// 1. Location / Area
@@ -12,7 +13,8 @@ Future<void> showFirstTimeCheckinDialog(
   VoidCallback? onComplete,
 }) async {
   final prefs = await SharedPreferences.getInstance();
-  final alreadyDone = prefs.getBool('has_completed_first_time_checkin') ?? false;
+  final alreadyDone =
+      prefs.getBool('has_completed_first_time_checkin') ?? false;
   if (alreadyDone && !force) {
     onComplete?.call();
     return;
@@ -35,7 +37,8 @@ class _FirstTimeCheckinContent extends StatefulWidget {
   const _FirstTimeCheckinContent({this.onComplete});
 
   @override
-  State<_FirstTimeCheckinContent> createState() => _FirstTimeCheckinContentState();
+  State<_FirstTimeCheckinContent> createState() =>
+      _FirstTimeCheckinContentState();
 }
 
 class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
@@ -46,15 +49,13 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
   bool _detectingGps = false;
   String? _gpsMessage;
 
-  final List<Map<String, dynamic>> _areas = [
-    {'name': 'Dhanmondi', 'lat': 23.7465, 'lng': 90.3760},
-    {'name': 'Gulshan', 'lat': 23.7925, 'lng': 90.4078},
-    {'name': 'Banani', 'lat': 23.7937, 'lng': 90.4066},
-    {'name': 'Uttara', 'lat': 23.8759, 'lng': 90.3795},
-    {'name': 'Mirpur', 'lat': 23.8223, 'lng': 90.3654},
-    {'name': 'Kalyanpur', 'lat': 23.7788, 'lng': 90.3582},
-    {'name': 'Mohakhali', 'lat': 23.7776, 'lng': 90.4054},
-  ];
+  final List<Map<String, dynamic>> _areas = DhakaLocations.all
+      .map((location) => {
+            'name': location.name,
+            'lat': location.lat,
+            'lng': location.lng,
+          })
+      .toList();
 
   final List<Map<String, String>> _moods = [
     {'key': 'great', 'emoji': '🌟', 'label': 'Great'},
@@ -101,7 +102,8 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
       }
 
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.medium),
       );
 
       setState(() {
@@ -186,7 +188,8 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
                       const SizedBox(width: 10),
                       const Text(
                         'Welcome Check-in',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 18),
                       ),
                     ],
                   ),
@@ -199,7 +202,8 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
               const SizedBox(height: 6),
               Text(
                 'Personalize your care experience by picking your area and checking in on your mood today.',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13, height: 1.3),
+                style: TextStyle(
+                    color: Colors.grey[600], fontSize: 13, height: 1.3),
               ),
               const SizedBox(height: 16),
 
@@ -239,7 +243,9 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.my_location, size: 16),
-                label: Text(_detectingGps ? 'Detecting GPS...' : 'Use Current GPS Location'),
+                label: Text(_detectingGps
+                    ? 'Detecting GPS...'
+                    : 'Use Current GPS Location'),
                 onPressed: _detectingGps ? null : _detectGpsLocation,
               ),
               if (_gpsMessage != null) ...[
@@ -248,7 +254,9 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
                   _gpsMessage!,
                   style: TextStyle(
                     fontSize: 11,
-                    color: _gpsMessage!.contains('successfully') ? Colors.green : Colors.red,
+                    color: _gpsMessage!.contains('successfully')
+                        ? Colors.green
+                        : Colors.red,
                   ),
                 ),
               ],
@@ -267,27 +275,36 @@ class _FirstTimeCheckinContentState extends State<_FirstTimeCheckinContent> {
                   return GestureDetector(
                     onTap: () => setState(() => _selectedMood = m['key']),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? colorScheme.primaryContainer.withValues(alpha: 0.6)
+                            ? colorScheme.primaryContainer
+                                .withValues(alpha: 0.6)
                             : Colors.grey.shade100,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: isSelected ? colorScheme.primary : Colors.transparent,
+                          color: isSelected
+                              ? colorScheme.primary
+                              : Colors.transparent,
                           width: 1.5,
                         ),
                       ),
                       child: Column(
                         children: [
-                          Text(m['emoji']!, style: const TextStyle(fontSize: 24)),
+                          Text(m['emoji']!,
+                              style: const TextStyle(fontSize: 24)),
                           const SizedBox(height: 4),
                           Text(
                             m['label']!,
                             style: TextStyle(
                               fontSize: 11,
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                              color: isSelected ? colorScheme.primary : Colors.black87,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? colorScheme.primary
+                                  : Colors.black87,
                             ),
                           ),
                         ],

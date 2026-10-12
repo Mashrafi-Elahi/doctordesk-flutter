@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/app_language.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'doctors_screen.dart';
 
@@ -26,16 +27,16 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Appointments'),
+          title: Text(tr('Appointments')),
           actions: const [
             ProfileAvatarButton(),
           ],
           bottom: TabBar(
             isScrollable: true,
             tabAlignment: TabAlignment.start,
-            tabs: const [
-              Tab(text: 'Upcoming'),
-              Tab(text: 'Past Visits'),
+            tabs: [
+              Tab(text: tr('Upcoming')),
+              Tab(text: tr('Past Visits')),
             ],
             labelColor: theme.colorScheme.primary,
             unselectedLabelColor: Colors.grey[600],
@@ -53,7 +54,8 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                   _EmptyState(
                     icon: Icons.history_outlined,
                     title: 'No past appointments yet',
-                    subtitle: 'Your visit history will show up here after consultations.',
+                    subtitle:
+                        'Your visit history will show up here after consultations.',
                   ),
                 ],
               )
@@ -65,12 +67,14 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                 builder: (context, snapshot) {
                   final docs = snapshot.data?.docs ?? [];
                   final upcoming = docs.where((d) {
-                    final status = d.data()['status']?.toString().toLowerCase() ?? '';
+                    final status =
+                        d.data()['status']?.toString().toLowerCase() ?? '';
                     return status != 'completed' && status != 'cancelled';
                   }).toList();
 
                   final past = docs.where((d) {
-                    final status = d.data()['status']?.toString().toLowerCase() ?? '';
+                    final status =
+                        d.data()['status']?.toString().toLowerCase() ?? '';
                     return status == 'completed';
                   }).toList();
 
@@ -80,62 +84,86 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                           ? const _EmptyState(
                               icon: Icons.calendar_today_outlined,
                               title: 'No upcoming appointments',
-                              subtitle: 'Book a doctor from the Home or Doctors directory to see it here.',
+                              subtitle:
+                                  'Book a doctor from the Home or Doctors directory to see it here.',
                             )
                           : ListView.builder(
-                              padding: const EdgeInsets.all(16),
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 16, 16, 88),
                               itemCount: upcoming.length,
                               itemBuilder: (ctx, i) {
                                 final data = upcoming[i].data();
-                                final docName = data['doctorName'] ?? data['doctorId'] ?? 'Specialist Doctor';
-                                final chamber = data['chamberId'] ?? 'Main Chamber';
-                                final patient = data['patientName'] ?? 'Patient';
+                                final docName = data['doctorName'] ??
+                                    data['doctorId'] ??
+                                    'Specialist Doctor';
+                                final chamber =
+                                    data['chamberId'] ?? 'Main Chamber';
+                                final patient =
+                                    data['patientName'] ?? 'Patient';
                                 final status = data['status'] ?? 'waiting';
                                 final pos = data['queuePosition'];
                                 final ts = data['scheduledTime'];
                                 String dateStr = 'Scheduled';
                                 if (ts is Timestamp) {
                                   final dt = ts.toDate();
-                                  dateStr = '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                  dateStr =
+                                      '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
                                 }
 
                                 return Card(
                                   margin: const EdgeInsets.only(bottom: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16)),
                                   elevation: 1,
                                   child: Padding(
                                     padding: const EdgeInsets.all(16),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
                                             CircleAvatar(
-                                              backgroundColor: theme.colorScheme.primaryContainer,
-                                              child: Icon(Icons.person, color: theme.colorScheme.primary),
+                                              backgroundColor: theme
+                                                  .colorScheme.primaryContainer,
+                                              child: Icon(Icons.person,
+                                                  color: theme
+                                                      .colorScheme.primary),
                                             ),
                                             const SizedBox(width: 12),
                                             Expanded(
                                               child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
                                                 children: [
                                                   Text(
                                                     docName,
-                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                                    style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 16),
                                                   ),
                                                   Text(
                                                     'Chamber: $chamber',
-                                                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                                    style: TextStyle(
+                                                        color: Colors.grey[600],
+                                                        fontSize: 13),
                                                   ),
                                                 ],
                                               ),
                                             ),
                                             Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 4),
                                               decoration: BoxDecoration(
                                                 color: Colors.blue.shade50,
-                                                borderRadius: BorderRadius.circular(12),
-                                                border: Border.all(color: Colors.blue.shade200),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                border: Border.all(
+                                                    color:
+                                                        Colors.blue.shade200),
                                               ),
                                               child: Text(
                                                 status.toUpperCase(),
@@ -150,13 +178,18 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                         ),
                                         const Divider(height: 24),
                                         Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
                                           children: [
                                             Row(
                                               children: [
-                                                const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
+                                                const Icon(Icons.calendar_today,
+                                                    size: 14,
+                                                    color: Colors.grey),
                                                 const SizedBox(width: 6),
-                                                Text(dateStr, style: const TextStyle(fontSize: 13)),
+                                                Text(dateStr,
+                                                    style: const TextStyle(
+                                                        fontSize: 13)),
                                               ],
                                             ),
                                             if (pos != null)
@@ -164,7 +197,8 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                 'Queue #$pos',
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.bold,
-                                                  color: theme.colorScheme.primary,
+                                                  color:
+                                                      theme.colorScheme.primary,
                                                   fontSize: 13,
                                                 ),
                                               ),
@@ -173,7 +207,9 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                         const SizedBox(height: 6),
                                         Text(
                                           'Patient: $patient',
-                                          style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                                          style: TextStyle(
+                                              fontSize: 12.5,
+                                              color: Colors.grey.shade700),
                                         ),
                                       ],
                                     ),
@@ -185,10 +221,12 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                           ? const _EmptyState(
                               icon: Icons.history_outlined,
                               title: 'No past appointments yet',
-                              subtitle: 'Your visit history will show up here after consultations.',
+                              subtitle:
+                                  'Your visit history will show up here after consultations.',
                             )
                           : ListView.builder(
-                              padding: const EdgeInsets.all(16),
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 16, 16, 88),
                               itemCount: past.length,
                               itemBuilder: (ctx, i) {
                                 final data = past[i].data();
@@ -196,9 +234,11 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                 return Card(
                                   margin: const EdgeInsets.only(bottom: 12),
                                   child: ListTile(
-                                    leading: const Icon(Icons.check_circle, color: Colors.green),
+                                    leading: const Icon(Icons.check_circle,
+                                        color: Colors.green),
                                     title: Text(docName),
-                                    subtitle: Text('Chamber: ${data['chamberId'] ?? 'General'}'),
+                                    subtitle: Text(
+                                        'Chamber: ${data['chamberId'] ?? 'General'}'),
                                   ),
                                 );
                               },
@@ -290,14 +330,25 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
 
   void _changeMonth(int offset) {
     setState(() {
-      _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + offset, 1);
+      _currentMonth =
+          DateTime(_currentMonth.year, _currentMonth.month + offset, 1);
     });
   }
 
   String _getMonthName(int month) {
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December'
     ];
     return months[month - 1];
   }
@@ -311,8 +362,10 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
     final colorScheme = Theme.of(context).colorScheme;
     final now = DateTime.now();
 
-    final firstDayOfMonth = DateTime(_currentMonth.year, _currentMonth.month, 1);
-    final daysInMonth = DateTime(_currentMonth.year, _currentMonth.month + 1, 0).day;
+    final firstDayOfMonth =
+        DateTime(_currentMonth.year, _currentMonth.month, 1);
+    final daysInMonth =
+        DateTime(_currentMonth.year, _currentMonth.month + 1, 0).day;
     final leadingEmptyDays = (firstDayOfMonth.weekday - 1);
     final totalCells = leadingEmptyDays + daysInMonth;
 
@@ -348,7 +401,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
             // Month Header with Prev / Next controls
             Card(
               elevation: 0.8,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
@@ -393,7 +447,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       itemCount: totalCells,
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 7,
                         childAspectRatio: 1.0,
                         crossAxisSpacing: 4,
@@ -404,7 +459,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                           return const SizedBox.shrink();
                         }
                         final dayNumber = index - leadingEmptyDays + 1;
-                        final cellDate = DateTime(_currentMonth.year, _currentMonth.month, dayNumber);
+                        final cellDate = DateTime(
+                            _currentMonth.year, _currentMonth.month, dayNumber);
                         final key = _dateKey(cellDate);
                         final feeling = _dayToFeeling[key];
 
@@ -477,7 +533,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                         if (isSelected) {
                           borderColor = colorScheme.primary;
                         } else if (isToday && borderColor == null) {
-                          borderColor = colorScheme.primary.withValues(alpha: 0.6);
+                          borderColor =
+                              colorScheme.primary.withValues(alpha: 0.6);
                         }
 
                         return InkWell(
@@ -505,9 +562,10 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                   '$dayNumber',
                                   style: TextStyle(
                                     fontSize: 13,
-                                    fontWeight: isToday || isSelected || feeling != null
-                                        ? FontWeight.bold
-                                        : FontWeight.normal,
+                                    fontWeight:
+                                        isToday || isSelected || feeling != null
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
                                     color: textColor,
                                   ),
                                 ),
@@ -544,7 +602,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
             // Selected Day Card
             Card(
               elevation: 0.8,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
@@ -555,15 +614,18 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                       children: [
                         Text(
                           '${_getMonthName(_selectedDay.month)} ${_selectedDay.day}, ${_selectedDay.year}',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16),
                         ),
                         if (_selectedDay.year == now.year &&
                             _selectedDay.month == now.month &&
                             _selectedDay.day == now.day)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
                             decoration: BoxDecoration(
-                              color: colorScheme.primaryContainer.withValues(alpha: 0.4),
+                              color: colorScheme.primaryContainer
+                                  .withValues(alpha: 0.4),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
@@ -578,10 +640,12 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    if (selectedFeeling == 'good' || selectedFeeling == 'great') ...[
+                    if (selectedFeeling == 'good' ||
+                        selectedFeeling == 'great') ...[
                       const Row(
                         children: [
-                          Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 28),
+                          Icon(Icons.check_circle,
+                              color: Color(0xFF2E7D32), size: 28),
                           SizedBox(width: 10),
                           Expanded(
                             child: Column(
@@ -598,7 +662,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                 SizedBox(height: 2),
                                 Text(
                                   'You logged feeling healthy, energetic, and well on this day.',
-                                  style: TextStyle(fontSize: 13, color: Colors.grey),
+                                  style: TextStyle(
+                                      fontSize: 13, color: Colors.grey),
                                 ),
                               ],
                             ),
@@ -614,7 +679,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                         ),
                         child: const Row(
                           children: [
-                            Icon(Icons.sentiment_neutral, color: Color(0xFFF57F17), size: 26),
+                            Icon(Icons.sentiment_neutral,
+                                color: Color(0xFFF57F17), size: 26),
                             SizedBox(width: 10),
                             Expanded(
                               child: Column(
@@ -631,7 +697,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                   SizedBox(height: 2),
                                   Text(
                                     'You logged feeling steady and balanced today.',
-                                    style: TextStyle(fontSize: 12, color: Colors.black87),
+                                    style: TextStyle(
+                                        fontSize: 12, color: Colors.black87),
                                   ),
                                 ],
                               ),
@@ -651,7 +718,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                           children: [
                             const Row(
                               children: [
-                                Icon(Icons.psychology_outlined, color: Color(0xFF5E35B1), size: 24),
+                                Icon(Icons.psychology_outlined,
+                                    color: Color(0xFF5E35B1), size: 24),
                                 SizedBox(width: 8),
                                 Text(
                                   'Low Mood / Overwhelmed 🟣',
@@ -666,7 +734,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                             const SizedBox(height: 6),
                             const Text(
                               'Mental health matters just as much as physical health. Speaking with a psychiatrist or specialist can help.',
-                              style: TextStyle(fontSize: 13, color: Colors.black87),
+                              style: TextStyle(
+                                  fontSize: 13, color: Colors.black87),
                             ),
                             const SizedBox(height: 12),
                             SizedBox(
@@ -676,7 +745,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) => const DoctorsScreen(initialQuery: 'Psychiatrist'),
+                                      builder: (_) => const DoctorsScreen(
+                                          initialQuery: 'Psychiatrist'),
                                     ),
                                   );
                                 },
@@ -705,7 +775,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                           children: [
                             const Row(
                               children: [
-                                Icon(Icons.healing, color: Color(0xFFC62828), size: 24),
+                                Icon(Icons.healing,
+                                    color: Color(0xFFC62828), size: 24),
                                 SizedBox(width: 8),
                                 Text(
                                   'Felt Unwell / Needed Care 🔴',
@@ -720,7 +791,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                             const SizedBox(height: 6),
                             const Text(
                               'You recorded feeling unwell. Would you like to consult a General Physician (GD) or Medicine doctor?',
-                              style: TextStyle(fontSize: 13, color: Colors.black87),
+                              style: TextStyle(
+                                  fontSize: 13, color: Colors.black87),
                             ),
                             const SizedBox(height: 12),
                             SizedBox(
@@ -730,11 +802,14 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) => const DoctorsScreen(initialQuery: 'Medicine'),
+                                      builder: (_) => const DoctorsScreen(
+                                          initialQuery: 'Medicine'),
                                     ),
                                   );
                                 },
-                                icon: const Icon(Icons.medical_services_outlined, size: 18),
+                                icon: const Icon(
+                                    Icons.medical_services_outlined,
+                                    size: 18),
                                 label: const Text('See General Doctor (GD)'),
                                 style: FilledButton.styleFrom(
                                   backgroundColor: const Color(0xFFC62828),
@@ -763,7 +838,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
             // Monthly Health Overview Card
             Card(
               elevation: 0.8,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
@@ -771,7 +847,8 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                   children: [
                     Text(
                       '${_getMonthName(_currentMonth.month)} Health Summary',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                     const SizedBox(height: 12),
                     Row(

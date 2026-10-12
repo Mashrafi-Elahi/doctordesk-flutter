@@ -76,7 +76,8 @@ class DataService {
     );
   }
 
-  static Future<List<Map<String, dynamic>>> fetchGeocodeSuggestions(String query) {
+  static Future<List<Map<String, dynamic>>> fetchGeocodeSuggestions(
+      String query) {
     if (isFirestore) {
       return FirestoreService.fetchGeocodeSuggestions(query);
     }
@@ -158,9 +159,11 @@ class DataService {
     Map<String, dynamic>? doctorData,
   }) {
     if (isFirestore) {
-      return FirestoreService.checkCanReview(doctorId, patientUid, doctorData: doctorData);
+      return FirestoreService.checkCanReview(doctorId, patientUid,
+          doctorData: doctorData);
     }
-    return ApiService.checkCanReview(doctorId, patientUid, doctorData: doctorData);
+    return ApiService.checkCanReview(doctorId, patientUid,
+        doctorData: doctorData);
   }
 
   static Future<Map<String, dynamic>> claimDoctor(
@@ -257,6 +260,13 @@ class DataService {
     );
   }
 
+  static Future<String> approveDoctorApplication({required String uid}) {
+    if (!isFirestore) {
+      throw UnsupportedError('Doctor approval requires the Firestore backend.');
+    }
+    return FirestoreService.approveDoctorApplication(uid: uid);
+  }
+
   static Future<void> applyForDoctorRole({
     required String uid,
     required String phone,
@@ -287,7 +297,8 @@ class DataService {
 
   // --- REAL-TIME FEED, VIDEOS & COMMUNITY Q&A ---
 
-  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream({String? typeFilter}) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream(
+      {String? typeFilter}) {
     if (isFirestore) {
       return FirestoreService.feedPostsStream(typeFilter: typeFilter);
     }
@@ -369,7 +380,8 @@ class DataService {
     );
   }
 
-  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(String postId) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(
+      String postId) {
     if (isFirestore) {
       return FirestoreService.postCommentsStream(postId);
     }
@@ -472,7 +484,8 @@ class DataService {
     );
   }
 
-  static Future<void> updateAppointment(String id, Map<String, dynamic> updates) {
+  static Future<void> updateAppointment(
+      String id, Map<String, dynamic> updates) {
     if (isFirestore) {
       return FirestoreService.updateAppointment(id, updates);
     }

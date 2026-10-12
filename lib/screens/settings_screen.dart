@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_role.dart';
 import '../services/auth_service.dart';
+import '../services/tts_service.dart';
+import '../theme/app_constants.dart';
+import '../widgets/auth_modal.dart';
+import '../services/app_language.dart';
+import '../widgets/read_aloud_setting_tile.dart';
 
 class SettingsScreen extends StatefulWidget {
   final UserRole role;
@@ -38,7 +44,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _notificationsEnabled = prefs.getBool('setting_notifications') ?? true;
         _dailyMoodReminder = prefs.getBool('setting_mood_reminder') ?? true;
         _queueSoundAlerts = prefs.getBool('setting_queue_sounds') ?? true;
-        _autoConfirmAppointments = prefs.getBool('setting_auto_confirm') ?? false;
+        _autoConfirmAppointments =
+            prefs.getBool('setting_auto_confirm') ?? false;
         _language = prefs.getString('setting_language') ?? 'English';
         _consultationSlot = prefs.getString('setting_slot') ?? '20 mins';
       });
@@ -72,13 +79,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+          children: [
           // Account Status Card
           Card(
             elevation: 0.5,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -97,16 +106,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         Text(
                           isSignedIn
-                              ? (AuthService.currentUser?.displayName ?? 'Active Account')
+                              ? (AuthService.currentUser?.displayName ??
+                                  'Active Account')
                               : 'Guest Patient Mode',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 15),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           isSignedIn
                               ? (AuthService.currentUser?.email ?? 'Logged In')
                               : 'Limited offline session • Sign in to sync data',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          style:
+                              TextStyle(fontSize: 12, color: Colors.grey[600]),
                         ),
                       ],
                     ),
@@ -114,7 +126,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (!isSignedIn)
                     TextButton(
                       onPressed: () {
-                        Navigator.pop(context);
+                        showDoctorDeskAuthModal(
+                          context,
+                          onAuthenticated: () async {
+                            if (mounted) setState(() {});
+                          },
+                        );
                       },
                       child: const Text('Sign In'),
                     ),
@@ -133,9 +150,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ListTile(
                     leading: const Icon(Icons.verified, color: Colors.blue),
                     title: const Text('BMDC Verification Status'),
-                    subtitle: const Text('BMDC Reg: A-84920 • Verified Specialist'),
+                    subtitle:
+                        const Text('BMDC Reg: A-84920 • Verified Specialist'),
                     trailing: const Chip(
-                      label: Text('ACTIVE', style: TextStyle(fontSize: 10, color: Colors.white)),
+                      label: Text('ACTIVE',
+                          style: TextStyle(fontSize: 10, color: Colors.white)),
                       backgroundColor: Colors.green,
                       visualDensity: VisualDensity.compact,
                     ),
@@ -155,7 +174,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   SwitchListTile(
                     secondary: const Icon(Icons.rule_folder_outlined),
                     title: const Text('Auto-confirm Patient Bookings'),
-                    subtitle: const Text('Accept bookings directly into schedule queue'),
+                    subtitle: const Text(
+                        'Accept bookings directly into schedule queue'),
                     value: _autoConfirmAppointments,
                     onChanged: (val) {
                       setState(() => _autoConfirmAppointments = val);
@@ -176,7 +196,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   SwitchListTile(
                     secondary: const Icon(Icons.volume_up_outlined),
                     title: const Text('Queue Call & Bell Sound'),
-                    subtitle: const Text('Audio chime when calling next patient token'),
+                    subtitle: const Text(
+                        'Audio chime when calling next patient token'),
                     value: _queueSoundAlerts,
                     onChanged: (val) {
                       setState(() => _queueSoundAlerts = val);
@@ -203,7 +224,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SwitchListTile(
                   secondary: const Icon(Icons.notifications_outlined),
                   title: const Text('Push Notifications'),
-                  subtitle: const Text('Receive appointment and serial queue updates'),
+                  subtitle: const Text(
+                      'Receive appointment and serial queue updates'),
                   value: _notificationsEnabled,
                   onChanged: (val) {
                     setState(() => _notificationsEnabled = val);
@@ -214,7 +236,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SwitchListTile(
                   secondary: const Icon(Icons.spa_outlined),
                   title: const Text('Daily Health & Mood Check-in'),
-                  subtitle: const Text('Gentle daily reminder to record your wellness streak'),
+                  subtitle: const Text(
+                      'Gentle daily reminder to record your wellness streak'),
                   value: _dailyMoodReminder,
                   onChanged: (val) {
                     setState(() => _dailyMoodReminder = val);
@@ -226,6 +249,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
 
+          // Accessibility Section
+          _buildSectionHeader('ACCESSIBILITY'),
+          Card(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+            ),
+            child: const ReadAloudSettingTile(),
+          ),
+          const SizedBox(height: 16),
+
           // Preferences & Localization
           _buildSectionHeader('PREFERENCES'),
           Card(
@@ -233,8 +266,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 ListTile(
                   leading: const Icon(Icons.language_outlined),
-                  title: const Text('Language'),
-                  subtitle: Text(_language == 'English' ? 'English (US)' : 'বাংলা (Bengali)'),
+                  title: Text(tr('Language')),
+                  subtitle: Text(_language == 'English'
+                      ? 'English (US)'
+                      : 'বাংলা (Bengali)'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _pickLanguageDialog(context),
                 ),
@@ -269,13 +304,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const ListTile(
                   leading: Icon(Icons.info_outline),
                   title: Text('App Version'),
-                  subtitle: Text('DoctorDesk v1.0.4 • Bangladesh Healthcare Network'),
+                  subtitle:
+                      Text('DoctorDesk v1.0.4 • Bangladesh Healthcare Network'),
                 ),
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.shield_outlined),
                   title: const Text('Privacy & Medical Disclaimer'),
-                  subtitle: const Text('Health recommendations are smart AI and clinical guides'),
+                  subtitle: const Text(
+                      'Health recommendations are smart AI and clinical guides'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     showDialog(
@@ -301,19 +338,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(left: 4, bottom: 8),
       child: Text(
         title,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.1,
-          color: Colors.grey.shade600,
+        style: GoogleFonts.poppins(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.8,
+          color: AppColors.textSecondary,
         ),
       ),
     );
@@ -334,7 +372,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Doctor Name: Dr. Rafiqul Islam', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('Doctor Name: Dr. Rafiqul Islam',
+                style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 4),
             Text('BMDC Registration: A-84920'),
             SizedBox(height: 4),
@@ -386,7 +425,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SimpleDialogOption(
             onPressed: () {
               setState(() => _language = 'English');
-              _saveString('setting_language', 'English');
+              AppLanguage.setLanguage('English');
+              TtsService.instance.setLocale('en');
               Navigator.pop(ctx);
             },
             child: const Text('English (US)'),
@@ -394,7 +434,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SimpleDialogOption(
             onPressed: () {
               setState(() => _language = 'Bengali');
-              _saveString('setting_language', 'Bengali');
+              AppLanguage.setLanguage('Bengali');
+              TtsService.instance.setLocale('bn');
               Navigator.pop(ctx);
             },
             child: const Text('বাংলা (Bengali)'),

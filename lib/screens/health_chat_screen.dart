@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/gemini_service.dart';
 import '../services/specialty_matcher.dart';
 import '../widgets/specialty_feedback_widget.dart';
 import 'doctors_screen.dart';
+import 'nearby_doctors_screen.dart';
 
 class ChatMessage {
   final String text;
@@ -66,7 +68,8 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
         _answeredFeeling = true;
         _messages.add(
           ChatMessage(
-            text: 'How are you feeling today? You already logged "${_moodLabel(savedMood)}" today. How can I help you right now?',
+            text:
+                'How are you feeling today? You already logged "${_moodLabel(savedMood)}" today. How can I help you right now?',
             isUser: false,
           ),
         );
@@ -122,19 +125,25 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
     String replyText = '';
 
     if (moodKey == 'great' || moodKey == 'good') {
-      replyText = 'Glad to hear that! 🟢 Daily health is a blessing. Logged on your Health Calendar.\n\nDescribe any symptoms or search for doctors below if needed.';
+      replyText =
+          'Glad to hear that! 🟢 Daily health is a blessing. Logged on your Health Calendar.\n\nDescribe any symptoms or search for doctors below if needed.';
     } else if (moodKey == 'okay') {
-      replyText = 'Steady and balanced 🟡. Marked on your calendar. Let me know if you need to find any specialist.';
+      replyText =
+          'Steady and balanced 🟡. Marked on your calendar. Let me know if you need to find any specialist.';
     } else if (moodKey == 'low') {
-      replyText = 'Mental health is just as important as physical health 🟣. Speaking with a counselor or psychiatrist can help.';
+      replyText =
+          'Mental health is just as important as physical health 🟣. Speaking with a counselor or psychiatrist can help.';
       action = Padding(
         padding: const EdgeInsets.only(top: 8.0),
         child: FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF5E35B1)),
+          style:
+              FilledButton.styleFrom(backgroundColor: const Color(0xFF5E35B1)),
           onPressed: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const DoctorsScreen(initialQuery: 'Psychiatrist')),
+              MaterialPageRoute(
+                  builder: (_) =>
+                      const DoctorsScreen(initialQuery: 'Psychiatrist')),
             );
           },
           icon: const Icon(Icons.psychology, size: 18),
@@ -142,15 +151,19 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
         ),
       );
     } else if (moodKey == 'unwell') {
-      replyText = 'Please take care 🔴. We recommend consulting a General Physician or Medicine doctor.';
+      replyText =
+          'Please take care 🔴. We recommend consulting a General Physician or Medicine doctor.';
       action = Padding(
         padding: const EdgeInsets.only(top: 8.0),
         child: FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFFC62828)),
+          style:
+              FilledButton.styleFrom(backgroundColor: const Color(0xFFC62828)),
           onPressed: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const DoctorsScreen(initialQuery: 'Medicine')),
+              MaterialPageRoute(
+                  builder: (_) =>
+                      const DoctorsScreen(initialQuery: 'Medicine')),
             );
           },
           icon: const Icon(Icons.medical_services_outlined, size: 18),
@@ -160,13 +173,14 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
     }
 
     setState(() {
-      _messages.add(ChatMessage(text: replyText, isUser: false, actionWidget: action));
+      _messages.add(
+          ChatMessage(text: replyText, isUser: false, actionWidget: action));
     });
 
     _scrollToBottom();
   }
 
-  void _onSendMessage() {
+  Future<void> _onSendMessage() async {
     final query = _inputController.text.trim();
     if (query.isEmpty) return;
 
@@ -178,12 +192,22 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
     _scrollToBottom();
 
     final lower = query.toLowerCase().replaceAll(RegExp(r'[^\w\s]'), '').trim();
-    const greetings = ['hi', 'hello', 'hey', 'salam', 'assalamu alaikum', 'hola', 'hy', 'kemon acho'];
+    const greetings = [
+      'hi',
+      'hello',
+      'hey',
+      'salam',
+      'assalamu alaikum',
+      'hola',
+      'hy',
+      'kemon acho'
+    ];
     if (greetings.contains(lower)) {
       setState(() {
         _messages.add(
           ChatMessage(
-            text: 'Hello! 👋 How can I help you with your health today?\n\nYou can describe any symptoms you are experiencing (e.g., "fever", "chest pain", "মাথা ব্যথা"), and I will instantly match the right specialist doctor for you.',
+            text:
+                'Hello! 👋 How can I help you with your health today?\n\nYou can describe any symptoms you are experiencing (e.g., "fever", "chest pain", "মাথা ব্যথা"), and I will instantly match the right specialist doctor for you.',
             isUser: false,
           ),
         );
@@ -192,7 +216,7 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
       return;
     }
 
-    // Rule-based matching
+    // Rule-based matching (fast local check first)
     final match = SpecialtyMatcher.match(query);
     if (match != null && match.topSpecialty != null) {
       final spec = match.topSpecialty!;
@@ -202,14 +226,17 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
+          border: Border.all(
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(Icons.medical_services, color: Theme.of(context).colorScheme.primary, size: 20),
+                Icon(Icons.medical_services,
+                    color: Theme.of(context).colorScheme.primary, size: 20),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -230,7 +257,10 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => DoctorsScreen(initialQuery: spec)),
+                    MaterialPageRoute(
+                        builder: (_) => NearbyDoctorsScreen(
+                              initialSpeciality: spec,
+                            )),
                   );
                 },
                 icon: const Icon(Icons.search, size: 16),
@@ -247,7 +277,8 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
                 required String matchedSpecialty,
                 required String source,
                 required bool liked,
-              }) => ApiService.submitSpecialtyFeedback(
+              }) =>
+                  ApiService.submitSpecialtyFeedback(
                 inputText: inputText,
                 matchedSpecialty: matchedSpecialty,
                 source: source,
@@ -262,53 +293,197 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
       setState(() {
         _messages.add(
           ChatMessage(
-            text: 'Based on your symptoms, it sounds like you should consult a specialist in $spec.',
+            text:
+                'Based on your symptoms, it sounds like you should consult a specialist in $spec.',
             isUser: false,
             actionWidget: action,
           ),
         );
       });
     } else {
-      final action = Padding(
-        padding: const EdgeInsets.only(top: 8.0),
-        child: Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const DoctorsScreen(initialQuery: 'Medicine')),
-                  );
-                },
-                child: const Text('General Doctor'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const DoctorsScreen()),
-                  );
-                },
-                child: const Text('All Specialists'),
-              ),
-            ),
-          ],
-        ),
+      // Rulebase has no match: consult Gemini AI fallback per user requirements
+      final thinkingMessage = ChatMessage(
+        text: 'Evaluating symptoms with DoctorDesk AI...',
+        isUser: false,
       );
+      setState(() {
+        _messages.add(thinkingMessage);
+      });
+      _scrollToBottom();
+
+      final aiResult = await GeminiService.evaluateSymptoms(query);
+
+      if (!mounted) return;
 
       setState(() {
-        _messages.add(
-          ChatMessage(
-            text: 'I am DoctorDesk Symptom Assistant and only answer health symptoms and doctor matching. Please describe symptoms (e.g. fever, headache, chest pain) to find the right specialist.',
-            isUser: false,
-            actionWidget: action,
+        _messages.remove(thinkingMessage);
+      });
+
+      if (aiResult != null) {
+        Widget? action;
+        final spec = aiResult.recommendedSpecialty;
+        if (spec != null && !aiResult.isOffTopic) {
+          action = Container(
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.medical_services,
+                        color: Theme.of(context).colorScheme.primary, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'AI Recommended: $spec',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => NearbyDoctorsScreen(
+                                  initialSpeciality: spec,
+                                )),
+                      );
+                    },
+                    icon: const Icon(Icons.search, size: 16),
+                    label: Text('Show $spec Specialists'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SpecialtyFeedbackRow(
+                  inputText: query,
+                  matchedSpecialty: spec,
+                  source: 'gemini',
+                  onSubmitFeedback: ({
+                    required String inputText,
+                    required String matchedSpecialty,
+                    required String source,
+                    required bool liked,
+                  }) =>
+                      ApiService.submitSpecialtyFeedback(
+                    inputText: inputText,
+                    matchedSpecialty: matchedSpecialty,
+                    source: source,
+                    liked: liked,
+                    language: SpecialtyMatcher.detectLanguage(inputText),
+                  ),
+                ),
+              ],
+            ),
+          );
+        } else {
+          action = Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) =>
+                                const DoctorsScreen(initialQuery: 'Medicine')),
+                      );
+                    },
+                    child: const Text('General Doctor'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const DoctorsScreen()),
+                      );
+                    },
+                    child: const Text('All Specialists'),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        setState(() {
+          _messages.add(
+            ChatMessage(
+              text: aiResult.explanation,
+              isUser: false,
+              actionWidget: action,
+            ),
+          );
+        });
+      } else {
+        final action = Padding(
+          padding: const EdgeInsets.only(top: 8.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              const DoctorsScreen(initialQuery: 'Medicine')),
+                    );
+                  },
+                  child: const Text('General Doctor'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const DoctorsScreen()),
+                    );
+                  },
+                  child: const Text('All Specialists'),
+                ),
+              ),
+            ],
           ),
         );
-      });
+
+        setState(() {
+          _messages.add(
+            ChatMessage(
+              text:
+                  'I am DoctorDesk Symptom Assistant and only answer health symptoms and doctor matching. Please describe symptoms (e.g. fever, headache, joint pain) to find the right specialist.',
+              isUser: false,
+              actionWidget: action,
+            ),
+          );
+        });
+      }
     }
 
     _scrollToBottom();
@@ -366,7 +541,8 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
           if (_askedFeeling && !_answeredFeeling) ...[
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+              color:
+                  colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -436,9 +612,12 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
                     child: TextField(
                       controller: _inputController,
                       decoration: InputDecoration(
-                        hintText: 'Describe symptoms (e.g. জ্বর, chest pain)...',
-                        hintStyle: TextStyle(fontSize: 13, color: Colors.grey[500]),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        hintText:
+                            'Describe symptoms (e.g. জ্বর, chest pain)...',
+                        hintStyle:
+                            TextStyle(fontSize: 13, color: Colors.grey[500]),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
                           borderSide: BorderSide(color: Colors.grey.shade300),
@@ -459,7 +638,8 @@ class _HealthChatScreenState extends State<HealthChatScreen> {
                   CircleAvatar(
                     backgroundColor: colorScheme.primary,
                     child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white, size: 18),
+                      icon:
+                          const Icon(Icons.send, color: Colors.white, size: 18),
                       onPressed: _onSendMessage,
                     ),
                   ),

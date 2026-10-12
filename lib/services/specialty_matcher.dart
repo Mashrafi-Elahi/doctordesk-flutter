@@ -76,6 +76,8 @@ class SpecialtyMatcher {
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString('cached_specialty_rules', jsonEncode(newMap));
               await prefs.setInt('cached_specialty_rules_version', version);
+              await prefs.setInt('cached_specialty_rules_fetched_at',
+                  DateTime.now().millisecondsSinceEpoch);
             } catch (_) {}
           }
         }
@@ -628,8 +630,36 @@ class SpecialtyMatcher {
   }
 
   /// Preloads or initializes specialty symptom dictionary.
+  /// Only hits Firestore if local cache is older than 24 hours.
   static Future<void> load() async {
-    loadRemoteRules().ignore();
+    // Load cached rules from SharedPreferences first (no Firestore read)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedJson = prefs.getString('cached_specialty_rules');
+      final cachedVersion = prefs.getInt('cached_specialty_rules_version') ?? 0;
+      final lastFetch = prefs.getInt('cached_specialty_rules_fetched_at') ?? 0;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final ageHours = (now - lastFetch) / (1000 * 60 * 60);
+
+      if (cachedJson != null && cachedJson.isNotEmpty) {
+        final Map<String, dynamic> decoded = jsonDecode(cachedJson);
+        _remoteComplaintMap = decoded.map((k, v) => MapEntry(k, v.toString()));
+        _cachedVersion = cachedVersion;
+      }
+
+      // Only hit Firestore if cache is older than 24 hours
+      if (ageHours < 24 && cachedJson != null) return;
+    } catch (_) {}
+
+    // Background refresh — does not block app startup
+    loadRemoteRules().then((_) async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(
+            'cached_specialty_rules_fetched_at',
+            DateTime.now().millisecondsSinceEpoch);
+      } catch (_) {}
+    }).ignore();
   }
 
   /// Detects whether input is English ('en'), Bengali script ('bn'), Banglish ('banglish'), or 'unknown'.

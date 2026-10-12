@@ -29,8 +29,8 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyA9g-wpl17Z569jDSwhl2y81sWfn2UGNPE',
-    appId: '1:112062167979:android:22434d5a58283fe9c270ee',
+    apiKey: 'AIzaSyAXwx2KQXAJ_t4s7y0VAZ0RO8pRd2SoqUM',
+    appId: '1:112062167979:android:d5dfb6f27a8ad7e6c270ee',
     messagingSenderId: '112062167979',
     projectId: 'docdesk-1e4cc',
     storageBucket: 'docdesk-1e4cc.firebasestorage.app',

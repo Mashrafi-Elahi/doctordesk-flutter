@@ -59,40 +59,68 @@ class ChamberAccessibility {
 }
 
 class AccessibilityIcon extends StatelessWidget {
-  final ChamberAccessibility accessibility;
-  const AccessibilityIcon({super.key, required this.accessibility});
+  final ChamberAccessibility? accessibility;
+  final bool isAccessible;
+  final bool showLabel;
+
+  const AccessibilityIcon({
+    super.key,
+    this.accessibility,
+    this.isAccessible = false,
+    this.showLabel = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final tier = accessibility.tier;
-    if (tier == AccessibilityTier.none) return const SizedBox.shrink();
+    final bool accessible = isAccessible ||
+        (accessibility != null && accessibility!.tier != AccessibilityTier.none);
+    if (!accessible) return const SizedBox.shrink();
 
-    final Color color = switch (tier) {
-      AccessibilityTier.orange => Colors.orange,
-      AccessibilityTier.yellow => Colors.amber.shade800,
-      AccessibilityTier.green => Colors.green,
-      AccessibilityTier.none => Colors.transparent,
-    };
+    const color = Color(0xFF2E7D32);
+    const label = 'Accessible chamber';
+    const tooltip = 'Doctor-declared accessible chamber';
 
-    final String label = switch (tier) {
-      AccessibilityTier.orange => 'Basic wheelchair accessibility',
-      AccessibilityTier.yellow => 'Good wheelchair accessibility',
-      AccessibilityTier.green => 'Full wheelchair accessibility, including accessible toilet',
-      AccessibilityTier.none => '',
-    };
+    final Widget content;
+    if (showLabel) {
+      content = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.accessible, size: 14, color: color),
+            SizedBox(width: 4),
+            Text(
+              'Accessible',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      content = Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.accessible, size: 16, color: color),
+      );
+    }
 
     return Tooltip(
-      message: label,
+      message: tooltip,
       child: Semantics(
-        label: label, // screen-reader support
-        child: Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(Icons.accessible, size: 16, color: color),
-        ),
+        label: label,
+        child: content,
       ),
     );
   }

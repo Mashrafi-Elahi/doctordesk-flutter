@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../widgets/profile_avatar_button.dart';
+import '../services/app_language.dart';
 
 /// Inbox screen — honest empty state placeholder for doctor and clinic desk messaging.
 /// No chat backend or doctor accounts exist yet.
@@ -10,9 +11,9 @@ class InboxScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Inbox',
-          style: TextStyle(fontWeight: FontWeight.bold),
+        title: Text(
+          tr('Inbox'),
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: const [
           ProfileAvatarButton(),
@@ -24,7 +25,8 @@ class InboxScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.chat_bubble_outline, size: 56, color: Colors.grey[350]),
+              Icon(Icons.chat_bubble_outline,
+                  size: 56, color: Colors.grey[350]),
               const SizedBox(height: 16),
               const Text(
                 'No conversations yet',
@@ -37,7 +39,8 @@ class InboxScreen extends StatelessWidget {
               Text(
                 'Direct messaging with your doctor and clinic desk operator will appear here during active appointments.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[600], fontSize: 14, height: 1.4),
+                style: TextStyle(
+                    color: Colors.grey[600], fontSize: 14, height: 1.4),
               ),
             ],
           ),
@@ -49,7 +52,8 @@ class InboxScreen extends StatelessWidget {
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Messaging unlocks once you have an active appointment'),
+              content:
+                  Text('Messaging unlocks once you have an active appointment'),
               behavior: SnackBarBehavior.floating,
             ),
           );

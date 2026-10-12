@@ -12,6 +12,7 @@ class GoogleLogoWidget extends StatelessWidget {
       width: size,
       height: size,
       child: CustomPaint(
+        size: Size(size, size),
         painter: _GoogleLogoPainter(),
       ),
     );
@@ -21,45 +22,68 @@ class GoogleLogoWidget extends StatelessWidget {
 class _GoogleLogoPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final double center = size.width / 2;
-    final double strokeWidth = size.width * 0.22;
-    final rect = Rect.fromCircle(
-      center: Offset(center, center),
-      radius: center - (strokeWidth / 2),
-    );
+    canvas.save();
+    canvas.scale(size.width / 24.0, size.height / 24.0);
 
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.butt;
+    final paint = Paint()..style = PaintingStyle.fill;
 
-    // Blue: top-right arc
+    // Blue
     paint.color = const Color(0xFF4285F4);
-    canvas.drawArc(rect, -0.75, 1.0, false, paint);
+    final bluePath = Path()
+      ..moveTo(23.745, 12.27)
+      ..cubicTo(23.745, 11.57, 23.685, 10.87, 23.555, 10.2)
+      ..lineTo(12.0, 10.2)
+      ..lineTo(12.0, 14.71)
+      ..lineTo(18.6, 14.71)
+      ..cubicTo(18.31, 16.23, 17.46, 17.53, 16.2, 18.39)
+      ..lineTo(16.2, 21.44)
+      ..lineTo(20.08, 21.44)
+      ..cubicTo(22.35, 19.35, 23.745, 16.27, 23.745, 12.27)
+      ..close();
+    canvas.drawPath(bluePath, paint);
 
-    // Green: bottom-right arc
+    // Green
     paint.color = const Color(0xFF34A853);
-    canvas.drawArc(rect, 0.25, 1.45, false, paint);
+    final greenPath = Path()
+      ..moveTo(12.0, 24.0)
+      ..cubicTo(15.24, 24.0, 17.95, 22.92, 19.93, 21.09)
+      ..lineTo(16.05, 18.04)
+      ..cubicTo(14.97, 18.76, 13.6, 19.2, 12.0, 19.2)
+      ..cubicTo(8.88, 19.2, 6.23, 17.1, 5.28, 14.27)
+      ..lineTo(1.25, 14.27)
+      ..lineTo(1.25, 17.42)
+      ..cubicTo(3.26, 21.36, 7.33, 24.0, 12.0, 24.0)
+      ..close();
+    canvas.drawPath(greenPath, paint);
 
-    // Yellow: bottom-left arc
+    // Yellow
     paint.color = const Color(0xFFFBBC05);
-    canvas.drawArc(rect, 1.7, 1.4, false, paint);
+    final yellowPath = Path()
+      ..moveTo(5.28, 14.27)
+      ..cubicTo(5.03, 13.55, 4.9, 12.78, 4.9, 12.0)
+      ..cubicTo(4.9, 11.22, 5.03, 10.45, 5.28, 9.73)
+      ..lineTo(5.28, 6.58)
+      ..lineTo(1.25, 6.58)
+      ..cubicTo(0.45, 8.18, 0.0, 9.99, 0.0, 12.0)
+      ..cubicTo(0.0, 14.01, 0.45, 15.82, 1.25, 17.42)
+      ..lineTo(5.28, 14.27)
+      ..close();
+    canvas.drawPath(yellowPath, paint);
 
-    // Red: top-left arc
+    // Red
     paint.color = const Color(0xFFEA4335);
-    canvas.drawArc(rect, 3.1, 1.4, false, paint);
+    final redPath = Path()
+      ..moveTo(12.0, 4.75)
+      ..cubicTo(13.77, 4.75, 15.35, 5.36, 16.6, 6.55)
+      ..lineTo(20.02, 3.13)
+      ..cubicTo(17.95, 1.19, 15.24, 0.0, 12.0, 0.0)
+      ..cubicTo(7.33, 0.0, 3.26, 2.64, 1.25, 6.58)
+      ..lineTo(5.28, 9.73)
+      ..cubicTo(6.23, 6.9, 8.88, 4.75, 12.0, 4.75)
+      ..close();
+    canvas.drawPath(redPath, paint);
 
-    // Center horizontal blue crossbar
-    final barPaint = Paint()
-      ..color = const Color(0xFF4285F4)
-      ..style = PaintingStyle.fill;
-    final barRect = Rect.fromLTRB(
-      center - 1,
-      center - (strokeWidth / 2),
-      size.width,
-      center + (strokeWidth / 2),
-    );
-    canvas.drawRect(barRect, barPaint);
+    canvas.restore();
   }
 
   @override

@@ -2,9 +2,11 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/doctor.dart';
+import 'doctor_search_index.dart';
 import 'geofire_utils.dart';
 
 /// Cloud Firestore service providing complete data access for DoctorDesk.
@@ -20,139 +22,112 @@ class FirestoreService {
   // DOCTORS DIRECTORY & SEARCH
   // =========================================================================
 
-  /// Fetches doctors with pagination, optional specialty filter, and prefix search.
-  /// Matches ApiService.fetchDoctors signature.
+  static List<Map<String, dynamic>>? _cachedBundledMaps;
+
+  /// Loads and caches raw maps for the 6,000+ bundled APK doctors with precomputed searchText
+  static Future<List<Map<String, dynamic>>> _getIndexedBundledMaps() async {
+    if (_cachedBundledMaps != null && _cachedBundledMaps!.isNotEmpty) {
+      return _cachedBundledMaps!;
+    }
+    final docs = await getBundledDoctors();
+    _cachedBundledMaps = docs.map((d) {
+      final m = d.toJson();
+      m['_id'] = d.id;
+      m['searchText'] = DoctorSearchIndex.fieldsFor(m)['searchText'];
+      return m;
+    }).toList();
+    return _cachedBundledMaps!;
+  }
+
+  static bool _matchesSpecialtyFilter(List<String> docSpecs, String filter) {
+    final normFilter = DoctorSearchIndex.normalize(filter);
+    if (normFilter.isEmpty || normFilter == 'all') return true;
+    final filterAbbrevs = <String>{
+      normFilter,
+      ...(DoctorSearchIndex.specialtyAbbreviations[normFilter] ?? const [])
+          .map(DoctorSearchIndex.normalize),
+    };
+    for (final ft in DoctorSearchIndex.tokens(normFilter)) {
+      final ab = DoctorSearchIndex.specialtyAbbreviations[ft];
+      if (ab != null) {
+        filterAbbrevs.addAll(ab.map(DoctorSearchIndex.normalize));
+      }
+    }
+    for (final s in docSpecs) {
+      final normS = DoctorSearchIndex.normalize(s);
+      if (normS == normFilter ||
+          normS.contains(normFilter) ||
+          normFilter.contains(normS)) {
+        return true;
+      }
+      final sToks = DoctorSearchIndex.tokens(normS);
+      if (sToks.any(filterAbbrevs.contains) || filterAbbrevs.contains(normS)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Fetches doctors with pagination, optional specialty filter, and indexed
+  /// multilingual token search across names, specialties, symptoms, chambers, and degrees.
+  /// Uses the 6,000+ bundled APK directory directly to avoid hitting Firestore 50k read limits.
   static Future<Map<String, dynamic>> fetchDoctors({
     int page = 1,
     int limit = 20,
     String? search,
     String? speciality,
   }) async {
-    final queryKey = '${search ?? ""}_${speciality ?? ""}';
+    final allMaps = await _getIndexedBundledMaps();
+    List<Map<String, dynamic>> records = List<Map<String, dynamic>>.from(allMaps);
 
-    try {
-      Query<Map<String, dynamic>> query = _db.collection('doctors');
-
-      // 1. Specialty filtering via array-contains
-      if (speciality != null && speciality.isNotEmpty && speciality != 'All') {
-        query = query.where('specialities', arrayContains: speciality);
-      }
-
-      // 2. Prefix search on lowercase name
-      final trimmedSearch = search?.trim().toLowerCase();
-      if (trimmedSearch != null && trimmedSearch.isNotEmpty) {
-        query = query
-            .where('name_lower', isGreaterThanOrEqualTo: trimmedSearch)
-            .where('name_lower', isLessThanOrEqualTo: '$trimmedSearch\uf8ff')
-            .orderBy('name_lower');
-      } else {
-        // Default ordering when browsing: highest rating count first
-        query = query.orderBy('ratingCount', descending: true);
-      }
-
-      // 3. Cursor-based pagination
-      _pageCursors.putIfAbsent(queryKey, () => {});
-      final cursors = _pageCursors[queryKey]!;
-
-      if (page > 1 && cursors.containsKey(page - 1)) {
-        final lastDoc = cursors[page - 1]!;
-        query = query.startAfterDocument(lastDoc);
-      }
-
-      query = query.limit(limit);
-
-      final snapshot = await query.get();
-      final docs = snapshot.docs;
-
-      if (docs.isNotEmpty) {
-        cursors[page] = docs.last;
-      }
-
-      final doctors = docs.map((doc) {
-        final data = doc.data();
-        data['_id'] = doc.id;
-        return Doctor.fromJson(data);
+    if (speciality != null &&
+        speciality.trim().isNotEmpty &&
+        speciality != 'All') {
+      records = records.where((data) {
+        final specs = (data['specialities'] as List? ?? const [])
+            .map((e) => e.toString())
+            .toList();
+        return _matchesSpecialtyFilter(specs, speciality);
       }).toList();
-
-      // Estimate or fetch total count
-      int totalCount = doctors.length;
-      try {
-        if (speciality != null && speciality.isNotEmpty && speciality != 'All') {
-          final countSnapshot = await _db
-              .collection('doctors')
-              .where('specialities', arrayContains: speciality)
-              .count()
-              .get();
-          totalCount = countSnapshot.count ?? doctors.length;
-        } else if (trimmedSearch == null || trimmedSearch.isEmpty) {
-          final countSnapshot = await _db.collection('doctors').count().get();
-          totalCount = countSnapshot.count ?? doctors.length;
-        } else {
-          totalCount = doctors.length >= limit ? page * limit + 1 : (page - 1) * limit + doctors.length;
-        }
-      } catch (_) {}
-
-      final totalPages = (totalCount / limit).ceil().clamp(1, 9999);
-
-      // Preload & cache for offline fallback
-      if (page == 1 && (search == null || search.isEmpty) && (speciality == null || speciality == 'All')) {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          final rawList = docs.map((d) {
-            final m = d.data();
-            m['_id'] = d.id;
-            return m;
-          }).toList();
-          await prefs.setString('cached_doctors_data', jsonEncode(rawList));
-          await prefs.setInt('cached_doctors_total', totalCount);
-        } catch (_) {}
-      }
-
-      return {
-        'doctors': doctors,
-        'total': totalCount,
-        'totalPages': totalPages,
-        'isOffline': false,
-      };
-    } catch (e) {
-      debugPrint('Firestore fetchDoctors error: $e. Falling back to cache...');
-      // Offline fallback: load cached doctors
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final rawCached = prefs.getString('cached_doctors_data');
-        if (rawCached != null && rawCached.isNotEmpty) {
-          final List rawList = jsonDecode(rawCached);
-          List<Doctor> docs = rawList.map((j) => Doctor.fromJson(j)).toList();
-
-          if (speciality != null && speciality.isNotEmpty && speciality != 'All') {
-            docs = docs
-                .where((d) => d.specialities.any((s) => s.toLowerCase() == speciality.toLowerCase()))
-                .toList();
-          }
-          if (search != null && search.trim().isNotEmpty) {
-            final q = search.trim().toLowerCase();
-            docs = docs.where((d) =>
-              d.name.toLowerCase().contains(q) ||
-              d.specialities.any((s) => s.toLowerCase().contains(q)) ||
-              (d.designation != null && d.designation!.toLowerCase().contains(q))
-            ).toList();
-          }
-
-          return {
-            'doctors': docs,
-            'total': docs.length,
-            'totalPages': 1,
-            'isOffline': true,
-          };
-        }
-      } catch (_) {}
-      throw Exception('Could not connect to database. Please check your internet connection.');
     }
+
+    final hasSearch = search?.trim().isNotEmpty == true;
+    if (hasSearch) {
+      records = DoctorSearchIndex.rank(records, search!.trim());
+    }
+
+    final totalCount = records.length;
+    final totalPages = (totalCount / limit).ceil().clamp(1, 9999);
+    final startIndex = (page - 1) * limit;
+    final pagedRecords = startIndex < totalCount
+        ? records.sublist(startIndex, (startIndex + limit).clamp(0, totalCount))
+        : <Map<String, dynamic>>[];
+
+    final doctors = pagedRecords.map(Doctor.fromJson).toList();
+
+    return {
+      'doctors': doctors,
+      'total': totalCount,
+      'totalPages': totalPages,
+      'isOffline': false,
+    };
   }
 
-  /// Fetches a doctor by document ID.
-  /// Also ensures all chamber locations are populated.
+  /// Fetches a doctor by document ID from bundled APK directory first, then Firestore if needed.
   static Future<Doctor> fetchDoctorById(String id) async {
+    try {
+      final bundled = await getBundledDoctors();
+      final normalizedId = id.replaceFirst('doctor_', 'doc_');
+      for (final doc in bundled) {
+        if (doc.id == id ||
+            doc.id == normalizedId ||
+            doc.id == 'doc_$id' ||
+            doc.id == 'doctor_$id') {
+          return doc;
+        }
+      }
+    } catch (_) {}
+
     try {
       final docRef = _db.collection('doctors').doc(id);
       var snapshot = await docRef.get();
@@ -164,42 +139,11 @@ class FirestoreService {
       if (snapshot.exists && snapshot.data() != null) {
         final data = snapshot.data()!;
         data['_id'] = snapshot.id;
-
-        // Query top-level chambers for any additional chambers added
-        try {
-          final chamberDocs = await _db
-              .collection('chambers')
-              .where('doctorId', isEqualTo: snapshot.id)
-              .get();
-
-          if (chamberDocs.docs.isNotEmpty) {
-            final existingChambers = (data['chambers'] as List?) ?? [];
-            final dynamicChambers = chamberDocs.docs.map((c) => c.data()).toList();
-            data['chambers'] = [...existingChambers, ...dynamicChambers];
-          }
-        } catch (_) {}
-
         return Doctor.fromJson(data);
       }
     } catch (e) {
       debugPrint('Firestore fetchDoctorById error: $e');
     }
-
-    // Offline cache lookup
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final rawCached = prefs.getString('cached_doctors_data');
-      if (rawCached != null) {
-        final List rawList = jsonDecode(rawCached);
-        final match = rawList.firstWhere(
-          (j) => j['_id'] == id || j['id'] == id || j['_id'] == 'doctor_$id',
-          orElse: () => null,
-        );
-        if (match != null) {
-          return Doctor.fromJson(match);
-        }
-      }
-    } catch (_) {}
 
     throw Exception('Failed to load doctor profile');
   }
@@ -213,21 +157,67 @@ class FirestoreService {
     String? bmdcRegNumber,
     List<Map<String, dynamic>> chambers = const [],
     String? phone,
+    String? applicantUid,
   }) async {
-    final docRef = _db.collection('doctors').doc();
+    final normalizedName = name.trim();
+    if (normalizedName.isEmpty) {
+      throw ArgumentError('Doctor name is required.');
+    }
+    final normalizedSpecialities = specialities
+        .map((speciality) => speciality.trim())
+        .where((speciality) => speciality.isNotEmpty)
+        .toList();
+    if (normalizedSpecialities.isEmpty) {
+      throw ArgumentError('At least one speciality is required.');
+    }
+    final normalizedBmdc = bmdcRegNumber?.trim() ?? '';
+    final duplicateQuery = normalizedBmdc.isNotEmpty
+        ? _db
+            .collection('doctors')
+            .where('bmdcRegNumber', isEqualTo: normalizedBmdc)
+            .limit(1)
+        : _db
+            .collection('doctors')
+            .where('name_lower', isEqualTo: normalizedName.toLowerCase())
+            .limit(1);
+    final duplicate = await duplicateQuery.get();
+
+    DocumentReference<Map<String, dynamic>> docRef;
+    if (applicantUid != null && applicantUid.trim().isNotEmpty) {
+      final existingClaim = await _db
+          .collection('doctors')
+          .where('claimedByUid', isEqualTo: applicantUid.trim())
+          .limit(1)
+          .get();
+      docRef = existingClaim.docs.isNotEmpty
+          ? existingClaim.docs.first.reference
+          : _db.collection('doctors').doc('doctor_${applicantUid.trim()}');
+    } else {
+      docRef = _db.collection('doctors').doc();
+    }
+
+    if (duplicate.docs.isNotEmpty && duplicate.docs.first.id != docRef.id) {
+      throw StateError(
+          'A doctor with the same name or BMDC number already exists.');
+    }
+
+    final isClaimed = applicantUid != null && applicantUid.trim().isNotEmpty;
     final data = <String, dynamic>{
-      'name': name.startsWith('Dr.') ? name : 'Dr. $name',
-      'specialities': specialities.isNotEmpty ? specialities : ['General Medicine'],
+      'name': normalizedName.startsWith('Dr.')
+          ? normalizedName
+          : 'Dr. $normalizedName',
+      'name_lower': normalizedName.toLowerCase(),
+      'specialities': normalizedSpecialities,
       'designation': designation ?? 'Consultant',
       'experienceYears': experienceYears,
       'education': education,
-      'bmdcRegNumber': bmdcRegNumber ?? '',
-      'isBmdcVerified': true,
-      'isClaimed': true,
-      'rating': 5.0,
-      'ratingAverage': 5.0,
-      'ratingCount': 1,
-      'reviewCount': 1,
+      'bmdcRegNumber': normalizedBmdc,
+      'isBmdcVerified': isClaimed && normalizedBmdc.isNotEmpty,
+      'isClaimed': isClaimed,
+      if (isClaimed) 'claimedByUid': applicantUid.trim(),
+      'ratingAverage': 0.0,
+      'ratingCount': 0,
+      'reviewCount': 0,
       'phone': phone ?? '',
       'chambers': chambers.isNotEmpty
           ? chambers
@@ -239,7 +229,104 @@ class FirestoreService {
               }
             ],
       'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      ...DoctorSearchIndex.fieldsFor({
+        'name': normalizedName,
+        'designation': designation ?? 'Consultant',
+        'specialities': normalizedSpecialities,
+        'education': education,
+        'chambers': chambers,
+      }),
     };
+
+    if (isClaimed) {
+      final userRef = _db.collection('users').doc(applicantUid.trim());
+      final userSnap = await userRef.get();
+      final userData = userSnap.data() ?? {};
+      final appData = Map<String, dynamic>.from(
+          (userData['doctorApplication'] as Map?) ?? const {});
+
+      final batch = _db.batch();
+      batch.set(docRef, data, SetOptions(merge: true));
+      batch.set(
+        userRef,
+        {
+          'roles': {
+            ...Map<String, dynamic>.from(
+                (userData['roles'] as Map?) ?? const {}),
+            'isDoctor': true,
+          },
+          'chamberCount': chambers.isNotEmpty ? chambers.length : 1,
+          'doctorProfileId': docRef.id,
+          'isBmdcVerified': normalizedBmdc.isNotEmpty,
+          if (normalizedBmdc.isNotEmpty) 'bmdcRegNumber': normalizedBmdc,
+          if (phone != null && phone.trim().isNotEmpty)
+            'phone': phone.trim(),
+          'doctorApplication': {
+            ...appData,
+            'status': 'approved',
+            'name': normalizedName,
+            if (normalizedBmdc.isNotEmpty) 'bmdcNumber': normalizedBmdc,
+            if (phone != null && phone.trim().isNotEmpty)
+              'phone': phone.trim(),
+            'reviewedAt': FieldValue.serverTimestamp(),
+            'reviewedByUid': _auth.currentUser?.uid,
+          },
+        },
+        SetOptions(merge: true),
+      );
+      await batch.commit();
+      return docRef.id;
+    }
+
+    // If no applicantUid was given, check if a user with this phone exists to link
+    if (phone != null && phone.trim().isNotEmpty) {
+      try {
+        final matchSnap = await _db
+            .collection('users')
+            .where('phone', isEqualTo: phone.trim())
+            .limit(1)
+            .get();
+        if (matchSnap.docs.isNotEmpty) {
+          final matchedDoc = matchSnap.docs.first;
+          final matchedUid = matchedDoc.id;
+          final matchedUser = matchedDoc.data();
+          data['isClaimed'] = true;
+          data['claimedByUid'] = matchedUid;
+          data['isBmdcVerified'] = normalizedBmdc.isNotEmpty;
+
+          final batch = _db.batch();
+          batch.set(docRef, data);
+          batch.set(
+            matchedDoc.reference,
+            {
+              'roles': {
+                ...Map<String, dynamic>.from(
+                    (matchedUser['roles'] as Map?) ?? const {}),
+                'isDoctor': true,
+              },
+              'chamberCount': chambers.isNotEmpty ? chambers.length : 1,
+              'doctorProfileId': docRef.id,
+              'isBmdcVerified': normalizedBmdc.isNotEmpty,
+              if (normalizedBmdc.isNotEmpty) 'bmdcRegNumber': normalizedBmdc,
+              'doctorApplication': {
+                ...Map<String, dynamic>.from(
+                    (matchedUser['doctorApplication'] as Map?) ?? const {}),
+                'status': 'approved',
+                'name': normalizedName,
+                if (normalizedBmdc.isNotEmpty) 'bmdcNumber': normalizedBmdc,
+                'reviewedAt': FieldValue.serverTimestamp(),
+                'reviewedByUid': _auth.currentUser?.uid,
+              },
+            },
+            SetOptions(merge: true),
+          );
+          await batch.commit();
+          return docRef.id;
+        }
+      } catch (_) {}
+    }
+
     await docRef.set(data);
     return docRef.id;
   }
@@ -248,48 +335,52 @@ class FirestoreService {
     await _db.collection('doctors').doc(doctorId).delete();
   }
 
-  /// Fetches precomputed specialities list and doctor counts from meta/specialities.
+  static List<Map<String, dynamic>>? _cachedSpecialitiesList;
+
+  /// Computes specialities list and doctor counts directly from the 6,000+ bundled APK dataset (0 Firestore reads).
   static Future<List<Map<String, dynamic>>> fetchSpecialities() async {
+    if (_cachedSpecialitiesList != null && _cachedSpecialitiesList!.isNotEmpty) {
+      return _cachedSpecialitiesList!;
+    }
     try {
-      final snapshot = await _db.collection('meta').doc('specialities').get();
-      if (snapshot.exists && snapshot.data() != null) {
-        final data = snapshot.data()!;
-        if (data['list'] is List) {
-          final list = (data['list'] as List)
-              .map((item) => Map<String, dynamic>.from(item as Map))
-              .toList();
-
-          try {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('cached_specialities_data', jsonEncode(list));
-          } catch (_) {}
-
-          return list;
+      final docs = await getBundledDoctors();
+      final Map<String, int> counts = {};
+      for (final d in docs) {
+        for (final s in d.specialities) {
+          final clean = s.trim();
+          if (clean.isNotEmpty) {
+            counts[clean] = (counts[clean] ?? 0) + 1;
+          }
         }
       }
+      final list = counts.entries
+          .map((e) => <String, dynamic>{'speciality': e.key, 'count': e.value})
+          .toList()
+        ..sort((a, b) => (b['count'] as int).compareTo(a['count'] as int));
+
+      _cachedSpecialitiesList = list;
+      return list;
     } catch (e) {
-      debugPrint('Firestore fetchSpecialities error: $e');
+      debugPrint('Error computing bundled specialities: $e');
     }
 
-    // Offline fallback
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('cached_specialities_data');
-      if (raw != null) {
-        final List data = jsonDecode(raw);
-        return data.cast<Map<String, dynamic>>();
-      }
-    } catch (_) {}
-
-    return [];
+    return const [
+      {'speciality': 'GYNECOLOGIST & OBSTETRICIAN', 'count': 704},
+      {'speciality': 'MEDICINE SPECIALIST', 'count': 579},
+      {'speciality': 'CARDIOLOGIST', 'count': 380},
+      {'speciality': 'PEDIATRICIAN', 'count': 339},
+      {'speciality': 'GENERAL SURGEON', 'count': 284},
+      {'speciality': 'DERMATOLOGIST', 'count': 283},
+      {'speciality': 'OTOLARYNGOLOGISTS (ENT)', 'count': 270},
+      {'speciality': 'ORTHOPEDIC SURGEON', 'count': 235},
+      {'speciality': 'OPHTHALMOLOGIST', 'count': 231},
+      {'speciality': 'NEUROLOGIST', 'count': 117},
+      {'speciality': 'DENTIST', 'count': 120},
+      {'speciality': 'ENDOCRINOLOGIST', 'count': 129},
+    ];
   }
 
-  /// Nearby doctors search:
-  /// 1. Computes geohash bounds for radiusKm around (lat, lng)
-  /// 2. Queries chambers collection for geohashes
-  /// 3. Filters by exact Haversine distance
-  /// 4. Fetches doctor profiles in chunks of 30 via whereIn
-  /// 5. Sorts by distance and paginates
+  /// Nearby doctors search across all 6,000+ bundled APK doctors using exact Haversine distance (0 Firestore reads).
   static Future<List<Doctor>> fetchNearbyDoctors({
     required double lat,
     required double lng,
@@ -298,107 +389,56 @@ class FirestoreService {
     int page = 1,
     int limit = 20,
   }) async {
-    try {
-      // Compute geohash query bounds matching geofire-common exactly
-      final bounds = GeofireUtils.geohashQueryBounds([lat, lng], radiusKm * 1000.0);
+    final allMaps = await _getIndexedBundledMaps();
+    final List<Doctor> matched = [];
 
-      // Query chambers collection across geohash bounds
-      final List<Map<String, dynamic>> matchingChambers = [];
+    for (final data in allMaps) {
+      final specs = (data['specialities'] as List? ?? const [])
+          .map((e) => e.toString())
+          .toList();
+      if (speciality != null &&
+          speciality.isNotEmpty &&
+          speciality != 'All' &&
+          !_matchesSpecialtyFilter(specs, speciality)) {
+        continue;
+      }
 
-      final queryFutures = bounds.map((bound) {
-        return _db
-            .collection('chambers')
-            .where('geohash', isGreaterThanOrEqualTo: bound[0])
-            .where('geohash', isLessThanOrEqualTo: bound[1])
-            .get();
-      });
+      final chambers = (data['chambers'] as List? ?? const [])
+          .whereType<Map>()
+          .map((c) => Map<String, dynamic>.from(c))
+          .toList();
 
-      final querySnapshots = await Future.wait(queryFutures);
-      for (final snap in querySnapshots) {
-        for (final doc in snap.docs) {
-          final data = doc.data();
-          final chLat = (data['lat'] as num?)?.toDouble();
-          final chLng = (data['lng'] as num?)?.toDouble();
-
-          if (chLat != null && chLng != null) {
-            final distanceKm = GeofireUtils.distanceBetweenKm([lat, lng], [chLat, chLng]);
-            if (distanceKm <= radiusKm) {
-              data['distance'] = distanceKm;
-              matchingChambers.add(data);
-            }
+      double? bestDist;
+      Map<String, dynamic>? bestChamber;
+      for (final ch in chambers) {
+        final chLat = (ch['lat'] as num?)?.toDouble();
+        final chLng = (ch['lng'] as num?)?.toDouble();
+        if (chLat != null && chLng != null) {
+          final dist = GeofireUtils.distanceBetweenKm([lat, lng], [chLat, chLng]);
+          if (dist <= radiusKm && (bestDist == null || dist < bestDist)) {
+            bestDist = dist;
+            bestChamber = ch;
           }
         }
       }
 
-      if (matchingChambers.isEmpty) {
-        return [];
+      if (bestDist != null && bestChamber != null) {
+        final copy = Map<String, dynamic>.from(data);
+        copy['distance'] = bestDist;
+        copy['chamber'] = bestChamber;
+        matched.add(Doctor.fromJson(copy));
       }
-
-      // Sort chambers by distance
-      matchingChambers.sort((a, b) =>
-          ((a['distance'] as num?) ?? 999.0).compareTo((b['distance'] as num?) ?? 999.0));
-
-      // Extract unique doctor IDs
-      final Map<String, Map<String, dynamic>> doctorToChamberMap = {};
-      for (final ch in matchingChambers) {
-        final docId = ch['doctorId'] as String?;
-        if (docId != null && !doctorToChamberMap.containsKey(docId)) {
-          doctorToChamberMap[docId] = ch;
-        }
-      }
-
-      final uniqueDoctorIds = doctorToChamberMap.keys.toList();
-      if (uniqueDoctorIds.isEmpty) return [];
-
-      // Fetch doctors in chunks of 30 (Firestore whereIn limit)
-      final List<Doctor> doctors = [];
-      const chunkSize = 30;
-
-      for (int i = 0; i < uniqueDoctorIds.length; i += chunkSize) {
-        final chunk = uniqueDoctorIds.sublist(
-          i,
-          (i + chunkSize > uniqueDoctorIds.length) ? uniqueDoctorIds.length : i + chunkSize,
-        );
-
-        final docSnap = await _db
-            .collection('doctors')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-
-        for (final doc in docSnap.docs) {
-          final data = doc.data();
-          data['_id'] = doc.id;
-          final chamberData = doctorToChamberMap[doc.id];
-          if (chamberData != null) {
-            data['distance'] = chamberData['distance'];
-            data['chamber'] = chamberData;
-          }
-
-          // Specialty filter check
-          if (speciality != null && speciality.isNotEmpty && speciality != 'All') {
-            final specs = (data['specialities'] as List?)?.map((e) => e.toString().toLowerCase()).toList() ?? [];
-            if (!specs.contains(speciality.toLowerCase())) {
-              continue;
-            }
-          }
-
-          doctors.add(Doctor.fromJson(data));
-        }
-      }
-
-      // Sort final doctors list by distance
-      doctors.sort((a, b) => (a.distance ?? 999.0).compareTo(b.distance ?? 999.0));
-
-      // Pagination slice
-      final startIndex = (page - 1) * limit;
-      if (startIndex >= doctors.length) return [];
-      final endIndex = (startIndex + limit > doctors.length) ? doctors.length : startIndex + limit;
-
-      return doctors.sublist(startIndex, endIndex);
-    } catch (e) {
-      debugPrint('Firestore fetchNearbyDoctors error: $e');
-      throw Exception('Failed to load nearby doctors');
     }
+
+    matched.sort((a, b) => (a.distance ?? 999.0).compareTo(b.distance ?? 999.0));
+
+    final startIndex = (page - 1) * limit;
+    if (startIndex >= matched.length) return [];
+    final endIndex = (startIndex + limit > matched.length)
+        ? matched.length
+        : startIndex + limit;
+
+    return matched.sublist(startIndex, endIndex);
   }
 
   // =========================================================================
@@ -406,13 +446,15 @@ class FirestoreService {
   // =========================================================================
 
   /// Direct OpenStreetMap Nominatim geocoding with 1-req/sec safety header
-  static Future<List<Map<String, dynamic>>> fetchGeocodeSuggestions(String query) async {
+  static Future<List<Map<String, dynamic>>> fetchGeocodeSuggestions(
+      String query) async {
     try {
       final uri = Uri.parse(
         'https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=2&countrycodes=bd',
       );
       final response = await http.get(uri, headers: {
-        'User-Agent': 'DoctorDesk-Flutter/1.0 (student project, contact: dev@doctordesk.bd)',
+        'User-Agent':
+            'DoctorDesk-Flutter/1.0 (student project, contact: dev@doctordesk.bd)',
       }).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
@@ -441,12 +483,14 @@ class FirestoreService {
       if (uid == null) return null;
 
       final startOfDay = DateTime.now();
-      final startTimestamp = DateTime(startOfDay.year, startOfDay.month, startOfDay.day);
+      final startTimestamp =
+          DateTime(startOfDay.year, startOfDay.month, startOfDay.day);
 
       final snapshot = await _db
           .collection('journal')
           .where('userId', isEqualTo: uid)
-          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startTimestamp))
+          .where('createdAt',
+              isGreaterThanOrEqualTo: Timestamp.fromDate(startTimestamp))
           .orderBy('createdAt', descending: true)
           .limit(1)
           .get();
@@ -512,7 +556,8 @@ class FirestoreService {
   // REVIEWS & BMDC CLAIMS
   // =========================================================================
 
-  static Future<List<Map<String, dynamic>>> fetchReviews(String doctorId) async {
+  static Future<List<Map<String, dynamic>>> fetchReviews(
+      String doctorId) async {
     try {
       final snapshot = await _db
           .collection('reviews')
@@ -561,7 +606,10 @@ class FirestoreService {
       'createdAt': FieldValue.serverTimestamp(),
     };
 
-    await _db.collection('reviews').doc(reviewDocId).set(reviewData, SetOptions(merge: true));
+    await _db
+        .collection('reviews')
+        .doc(reviewDocId)
+        .set(reviewData, SetOptions(merge: true));
 
     // Update doctor's aggregate rating in Firestore
     try {
@@ -571,15 +619,16 @@ class FirestoreService {
         int count = 0;
         for (final r in allReviews) {
           final rScore = (r['rating'] as num?)?.toDouble() ?? 0.0;
-          final hasProof = r['proofImageUrl'] != null && r['proofImageUrl'].toString().isNotEmpty;
+          final hasProof = r['proofImageUrl'] != null &&
+              r['proofImageUrl'].toString().isNotEmpty;
           final weight = hasProof ? 2 : 1;
           sum += (rScore * weight);
           count += weight;
         }
         final avg = count > 0 ? (sum / count) : 0.0;
         await _db.collection('doctors').doc(doctorId).set({
-          'rating': double.parse(avg.toStringAsFixed(1)),
-          'reviewCount': allReviews.length,
+          'ratingAverage': double.parse(avg.toStringAsFixed(1)),
+          'ratingCount': allReviews.length,
         }, SetOptions(merge: true));
       }
     } catch (e) {
@@ -593,7 +642,8 @@ class FirestoreService {
     };
   }
 
-  static Future<bool> checkCanReview(String doctorId, String patientUid, {Map<String, dynamic>? doctorData}) async {
+  static Future<bool> checkCanReview(String doctorId, String patientUid,
+      {Map<String, dynamic>? doctorData}) async {
     if (patientUid.isEmpty) return false;
     final claimedBy = doctorData?['claimedByUid'] ?? doctorData?['userId'];
     if (claimedBy != null && claimedBy == patientUid) {
@@ -633,28 +683,40 @@ class FirestoreService {
       if (docSnap.exists) {
         final data = docSnap.data()!;
         data['uid'] = docSnap.id;
-        final cleanEmail = (data['email'] as String? ?? '').toLowerCase().trim();
-        final roles = Map<String, dynamic>.from((data['roles'] as Map<String, dynamic>?) ?? {});
-
-        if (uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' || cleanEmail == 'mashrafeelahi8@gmail.com') {
-          roles['isAdmin'] = true;
-          data['roles'] = roles;
-        } else if (cleanEmail == 'nuzhatsaima.16@gmail.com') {
-          roles['isDoctor'] = true;
-          data['roles'] = roles;
-          data['chamberCount'] = 1;
-        } else if (cleanEmail == 'faizaneha0@gmail.com') {
-          roles['isDoctor'] = false;
-          roles['isAdmin'] = false;
-          data['roles'] = roles;
-        }
+        final roles = Map<String, dynamic>.from(
+            (data['roles'] as Map<String, dynamic>?) ?? {});
 
         // Check if user is an admin document
         final adminDoc = await _db.collection('admins').doc(uid).get();
-        if (adminDoc.exists) {
-          roles['isAdmin'] = true;
-          data['roles'] = roles;
+        // A role flag by itself is not authority. Admin is granted only by
+        // the protected admins collection.
+        roles['isAdmin'] = adminDoc.exists;
+
+        // A doctor role is tied to a claimed doctor profile. This prevents a
+        // stale role flag or a normal applicant from receiving appointments.
+        final doctorProfileId = data['doctorProfileId']?.toString();
+        if (roles['isDoctor'] == true &&
+            doctorProfileId != null &&
+            doctorProfileId.isNotEmpty) {
+          final doctorDoc =
+              await _db.collection('doctors').doc(doctorProfileId).get();
+          final doctorData = doctorDoc.data();
+          if (!doctorDoc.exists ||
+              doctorData?['isClaimed'] != true ||
+              doctorData?['claimedByUid'] != uid) {
+            roles['isDoctor'] = false;
+            data['chamberCount'] = 0;
+          }
+        } else {
+          roles['isDoctor'] = false;
+          data['chamberCount'] = 0;
         }
+
+        if (roles['isOperator'] == true &&
+            ((data['operatorAssignments'] as List?)?.isNotEmpty != true)) {
+          roles['isOperator'] = false;
+        }
+        data['roles'] = roles;
 
         return data;
       }
@@ -675,34 +737,26 @@ class FirestoreService {
     try {
       final userRef = _db.collection('users').doc(uid);
       final existing = await userRef.get();
-      final cleanEmail = (email ?? '').toLowerCase().trim();
-      final isAdmin = uid == 'LEPN8RB9Oeg5vXKX76plaXD57Zz2' || cleanEmail == 'mashrafeelahi8@gmail.com';
-      final isNuzhat = cleanEmail == 'nuzhatsaima.16@gmail.com';
-      final isFaiza = cleanEmail == 'faizaneha0@gmail.com';
 
       if (!existing.exists) {
         final userData = <String, dynamic>{
           'uid': uid,
           'email': email ?? '',
-          'name': name ?? (isNuzhat ? 'Dr. Nuzhat Saima' : ''),
-          'phone': phone ?? (isNuzhat ? '+880 1309-594462' : ''),
+          'name': name ?? '',
+          'phone': phone ?? '',
           'roles': {
-            'isDoctor': isNuzhat,
+            'isDoctor': false,
             'isOperator': false,
-            'isAdmin': isAdmin,
+            'isAdmin': false,
           },
-          'chamberCount': isNuzhat ? 1 : 0,
-          'doctorProfileId': isNuzhat ? 'nuzhat_saima' : null,
+          'chamberCount': 0,
+          'doctorProfileId': null,
           'operatorAssignments': [],
           'createdAt': FieldValue.serverTimestamp(),
         };
 
-        if (isAdmin) {
-          await _db.collection('admins').doc(uid).set({'isAdmin': true});
-        }
-
         // Normal signups applying for doctor get pending status, never client-granted role
-        if (isDoctor && !isNuzhat && !isAdmin && !isFaiza) {
+        if (isDoctor) {
           userData['doctorApplication'] = {
             'status': 'pending',
             'appliedAt': FieldValue.serverTimestamp(),
@@ -716,30 +770,27 @@ class FirestoreService {
         return userData;
       } else {
         final updates = <String, dynamic>{};
-        if (isAdmin) {
-          updates['roles.isAdmin'] = true;
-          await _db.collection('admins').doc(uid).set({'isAdmin': true});
-        }
-        if (isNuzhat) {
-          updates['roles.isDoctor'] = true;
-          updates['chamberCount'] = 1;
-          updates['phone'] = '+880 1309-594462';
-        }
-        if (isFaiza) {
-          updates['roles.isDoctor'] = false;
-          updates['roles.isAdmin'] = false;
-        }
-        if (name != null && name.isNotEmpty && (existing.data()?['name'] == null || existing.data()?['name'] == '')) {
+        if (name != null &&
+            name.isNotEmpty &&
+            (existing.data()?['name'] == null ||
+                existing.data()?['name'] == '')) {
           updates['name'] = name;
         }
-        if (email != null && email.isNotEmpty && (existing.data()?['email'] == null || existing.data()?['email'] == '')) {
+        if (email != null &&
+            email.isNotEmpty &&
+            (existing.data()?['email'] == null ||
+                existing.data()?['email'] == '')) {
           updates['email'] = email;
         }
-        if (phone != null && phone.isNotEmpty && (existing.data()?['phone'] == null || existing.data()?['phone'] == '')) {
+        if (phone != null &&
+            phone.isNotEmpty &&
+            (existing.data()?['phone'] == null ||
+                existing.data()?['phone'] == '')) {
           updates['phone'] = phone;
         }
-        if (isDoctor && !isNuzhat && !isAdmin && !isFaiza) {
-          final isAlreadyDoctor = existing.data()?['roles']?['isDoctor'] == true;
+        if (isDoctor) {
+          final isAlreadyDoctor =
+              existing.data()?['roles']?['isDoctor'] == true;
           if (!isAlreadyDoctor) {
             updates['doctorApplication'] = {
               'status': 'pending',
@@ -768,7 +819,7 @@ class FirestoreService {
     try {
       final snap = await _db
           .collection('users')
-          .where('doctorApplication.status', isEqualTo: 'pending')
+          .where('doctorApplication.status', whereIn: ['pending', 'under_appeal'])
           .get();
       return snap.docs.map((doc) => {'uid': doc.id, ...doc.data()}).toList();
     } catch (e) {
@@ -797,11 +848,115 @@ class FirestoreService {
       'isBmdcVerified': isBmdcVerified,
     };
     if (nid != null && nid.isNotEmpty) updates['nid'] = nid;
-    if (bmdcNumber != null && bmdcNumber.isNotEmpty) updates['bmdcRegNumber'] = bmdcNumber;
+    if (bmdcNumber != null && bmdcNumber.isNotEmpty) {
+      updates['bmdcRegNumber'] = bmdcNumber;
+    }
     if (doctorProfileId != null) {
       updates['doctorProfileId'] = doctorProfileId;
     }
     await userRef.update(updates);
+  }
+
+  /// Approves a pending application by creating (or restoring) exactly one
+  /// claimed directory profile and linking it to the applicant's user record.
+  /// This operation is admin-authorized by Firestore rules; client UI alone
+  /// can never grant the doctor role.
+  static Future<String> approveDoctorApplication({
+    required String uid,
+  }) async {
+    final userRef = _db.collection('users').doc(uid);
+    final userSnapshot = await userRef.get();
+    if (!userSnapshot.exists) {
+      throw StateError('The applicant user record no longer exists.');
+    }
+    final user = userSnapshot.data()!;
+    final application = Map<String, dynamic>.from(
+      (user['doctorApplication'] as Map?) ?? const {},
+    );
+    final status = application['status']?.toString();
+    if (status != 'pending' &&
+        status != 'under_appeal' &&
+        status != 'approved') {
+      throw StateError('This user does not have a pending doctor application.');
+    }
+
+    final applicantName =
+        (application['name']?.toString().trim().isNotEmpty == true
+                ? application['name']
+                : user['name'])
+            ?.toString()
+            .trim();
+    if (applicantName == null || applicantName.isEmpty) {
+      throw StateError('The application is missing the doctor name.');
+    }
+    final speciality = application['speciality']?.toString().trim();
+    final bmdcNumber = application['bmdcNumber']?.toString().trim() ?? '';
+    final existingClaim = await _db
+        .collection('doctors')
+        .where('claimedByUid', isEqualTo: uid)
+        .limit(1)
+        .get();
+    final doctorRef = existingClaim.docs.isNotEmpty
+        ? existingClaim.docs.first.reference
+        : _db.collection('doctors').doc('doctor_$uid');
+    final displayName =
+        applicantName.startsWith('Dr.') ? applicantName : 'Dr. $applicantName';
+
+    final batch = _db.batch();
+    batch.set(
+        doctorRef,
+        {
+          'name': displayName,
+          'name_lower': displayName.toLowerCase(),
+          'specialities': [
+            speciality == null || speciality.isEmpty
+                ? 'General Medicine'
+                : speciality,
+          ],
+          'designation': 'Consultant',
+          'education': const <String>[],
+          'bmdcRegNumber': bmdcNumber,
+          'isClaimed': true,
+          'claimedByUid': uid,
+          // Approval records an application review, not automatic BMDC verification.
+          'isBmdcVerified': false,
+          'phone': application['phone']?.toString() ??
+              user['phone']?.toString() ??
+              '',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          ...DoctorSearchIndex.fieldsFor({
+            'name': displayName,
+            'designation': 'Consultant',
+            'specialities': [
+              speciality == null || speciality.isEmpty
+                  ? 'General Medicine'
+                  : speciality,
+            ],
+            'education': const <String>[],
+          }),
+        },
+        SetOptions(merge: true));
+    batch.set(
+        userRef,
+        {
+          'roles': {
+            ...Map<String, dynamic>.from((user['roles'] as Map?) ?? const {}),
+            'isDoctor': true,
+          },
+          'chamberCount': 0,
+          'doctorProfileId': doctorRef.id,
+          'doctorApplication': {
+            ...application,
+            'status': 'approved',
+            'reviewedAt': FieldValue.serverTimestamp(),
+            'reviewedByUid': _auth.currentUser?.uid,
+          },
+          'isBmdcVerified': false,
+        },
+        SetOptions(merge: true));
+    await batch.commit();
+    return doctorRef.id;
   }
 
   /// Submits an application for the doctor role to the database with optional NID and BMDC
@@ -814,7 +969,8 @@ class FirestoreService {
     String? speciality,
   }) async {
     final userRef = _db.collection('users').doc(uid);
-    final hasDocs = (nid != null && nid.isNotEmpty) || (bmdcNumber != null && bmdcNumber.isNotEmpty);
+    final hasDocs = (nid != null && nid.isNotEmpty) ||
+        (bmdcNumber != null && bmdcNumber.isNotEmpty);
     await userRef.set({
       'phone': phone,
       'doctorApplication': {
@@ -862,8 +1018,10 @@ class FirestoreService {
   // =========================================================================
 
   /// Stream of feed posts ordered by newest first
-  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream({String? typeFilter}) {
-    Query<Map<String, dynamic>> query = _db.collection('posts').orderBy('timestamp', descending: true);
+  static Stream<QuerySnapshot<Map<String, dynamic>>> feedPostsStream(
+      {String? typeFilter}) {
+    Query<Map<String, dynamic>> query =
+        _db.collection('posts').orderBy('timestamp', descending: true);
     if (typeFilter != null && typeFilter != 'All') {
       query = query.where('type', isEqualTo: typeFilter);
     }
@@ -913,7 +1071,8 @@ class FirestoreService {
     String? doctorName,
     String? doctorRole,
   }) async {
-    final name = doctorName ?? _auth.currentUser?.displayName ?? 'Dr. Specialist';
+    final name =
+        doctorName ?? _auth.currentUser?.displayName ?? 'Dr. Specialist';
     final role = doctorRole ?? 'doctor';
 
     await _db.collection('posts').doc(postId).update({
@@ -936,7 +1095,8 @@ class FirestoreService {
     String? authorRole,
   }) async {
     final uid = _auth.currentUser?.uid ?? 'guest';
-    final name = authorName ?? _auth.currentUser?.displayName ?? 'Community Member';
+    final name =
+        authorName ?? _auth.currentUser?.displayName ?? 'Community Member';
     final role = authorRole ?? 'patient';
 
     final postRef = _db.collection('posts').doc(postId);
@@ -957,7 +1117,8 @@ class FirestoreService {
   }
 
   /// Stream of comments for a specific post
-  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(String postId) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> postCommentsStream(
+      String postId) {
     return _db
         .collection('posts')
         .doc(postId)
@@ -998,11 +1159,30 @@ class FirestoreService {
   // APPOINTMENTS & QUEUE MANAGEMENT
   // =========================================================================
 
-  static Future<List<Map<String, dynamic>>> fetchTodayQueue(String chamberId) async {
+  static Future<List<Map<String, dynamic>>> fetchTodayQueue(
+      String chamberId) async {
     try {
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return [];
+      final profile = await fetchUserProfile(uid);
+      final roles = (profile?['roles'] as Map?)?.cast<String, dynamic>() ?? {};
+      final doctorProfileId = profile?['doctorProfileId']?.toString();
+      final assignments = (profile?['operatorAssignments'] as List?)
+              ?.map((value) => value.toString())
+              .toList() ??
+          const <String>[];
+
       Query<Map<String, dynamic>> query = _db.collection('appointments');
-      if (chamberId != 'demo-chamber') {
+      if (roles['isDoctor'] == true &&
+          doctorProfileId != null &&
+          doctorProfileId.isNotEmpty) {
+        query = query.where('doctorId', isEqualTo: doctorProfileId);
+      } else if (roles['isOperator'] == true &&
+          assignments.contains(chamberId)) {
         query = query.where('chamberId', isEqualTo: chamberId);
+      } else {
+        // A queue must never fall back to every appointment in the database.
+        return [];
       }
       query = query.orderBy('queuePosition', descending: false);
 
@@ -1031,18 +1211,57 @@ class FirestoreService {
     String? operatorNote,
     String status = 'waiting',
   }) async {
-    final countSnap = await _db.collection('appointments').count().get();
+    final uid = _auth.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      throw StateError('You must be signed in to book an appointment.');
+    }
+
+    final profile = await fetchUserProfile(uid);
+    final roles = (profile?['roles'] as Map?)?.cast<String, dynamic>() ?? {};
+    final resolvedDoctorId =
+        (doctorId ?? profile?['doctorProfileId']?.toString())?.trim();
+    final isDoctorQueueEntry = roles['isDoctor'] == true &&
+        resolvedDoctorId != null &&
+        resolvedDoctorId.isNotEmpty;
+    final assignments = (profile?['operatorAssignments'] as List?)
+            ?.map((value) => value.toString())
+            .toList() ??
+        const <String>[];
+    final resolvedChamberId = (chamberId ?? '').trim();
+    final isAssignedOperator = roles['isOperator'] == true &&
+        resolvedChamberId.isNotEmpty &&
+        assignments.contains(resolvedChamberId);
+
+    if (!isDoctorQueueEntry && !isAssignedOperator) {
+      if (doctorId == null || doctorId.trim().isEmpty) {
+        throw StateError('This queue is not assigned to your account.');
+      }
+      final doctor = await _db.collection('doctors').doc(doctorId.trim()).get();
+      if (!doctor.exists || doctor.data()?['isClaimed'] != true) {
+        throw StateError(
+            'Appointments are available only for claimed doctor profiles.');
+      }
+    }
+
+    // Count only this creator's records. That query is allowed by the same
+    // owner rule and avoids leaking the global appointment count.
+    final countSnap = await _db
+        .collection('appointments')
+        .where('userId', isEqualTo: uid)
+        .count()
+        .get();
     final count = countSnap.count ?? 0;
 
     final data = <String, dynamic>{
       'patientName': patientName,
       'scheduledTime': Timestamp.fromDate(scheduledTime),
-      'chamberId': chamberId ?? 'demo-chamber',
-      'doctorId': doctorId ?? 'doctor_1',
+      'chamberId':
+          resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+      'doctorId': resolvedDoctorId,
       'operatorNote': operatorNote ?? '',
       'status': status,
       'queuePosition': count + 1,
-      'userId': _auth.currentUser?.uid ?? 'guest',
+      'userId': uid,
       'createdAt': FieldValue.serverTimestamp(),
     };
 
@@ -1055,9 +1274,11 @@ class FirestoreService {
     };
   }
 
-  static Future<void> updateAppointment(String id, Map<String, dynamic> updates) async {
+  static Future<void> updateAppointment(
+      String id, Map<String, dynamic> updates) async {
     final cleanUpdates = Map<String, dynamic>.from(updates);
-    if (cleanUpdates.containsKey('scheduledTime') && cleanUpdates['scheduledTime'] is String) {
+    if (cleanUpdates.containsKey('scheduledTime') &&
+        cleanUpdates['scheduledTime'] is String) {
       final dt = DateTime.tryParse(cleanUpdates['scheduledTime']);
       if (dt != null) {
         cleanUpdates['scheduledTime'] = Timestamp.fromDate(dt);
@@ -1066,7 +1287,8 @@ class FirestoreService {
     await _db.collection('appointments').doc(id).update(cleanUpdates);
   }
 
-  static Future<void> updateQueueOrder(List<Map<String, dynamic>> updates) async {
+  static Future<void> updateQueueOrder(
+      List<Map<String, dynamic>> updates) async {
     final batch = _db.batch();
     for (final u in updates) {
       final id = (u['id'] ?? u['_id']) as String?;
@@ -1091,5 +1313,155 @@ class FirestoreService {
     }
     await batch.commit();
   }
-}
 
+  static List<Doctor>? _cachedBundledDoctors;
+
+  /// Loads the full 6,000+ doctors bundled in local APK assets (0 Firestore reads)
+  static Future<List<Doctor>> getBundledDoctors() async {
+    if (_cachedBundledDoctors != null && _cachedBundledDoctors!.isNotEmpty) {
+      return _cachedBundledDoctors!;
+    }
+    try {
+      final jsonStr = await rootBundle.loadString('assets/data/bundled_doctors.json');
+      final List decoded = jsonDecode(jsonStr);
+      _cachedBundledDoctors = decoded.map((j) => Doctor.fromJson(j as Map<String, dynamic>)).toList();
+      return _cachedBundledDoctors!;
+    } catch (e) {
+      debugPrint('Error loading bundled doctors: $e');
+      final fallbackSeed = _defaultFallbackDoctors();
+      _cachedBundledDoctors = fallbackSeed.map((j) => Doctor.fromJson(j)).toList();
+      return _cachedBundledDoctors!;
+    }
+  }
+
+  static List<Map<String, dynamic>> _defaultFallbackDoctors() {
+    return [
+      {
+        '_id': 'doc_fallback_1',
+        'name': 'Dr. Nuzhat Saima',
+        'designation': 'Specialist Consultant',
+        'specialities': ['General Medicine'],
+        'education': ['MBBS', 'FCPS'],
+        'bmdcRegNumber': 'A-98765',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.9,
+        'ratingCount': 34,
+        'chambers': [
+          {
+            'hospitalName': 'Bup Medical',
+            'area': 'Mirpur',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+      {
+        '_id': 'doc_fallback_2',
+        'name': 'Dr. Md. Kamrul Islam',
+        'designation': 'Professor & Head',
+        'specialities': ['General Surgery', 'Urology'],
+        'education': ['MBBS', 'FCPS', 'FRCS'],
+        'bmdcRegNumber': 'A-12345',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.8,
+        'ratingCount': 120,
+        'chambers': [
+          {
+            'hospitalName': 'Dhaka Medical College Hospital',
+            'area': 'Bakshibazar',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+      {
+        '_id': 'doc_fallback_3',
+        'name': 'Dr. Farzana Rahman',
+        'designation': 'Associate Professor',
+        'specialities': ['General Medicine', 'Internal Medicine'],
+        'education': ['MBBS', 'FCPS', 'MRCP'],
+        'bmdcRegNumber': 'A-23456',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.9,
+        'ratingCount': 88,
+        'chambers': [
+          {
+            'hospitalName': 'Square Hospital',
+            'area': 'Panthapath',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+      {
+        '_id': 'doc_fallback_4',
+        'name': 'Dr. Alim Chowdhury',
+        'designation': 'Senior Consultant',
+        'specialities': ['Otolaryngology', 'ENT Specialist'],
+        'education': ['MBBS', 'DLO', 'FCPS'],
+        'bmdcRegNumber': 'A-34567',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.7,
+        'ratingCount': 52,
+        'chambers': [
+          {
+            'hospitalName': 'Green Life Hospital',
+            'area': 'Green Road',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+      {
+        '_id': 'doc_fallback_5',
+        'name': 'Dr. Selina Banu',
+        'designation': 'Professor & Consultant',
+        'specialities': ['Gynecology and Obstetrics'],
+        'education': ['MBBS', 'FCPS', 'MS (Gynae)'],
+        'bmdcRegNumber': 'A-45678',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.9,
+        'ratingCount': 95,
+        'chambers': [
+          {
+            'hospitalName': 'Popular Diagnostic Centre',
+            'area': 'Dhanmondi',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+      {
+        '_id': 'doc_fallback_6',
+        'name': 'Dr. Kamal Hossain',
+        'designation': 'Associate Professor',
+        'specialities': ['Dermatology'],
+        'education': ['MBBS', 'DDV', 'FCPS'],
+        'bmdcRegNumber': 'A-56789',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.8,
+        'ratingCount': 63,
+        'chambers': [
+          {
+            'hospitalName': 'Labaid Specialized Hospital',
+            'area': 'Dhanmondi',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+      {
+        '_id': 'doc_fallback_7',
+        'name': 'Dr. Jahangir Kabir',
+        'designation': 'Chief Cardiac Surgeon',
+        'specialities': ['Cardiology'],
+        'education': ['MBBS', 'MS (CTS)', 'FACS'],
+        'bmdcRegNumber': 'A-67890',
+        'isBmdcVerified': true,
+        'ratingAverage': 4.9,
+        'ratingCount': 142,
+        'chambers': [
+          {
+            'hospitalName': 'National Heart Foundation',
+            'area': 'Mirpur',
+            'location': 'Dhaka',
+          }
+        ],
+      },
+    ];
+  }
+}

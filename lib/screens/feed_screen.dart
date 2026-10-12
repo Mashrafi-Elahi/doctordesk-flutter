@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../services/auth_service.dart';
 import '../services/data_service.dart';
+import '../services/app_language.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'create_post_screen.dart';
 
@@ -20,7 +21,8 @@ class FeedScreen extends StatefulWidget {
 }
 
 class _FeedScreenState extends State<FeedScreen> {
-  String _selectedFilter = 'All'; // 'All' | 'Videos' | 'Articles' | 'Community Q&A'
+  String _selectedFilter =
+      'All'; // 'All' | 'Videos' | 'Articles' | 'Community Q&A'
 
   String? _mapFilterToType(String filter) {
     return switch (filter) {
@@ -50,9 +52,9 @@ class _FeedScreenState extends State<FeedScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Health Feed & Q&A',
-          style: TextStyle(fontWeight: FontWeight.bold),
+        title: Text(
+          tr('Health Feed & Q&A'),
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: const [
           ProfileAvatarButton(),
@@ -63,7 +65,8 @@ class _FeedScreenState extends State<FeedScreen> {
         onPressed: () => _openCreatePost(
           initialType: canPostMedia ? 'video' : 'question',
         ),
-        icon: Icon(canPostMedia ? Icons.add_circle_outline : Icons.help_outline),
+        icon:
+            Icon(canPostMedia ? Icons.add_circle_outline : Icons.help_outline),
         label: Text(canPostMedia ? 'New Post' : 'Ask Question'),
       ),
       body: Column(
@@ -75,7 +78,8 @@ class _FeedScreenState extends State<FeedScreen> {
               elevation: 0.5,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
-                side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.25)),
+                side: BorderSide(
+                    color: colorScheme.primary.withValues(alpha: 0.25)),
               ),
               child: InkWell(
                 borderRadius: BorderRadius.circular(14),
@@ -83,14 +87,17 @@ class _FeedScreenState extends State<FeedScreen> {
                   initialType: canPostMedia ? 'video' : 'question',
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14.0, vertical: 10.0),
                   child: Row(
                     children: [
                       CircleAvatar(
                         radius: 16,
                         backgroundColor: colorScheme.primaryContainer,
                         child: Icon(
-                          canPostMedia ? Icons.edit_note : Icons.chat_bubble_outline,
+                          canPostMedia
+                              ? Icons.edit_note
+                              : Icons.chat_bubble_outline,
                           size: 18,
                           color: colorScheme.onPrimaryContainer,
                         ),
@@ -101,7 +108,8 @@ class _FeedScreenState extends State<FeedScreen> {
                           canPostMedia
                               ? 'Share clinical guidance or YouTube video...'
                               : 'Ask a specialist a medical question...',
-                          style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                          style: TextStyle(
+                              color: Colors.grey.shade600, fontSize: 13),
                         ),
                       ),
                       FilledButton.tonal(
@@ -119,7 +127,8 @@ class _FeedScreenState extends State<FeedScreen> {
 
           // Feed Category Filters
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
             child: SizedBox(
               height: 38,
               child: ListView(
@@ -154,7 +163,8 @@ class _FeedScreenState extends State<FeedScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+                          const Icon(Icons.error_outline,
+                              size: 48, color: Colors.redAccent),
                           const SizedBox(height: 12),
                           Text('Failed to load feed: ${snapshot.error}',
                               textAlign: TextAlign.center,
@@ -190,7 +200,8 @@ class _FeedScreenState extends State<FeedScreen> {
                                 : (_selectedFilter == 'Community Q&A'
                                     ? 'No community questions yet'
                                     : 'Health feed is empty'),
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 16),
                           ),
                           const SizedBox(height: 8),
                           Text(
@@ -198,15 +209,20 @@ class _FeedScreenState extends State<FeedScreen> {
                                 ? 'Tap the button below to share a clinical YouTube guide or article.'
                                 : 'Ask a health question to receive answers from verified doctors.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                            style: TextStyle(
+                                color: Colors.grey[600], fontSize: 13),
                           ),
                           const SizedBox(height: 16),
                           FilledButton.icon(
                             onPressed: () => _openCreatePost(
                               initialType: canPostMedia ? 'video' : 'question',
                             ),
-                            icon: Icon(canPostMedia ? Icons.post_add : Icons.help_outline),
-                            label: Text(canPostMedia ? 'Share First Post' : 'Ask a Question'),
+                            icon: Icon(canPostMedia
+                                ? Icons.post_add
+                                : Icons.help_outline),
+                            label: Text(canPostMedia
+                                ? 'Share First Post'
+                                : 'Ask a Question'),
                           ),
                         ],
                       ),
@@ -219,7 +235,7 @@ class _FeedScreenState extends State<FeedScreen> {
                     await Future.delayed(const Duration(milliseconds: 300));
                   },
                   child: ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.fromLTRB(0, 8, 0, 88),
                     itemCount: docs.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (context, index) {
@@ -305,14 +321,16 @@ class _FeedCard extends StatelessWidget {
               controller: answerController,
               maxLines: 4,
               decoration: const InputDecoration(
-                hintText: 'Provide clinical answer, advice, and recommendations...',
+                hintText:
+                    'Provide clinical answer, advice, and recommendations...',
                 border: OutlineInputBorder(),
               ),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
             onPressed: () async {
               final text = answerController.text.trim();
@@ -325,7 +343,8 @@ class _FeedCard extends StatelessWidget {
                 );
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Answer posted successfully!')),
+                    const SnackBar(
+                        content: Text('Answer posted successfully!')),
                   );
                 }
               } catch (e) {
@@ -359,9 +378,12 @@ class _FeedCard extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Post?'),
-        content: const Text('This will remove the post and its comments from the health feed.'),
+        content: const Text(
+            'This will remove the post and its comments from the health feed.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -405,7 +427,9 @@ class _FeedCard extends StatelessWidget {
     final commentsCount = (data['commentsCount'] as int?) ?? 0;
     final answer = data['answer'] as Map<String, dynamic>?;
 
-    final canDelete = roles.isAdmin || roles.isModerator || (currentUid != null && currentUid == authorUid);
+    final canDelete = roles.isAdmin ||
+        roles.isModerator ||
+        (currentUid != null && currentUid == authorUid);
     final canAnswer = roles.canAnswerFaq;
 
     final badgeColor = switch (authorRole) {
@@ -445,7 +469,9 @@ class _FeedCard extends StatelessWidget {
                   child: Icon(
                     type == 'video'
                         ? Icons.ondemand_video
-                        : (type == 'question' ? Icons.help_outline : Icons.local_hospital_outlined),
+                        : (type == 'question'
+                            ? Icons.help_outline
+                            : Icons.local_hospital_outlined),
                     size: 20,
                     color: badgeColor,
                   ),
@@ -462,12 +488,14 @@ class _FeedCard extends StatelessWidget {
                               authorName,
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                           ),
                           const SizedBox(width: 6),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
                               color: badgeColor.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(6),
@@ -475,8 +503,10 @@ class _FeedCard extends StatelessWidget {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (isBmdcVerified || authorRole == 'doctor') ...[
-                                  Icon(Icons.verified, size: 10, color: badgeColor),
+                                if (isBmdcVerified ||
+                                    authorRole == 'doctor') ...[
+                                  Icon(Icons.verified,
+                                      size: 10, color: badgeColor),
                                   const SizedBox(width: 2),
                                 ],
                                 Text(
@@ -511,9 +541,11 @@ class _FeedCard extends StatelessWidget {
                         value: 'delete',
                         child: Row(
                           children: [
-                            Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                            Icon(Icons.delete_outline,
+                                size: 18, color: Colors.red),
                             SizedBox(width: 8),
-                            Text('Delete Post', style: TextStyle(color: Colors.red)),
+                            Text('Delete Post',
+                                style: TextStyle(color: Colors.red)),
                           ],
                         ),
                       ),
@@ -526,13 +558,15 @@ class _FeedCard extends StatelessWidget {
             // Post Title
             Text(
               title,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, height: 1.3),
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.bold, height: 1.3),
             ),
             if (content.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(
                 content,
-                style: TextStyle(fontSize: 13.5, color: Colors.grey[800], height: 1.4),
+                style: TextStyle(
+                    fontSize: 13.5, color: Colors.grey[800], height: 1.4),
               ),
             ],
             const SizedBox(height: 12),
@@ -559,7 +593,8 @@ class _FeedCard extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.verified, size: 16, color: Colors.green),
+                          const Icon(Icons.verified,
+                              size: 16, color: Colors.green),
                           const SizedBox(width: 6),
                           Text(
                             'Specialist Answer by ${answer['authorName'] ?? 'Doctor'}',
@@ -574,7 +609,10 @@ class _FeedCard extends StatelessWidget {
                       const SizedBox(height: 6),
                       Text(
                         answer['content'] ?? '',
-                        style: TextStyle(fontSize: 13, color: Colors.grey.shade900, height: 1.35),
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade900,
+                            height: 1.35),
                       ),
                     ],
                   ),
@@ -591,18 +629,21 @@ class _FeedCard extends StatelessWidget {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.hourglass_empty, size: 18, color: Colors.amber.shade800),
+                      Icon(Icons.hourglass_empty,
+                          size: 18, color: Colors.amber.shade800),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           'Awaiting verified doctor response...',
-                          style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
+                          style: TextStyle(
+                              fontSize: 12.5, color: Colors.amber.shade900),
                         ),
                       ),
                       if (canAnswer)
                         FilledButton.tonal(
                           onPressed: () => _showAnswerDialog(context),
-                          style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                          style: FilledButton.styleFrom(
+                              visualDensity: VisualDensity.compact),
                           child: const Text('Answer'),
                         ),
                     ],
@@ -628,7 +669,8 @@ class _FeedCard extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: () => _showAnswerDialog(context),
                     icon: const Icon(Icons.medical_services_outlined, size: 16),
-                    label: const Text('Provide Answer', style: TextStyle(fontSize: 12)),
+                    label: const Text('Provide Answer',
+                        style: TextStyle(fontSize: 12)),
                   ),
               ],
             ),
@@ -753,7 +795,9 @@ class _CommentsSheetState extends State<_CommentsSheet> {
           ? 'admin'
           : (roles.isModerator
               ? 'moderator'
-              : (roles.isDoctor ? 'doctor' : (roles.isOperator ? 'operator' : 'patient')));
+              : (roles.isDoctor
+                  ? 'doctor'
+                  : (roles.isOperator ? 'operator' : 'patient')));
 
       await DataService.addPostComment(
         postId: widget.postId,
@@ -801,7 +845,9 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                 children: [
                   Icon(Icons.chat_bubble_outline, size: 20),
                   SizedBox(width: 8),
-                  Text('Community Discussion', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('Community Discussion',
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ],
               ),
             ),
@@ -820,7 +866,8 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                   if (docs.isEmpty) {
                     return Center(
                       child: Text('No comments yet. Start the discussion!',
-                          style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                          style:
+                              TextStyle(color: Colors.grey[500], fontSize: 13)),
                     );
                   }
 
@@ -842,8 +889,11 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                               radius: 14,
                               backgroundColor: Colors.blue.shade100,
                               child: Text(
-                                author.isNotEmpty ? author[0].toUpperCase() : 'U',
-                                style: TextStyle(fontSize: 12, color: Colors.blue.shade900),
+                                author.isNotEmpty
+                                    ? author[0].toUpperCase()
+                                    : 'U',
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.blue.shade900),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -861,24 +911,31 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                                       children: [
                                         Text(
                                           author,
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12),
                                         ),
                                         const SizedBox(width: 6),
                                         Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 4, vertical: 1),
                                           decoration: BoxDecoration(
                                             color: Colors.blue.shade50,
-                                            borderRadius: BorderRadius.circular(4),
+                                            borderRadius:
+                                                BorderRadius.circular(4),
                                           ),
                                           child: Text(
                                             role,
-                                            style: TextStyle(fontSize: 9, color: Colors.blue.shade800),
+                                            style: TextStyle(
+                                                fontSize: 9,
+                                                color: Colors.blue.shade800),
                                           ),
                                         ),
                                       ],
                                     ),
                                     const SizedBox(height: 4),
-                                    Text(commentText, style: const TextStyle(fontSize: 13)),
+                                    Text(commentText,
+                                        style: const TextStyle(fontSize: 13)),
                                   ],
                                 ),
                               ),
@@ -906,8 +963,10 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                         decoration: InputDecoration(
                           hintText: 'Add a comment...',
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24)),
                         ),
                       ),
                     ),
@@ -918,7 +977,8 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                           ? const SizedBox(
                               width: 16,
                               height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
                             )
                           : const Icon(Icons.send, size: 18),
                     ),

@@ -5,6 +5,38 @@ const crypto = require('crypto');
 const { parse } = require('csv-parse/sync');
 const admin = require('firebase-admin');
 const geofire = require('geofire-common');
+const chambersOnly = process.argv.includes('--chambers-only');
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ')
+    .trim();
+}
+
+function buildSearchFields(doctor) {
+  const values = [
+    doctor.name,
+    doctor.designation,
+    ...(doctor.specialities || []),
+    ...(doctor.education || []),
+    ...(doctor.concentrations || []),
+    ...(doctor.chambers || []).flatMap((chamber) => [
+      chamber.hospitalName,
+      chamber.area,
+      chamber.location,
+    ]),
+  ];
+  const searchText = normalizeSearchText(values.filter(Boolean).join(' '));
+  const searchTokens = [...new Set(searchText.split(' ').filter(Boolean))];
+  const searchPrefixes = new Set();
+  for (const token of searchTokens) {
+    for (let length = 2; length <= token.length && length <= 16; length += 1) {
+      searchPrefixes.add(token.slice(0, length));
+    }
+  }
+  return { searchText, searchTokens, searchPrefixes: [...searchPrefixes] };
+}
 
 // 1. Locate dataset files (works from backend or flutter folder)
 const candidateCsvDirs = [
@@ -269,25 +301,28 @@ async function main() {
     }
   }
 
-  const doctorsList = Array.from(doctorMap.values()).map((doc) => ({
-    id: doc.id,
-    name: doc.name,
-    name_lower: doc.name_lower,
-    designation: doc.designation,
-    education: Array.from(doc.education),
-    specialities: Array.from(doc.specialities),
-    experienceYears: doc.experienceYears,
-    concentrations: Array.from(doc.concentrations),
-    chambers: doc.chambers,
-    bmdcRegNumber: doc.bmdcRegNumber,
-    isBmdcVerified: doc.isBmdcVerified,
-    isClaimed: doc.isClaimed,
-    claimedByUid: doc.claimedByUid,
-    certificateImageUrl: doc.certificateImageUrl,
-    ratingAverage: doc.ratingAverage,
-    ratingCount: doc.ratingCount,
-    bayesianRating: doc.bayesianRating,
-  }));
+  const doctorsList = Array.from(doctorMap.values()).map((doc) => {
+    const doctor = {
+      id: doc.id,
+      name: doc.name,
+      name_lower: doc.name_lower,
+      designation: doc.designation,
+      education: Array.from(doc.education),
+      specialities: Array.from(doc.specialities),
+      experienceYears: doc.experienceYears,
+      concentrations: Array.from(doc.concentrations),
+      chambers: doc.chambers,
+      bmdcRegNumber: doc.bmdcRegNumber,
+      isBmdcVerified: doc.isBmdcVerified,
+      isClaimed: doc.isClaimed,
+      claimedByUid: doc.claimedByUid,
+      certificateImageUrl: doc.certificateImageUrl,
+      ratingAverage: doc.ratingAverage,
+      ratingCount: doc.ratingCount,
+      bayesianRating: doc.bayesianRating,
+    };
+    return { ...doctor, ...buildSearchFields(doctor) };
+  });
 
   console.log(`Parsed ${doctorsList.length} distinct doctors from CSV.`);
 
@@ -330,14 +365,16 @@ async function main() {
   // Write to Firestore in batches
   const writer = new FirestoreBatchWriter(db);
 
-  console.log('Writing doctors to Firestore collection "doctors"...');
   let docCount = 0;
-  for (const doctor of doctorsList) {
-    const docRef = db.collection('doctors').doc(doctor.id);
-    await writer.set(docRef, doctor, { merge: true });
-    docCount++;
-    if (docCount % 500 === 0) {
-      console.log(`  Buffered/committed ${docCount} / ${doctorsList.length} doctors...`);
+  if (!chambersOnly) {
+    console.log('Writing doctors to Firestore collection "doctors"...');
+    for (const doctor of doctorsList) {
+      const docRef = db.collection('doctors').doc(doctor.id);
+      await writer.set(docRef, doctor, { merge: true });
+      docCount++;
+      if (docCount % 500 === 0) {
+        console.log(`  Buffered/committed ${docCount} / ${doctorsList.length} doctors...`);
+      }
     }
   }
 
@@ -347,16 +384,17 @@ async function main() {
     await writer.set(chamberRef, chamber, { merge: true });
   }
 
-  console.log('Writing meta/specialities document...');
-  const metaRef = db.collection('meta').doc('specialities');
-  await writer.set(metaRef, {
-    list: specialitiesArray,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  if (!chambersOnly) {
+    console.log('Writing meta/specialities document...');
+    const metaRef = db.collection('meta').doc('specialities');
+    await writer.set(metaRef, {
+      list: specialitiesArray,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
 
-  console.log('Writing config/specialty_rules document (grouped by specialty arrays)...');
-  const configRef = db.collection('config').doc('specialty_rules');
-  await writer.set(configRef, {
+    console.log('Writing config/specialty_rules document (grouped by specialty arrays)...');
+    const configRef = db.collection('config').doc('specialty_rules');
+    await writer.set(configRef, {
     version: 1,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     rules: {
@@ -401,14 +439,17 @@ async function main() {
         "pregnancy", "period problem", "gynae", "mashik", "গর্ভবতী", "মাসিক"
       ]
     }
-  }, { merge: true });
+    }, { merge: true });
+  }
 
   // Flush remaining batch
   const total = await writer.flush();
   console.log(`\n======================================================`);
   console.log(`Migration Complete (Idempotent)!`);
   console.log(`Total Firestore operations committed: ${total}`);
-  console.log(`  - Doctors: ${doctorsList.length} documents in 'doctors'`);
+  if (!chambersOnly) {
+    console.log(`  - Doctors: ${doctorsList.length} documents in 'doctors'`);
+  }
   console.log(`  - Chambers: ${chambersList.length} documents in 'chambers'`);
   console.log(`  - Meta: 'meta/specialities' created with ${specialitiesArray.length} specialities`);
   console.log(`======================================================`);
