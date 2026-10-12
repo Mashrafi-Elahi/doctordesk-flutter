@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 
 class GeminiSymptomResult {
@@ -15,11 +16,31 @@ class GeminiSymptomResult {
 }
 
 class GeminiService {
-  static final String _apiKey = const String.fromEnvironment('GEMINI_API_KEY')
-          .isNotEmpty
-      ? const String.fromEnvironment('GEMINI_API_KEY')
-      : ['AQ.Ab8RN', '6J0TwJ1Sy', 'GH9BLYvgK_', 's4bilSP7U4', 'IK78qZz4RV', 'Hn--GQ']
-          .join();
+  static String? _cachedApiKey;
+
+  static Future<String> _getApiKey() async {
+    if (_cachedApiKey != null && _cachedApiKey!.isNotEmpty) {
+      return _cachedApiKey!;
+    }
+    const envDefine = String.fromEnvironment('GEMINI_API_KEY');
+    if (envDefine.isNotEmpty) {
+      _cachedApiKey = envDefine;
+      return _cachedApiKey!;
+    }
+    try {
+      final envContent = await rootBundle.loadString('.env');
+      for (final rawLine in envContent.split('\n')) {
+        final line = rawLine.trim();
+        if (line.startsWith('GEMINI_API_KEY=')) {
+          _cachedApiKey = line.substring('GEMINI_API_KEY='.length).trim();
+          return _cachedApiKey!;
+        }
+      }
+    } catch (e) {
+      debugPrint('Could not load .env asset: $e');
+    }
+    return '';
+  }
 
   static const List<String> _models = [
     'gemini-2.5-flash',
@@ -47,6 +68,9 @@ STRICT RULES:
     final trimmed = query.trim();
     if (trimmed.isEmpty) return null;
 
+    final apiKey = await _getApiKey();
+    if (apiKey.isEmpty) return null;
+
     final requestBody = jsonEncode({
       'contents': [
         {
@@ -67,7 +91,7 @@ STRICT RULES:
           uri,
           headers: {
             'Content-Type': 'application/json',
-            'X-goog-api-key': _apiKey,
+            'X-goog-api-key': apiKey,
           },
           body: requestBody,
         );

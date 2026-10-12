@@ -53,4 +53,5 @@ scripts/package-lock.json
 serviceAccountKey.json
 build/
 *.apk
+.env
 
