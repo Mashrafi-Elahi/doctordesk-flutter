@@ -450,7 +450,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                   ),
                                   Text(
-                                    _greetingName.isNotEmpty ? _greetingName : 'DoctorDesk',
+                                    _greetingName.isNotEmpty ? _greetingName : 'DocDesk',
                                     style: GoogleFonts.poppins(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
@@ -1625,8 +1625,7 @@ class _DoctorListCard extends StatelessWidget {
               ),
             );
           },
-          child: Padding(
-            padding: const EdgeInsets.all(14.0),
+          child: Padding(padding: const EdgeInsets.all(14.0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

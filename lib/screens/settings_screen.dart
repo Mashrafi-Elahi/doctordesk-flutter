@@ -297,7 +297,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
 
           // About & Legal
-          _buildSectionHeader('ABOUT DOCTORDESK'),
+          _buildSectionHeader('ABOUT DOCDESK'),
           Card(
             child: Column(
               children: [
@@ -305,7 +305,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   leading: Icon(Icons.info_outline),
                   title: Text('App Version'),
                   subtitle:
-                      Text('DoctorDesk v1.0.4 • Bangladesh Healthcare Network'),
+                      Text('DocDesk v1.0.4 • Bangladesh Healthcare Network'),
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -320,7 +320,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       builder: (ctx) => AlertDialog(
                         title: const Text('Medical Disclaimer'),
                         content: const Text(
-                          'DoctorDesk provides verified doctor directory discovery, chamber queue management, and smart specialty recommendations.\n\nInformation provided in the app is not a substitute for formal clinical diagnosis. Always consult certified medical practitioners for emergencies.',
+                          'DocDesk provides verified doctor directory discovery, chamber queue management, and smart specialty recommendations.\n\nInformation provided in the app is not a substitute for formal clinical diagnosis. Always consult certified medical practitioners for emergencies.',
                           style: TextStyle(fontSize: 13, height: 1.4),
                         ),
                         actions: [
