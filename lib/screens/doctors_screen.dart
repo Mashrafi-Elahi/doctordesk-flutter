@@ -449,6 +449,56 @@ class _DoctorListCard extends StatelessWidget {
                                 : Colors.grey[500],
                           ),
                         ),
+                        const Spacer(),
+                        if (doctor.claimedByUid == null || doctor.claimedByUid!.isEmpty)
+                          InkWell(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => DoctorDetailScreen(doctorId: doctor.id)),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade50,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.blue.shade200),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.verified_user_outlined, size: 12, color: Colors.blue),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Claim this profile',
+                                    style: TextStyle(fontSize: 11, color: Colors.blue, fontWeight: FontWeight.w600),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else if (doctor.claimStatus == 'pending')
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.amber.shade300),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.hourglass_empty, size: 12, color: Colors.amber),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Claim Pending',
+                                  style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ],

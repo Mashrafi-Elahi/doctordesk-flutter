@@ -623,4 +623,14 @@ class DataService {
       restartFromBeginning: restartFromBeginning,
     );
   }
+
+  static Future<Map<String, dynamic>> assignDoctorToEmail({
+    required String doctorId,
+    required String email,
+  }) {
+    return FirestoreService.assignDoctorToEmail(
+      doctorId: doctorId,
+      email: email,
+    );
+  }
 }

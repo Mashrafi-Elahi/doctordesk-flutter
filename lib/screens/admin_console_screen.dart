@@ -109,6 +109,121 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       }
     }
   }
+
+  void _showAssignDoctorToEmailDialog() {
+    final doctorIdController = TextEditingController(text: 'doctor_nuzhat_saima');
+    final emailController = TextEditingController(text: 'nuzhatsaima.16@gmail.com');
+    bool assigning = false;
+    String? errorMsg;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            return AlertDialog(
+              title: const Text('Assign Doctor to Email'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Look up an existing registered user by email and assign a doctor profile to them.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: doctorIdController,
+                      decoration: const InputDecoration(
+                        labelText: 'Doctor Document ID',
+                        hintText: 'e.g. doctor_nuzhat_saima',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'User Email',
+                        hintText: 'e.g. nuzhatsaima.16@gmail.com',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    if (errorMsg != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        errorMsg!,
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: assigning ? null : () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: assigning
+                      ? null
+                      : () async {
+                          final docId = doctorIdController.text.trim();
+                          final targetEmail = emailController.text.trim();
+                          if (docId.isEmpty || targetEmail.isEmpty) {
+                            setDialogState(() {
+                              errorMsg = 'Doctor ID and Email are required.';
+                            });
+                            return;
+                          }
+                          setDialogState(() {
+                            assigning = true;
+                            errorMsg = null;
+                          });
+                          try {
+                            final res = await DataService.assignDoctorToEmail(
+                              doctorId: docId,
+                              email: targetEmail,
+                            );
+                            if (!dialogCtx.mounted) return;
+                            Navigator.of(dialogCtx).pop();
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Successfully linked $docId to ${res["email"]} (UID: ${res["uid"]})',
+                                ),
+                              ),
+                            );
+                            _loadDoctorApplications();
+                          } catch (e) {
+                            if (dialogCtx.mounted) {
+                              setDialogState(() {
+                                assigning = false;
+                                errorMsg = e.toString().replaceFirst('StateError: ', '');
+                              });
+                            }
+                          }
+                        },
+                  child: assigning
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Assign Doctor'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
   Future<void> _loadDoctorApplications() async {
     try {
       final apps = await DataService.fetchDoctorApplications();
@@ -1501,6 +1616,18 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
 
             // Claim Requests Section
             _sectionTitle('DOCTOR PROFILE CLAIM REQUESTS'),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.link, color: Colors.indigo),
+                title: const Text('Assign Doctor Profile to Email', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                subtitle: const Text('Link a doctor profile directly to a registered user account by email (e.g. Dr. Nuzhat Saima).', style: TextStyle(fontSize: 12)),
+                trailing: FilledButton.tonal(
+                  onPressed: _showAssignDoctorToEmailDialog,
+                  child: const Text('Assign'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),

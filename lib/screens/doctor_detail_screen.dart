@@ -125,14 +125,12 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       builder: (_) => _ClaimSheet(
         doctorId: widget.doctorId,
         doctorName: doctor.name,
-        onSuccess: () async {
-          await AuthService.saveRole(UserRole.doctor);
-          await AuthService.fetchUserRoles();
+        onSuccess: () {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Doctor profile claimed successfully! You now have full doctor privileges.',
+                  'Claim request submitted for admin review. No role is granted until verified.',
                 ),
                 duration: Duration(seconds: 4),
               ),
@@ -1037,6 +1035,29 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                 }
               },
               child: const Text('Doctor Desk'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (doctor.claimStatus == 'pending') {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.amber.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.amber.shade300),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.hourglass_empty, color: Colors.amber, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'A claim request has been submitted for this profile and is pending admin verification.',
+                style: TextStyle(color: Colors.amber.shade900, fontSize: 12.5),
+              ),
             ),
           ],
         ),

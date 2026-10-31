@@ -931,6 +931,9 @@ class FirestoreService {
     return true;
   }
 
+  /// Submits a claim request for a doctor profile.
+  /// Creates a document in `claim_requests` with status 'pending'.
+  /// No role is granted automatically (requires admin review & approval).
   static Future<Map<String, dynamic>> claimDoctor(
     String doctorId, {
     required String bmdcRegNumber,
@@ -942,58 +945,63 @@ class FirestoreService {
       doctor = await fetchDoctorById(doctorId);
     } catch (_) {}
 
+    final doctorName = doctor?.name ?? 'Dr. Specialist';
+    final speciality = doctor?.specialities.isNotEmpty == true ? doctor!.specialities.first : 'General Medicine';
+    final chamberName = doctor?.chambers.isNotEmpty == true ? doctor!.chambers.first.hospitalName : '';
+
+    String applicantName = '';
+    String applicantEmail = '';
+    try {
+      final userSnap = await _db.collection('users').doc(claimedByUid).get();
+      if (userSnap.exists) {
+        final uData = userSnap.data() ?? {};
+        applicantName = (uData['name'] ?? uData['displayName'] ?? '').toString();
+        applicantEmail = (uData['email'] ?? '').toString();
+      }
+    } catch (_) {}
+
+    final claimDocRef = await _db.collection('claim_requests').add({
+      'doctorId': doctorId,
+      'doctorName': doctorName,
+      'speciality': speciality,
+      'chamberName': chamberName,
+      'applicantUid': claimedByUid,
+      'applicantName': applicantName,
+      'applicantEmail': applicantEmail,
+      'bmdcNumber': bmdcRegNumber,
+      'certificateImageUrl': certificateImageUrl ?? '',
+      'status': 'pending',
+      'submittedAt': FieldValue.serverTimestamp(),
+    });
+
     final doctorRef = _db.collection('doctors').doc(doctorId);
-    final claimData = <String, dynamic>{
+    await doctorRef.set({
       'id': doctorId,
       '_id': doctorId,
       if (doctor != null) 'name': doctor.name,
       if (doctor != null) 'specialities': doctor.specialities,
-      if (doctor != null) 'experienceYears': doctor.experienceYears,
-      if (doctor != null) 'education': doctor.education,
-      if (doctor != null) 'designation': doctor.designation,
-      if (doctor != null) 'chambers': doctor.chambers.map((c) => c.toJson()).toList(),
+      'bmdcNumber': bmdcRegNumber,
       'bmdcRegNumber': bmdcRegNumber,
-      'claimedByUid': claimedByUid,
-      'certificateImageUrl': certificateImageUrl ?? '',
-      'isClaimed': true,
-      'isBmdcVerified': true,
-    };
-
-    // 1. Write doctor claim using set(merge: true) so it creates the document if missing
-    await doctorRef.set(claimData, SetOptions(merge: true));
-
-    // 2. Link the user account in users/{claimedByUid}
-    final userRef = _db.collection('users').doc(claimedByUid);
-    await userRef.set({
-      'name': doctor?.name ?? 'Dr. Specialist',
-      'roles': {
-        'isDoctor': true,
-      },
-      'chamberCount': (doctor?.chambers.isNotEmpty == true) ? doctor!.chambers.length : 1,
-      'doctorProfileId': doctorId,
-      'bmdcRegNumber': bmdcRegNumber,
-      'doctorProfile': {
-        'id': doctorId,
-        'name': doctor?.name ?? 'Dr. Specialist',
-        'bmdcRegNumber': bmdcRegNumber,
-        'isBmdcVerified': true,
-      },
+      'claimStatus': 'pending',
+      'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 3. Trigger in-app notification
+    // Notice: NO ROLE IS GRANTED AUTOMATICALLY. Admin must review and approve.
+
     try {
       await NotificationService.createNotification(
         userId: claimedByUid,
-        title: 'Doctor Profile Claimed',
-        body: 'You are now the verified doctor for ${doctor?.name ?? "your profile"}. You can now manage appointments and live queues.',
-        type: 'system',
+        title: 'Claim Request Submitted',
+        body: 'Your claim request for $doctorName has been submitted for admin verification.',
+        type: 'claim_pending',
         relatedId: doctorId,
       );
     } catch (_) {}
 
     return {
-      'isClaimed': true,
-      'isBmdcVerified': true,
+      'claimRequestId': claimDocRef.id,
+      'doctorId': doctorId,
+      'status': 'pending',
     };
   }
 
@@ -2513,5 +2521,55 @@ class FirestoreService {
     }
 
     onProgress(total, total, 'Upload complete! All $total doctors are live in Firestore.');
+  }
+
+  /// Links a doctor profile to an existing user by email.
+  /// Looks up user by email; throws if user does not exist (no placeholders written).
+  static Future<Map<String, dynamic>> assignDoctorToEmail({
+    required String doctorId,
+    required String email,
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+    final userSnap = await _db
+        .collection('users')
+        .where('email', isEqualTo: cleanEmail)
+        .limit(1)
+        .get();
+
+    if (userSnap.docs.isEmpty) {
+      throw StateError('No registered user found with email "$cleanEmail".');
+    }
+
+    final userDoc = userSnap.docs.first;
+    final uid = userDoc.id;
+    final userData = userDoc.data();
+    final existingRoles = Map<String, dynamic>.from((userData['roles'] as Map?) ?? const {});
+    existingRoles['isDoctor'] = true;
+
+    final batch = _db.batch();
+
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    batch.set(doctorRef, {
+      'claimedByUid': uid,
+      'isClaimed': true,
+      'claimStatus': 'claimed',
+      'status': 'active',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    batch.set(userDoc.reference, {
+      'roles': existingRoles,
+      'doctorProfileId': doctorId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    return {
+      'uid': uid,
+      'email': cleanEmail,
+      'name': userData['name'] ?? 'User',
+      'doctorId': doctorId,
+    };
   }
 }
