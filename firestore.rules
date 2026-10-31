@@ -40,7 +40,7 @@ service cloud.firestore {
         getUserData().doctorProfileId != null &&
         exists(/databases/$(database)/documents/doctors/$(getUserData().doctorProfileId)) &&
         get(/databases/$(database)/documents/doctors/$(getUserData().doctorProfileId)).data.claimedByUid == request.auth.uid &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['roles', 'operatorAssignments', 'updatedAt']) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['roles', 'operatorAssignments', 'assignedChambers', 'updatedAt']) &&
         (!('roles' in request.resource.data) ||
          !('roles' in resource.data) ||
          request.resource.data.roles.diff(resource.data.roles).affectedKeys().hasOnly(['isOperator'])) &&
@@ -332,8 +332,10 @@ service cloud.firestore {
           (
             request.resource.data.senderUid == request.auth.uid &&
             get(/databases/$(database)/documents/chats/$(chatId)).data.status == 'active' &&
-            request.time < get(/databases/$(database)/documents/chats/$(chatId)).data.expiresAt &&
-            get(/databases/$(database)/documents/chats/$(chatId)).data.messageCount < get(/databases/$(database)/documents/chats/$(chatId)).data.messageLimit &&
+            (!('expiresAt' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
+              request.time < get(/databases/$(database)/documents/chats/$(chatId)).data.expiresAt) &&
+            (!('messageLimit' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
+              get(/databases/$(database)/documents/chats/$(chatId)).data.messageCount < get(/databases/$(database)/documents/chats/$(chatId)).data.messageLimit) &&
             (
               request.auth.uid == get(/databases/$(database)/documents/chats/$(chatId)).data.patientUid ||
               request.auth.uid == get(/databases/$(database)/documents/chats/$(chatId)).data.doctorUid

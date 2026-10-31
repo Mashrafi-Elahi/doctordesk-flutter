@@ -2163,13 +2163,48 @@ class FirestoreService {
 
     try {
       final docLabel = doctorName ?? 'your doctor';
+      // 1. Patient: "Appointment Requested" (NOT "Confirmed")
       await NotificationService.createNotification(
         userId: uid,
-        title: 'Appointment Confirmed',
-        body: 'Appointment with $docLabel scheduled on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
-        type: 'appointment',
+        title: 'Appointment Requested',
+        body: 'Your request with $docLabel for ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year} has been submitted and is awaiting confirmation.',
+        type: 'appointment_requested',
         relatedId: docRef.id,
       );
+      // 2. Notify doctor (via claimedByUid on the doctor doc)
+      if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
+        try {
+          final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
+          final claimedByUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
+          final patName = (data['patientName'] ?? 'A patient').toString();
+          if (claimedByUid.isNotEmpty && claimedByUid != uid) {
+            await NotificationService.createNotification(
+              userId: claimedByUid,
+              title: 'New Appointment Request',
+              body: '$patName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
+              type: 'new_appointment_request',
+              relatedId: docRef.id,
+            );
+          }
+          // 3. Notify chamber operator
+          final chamberIdForNotify = resolvedChamberId;
+          if (chamberIdForNotify.isNotEmpty) {
+            try {
+              final chamberSnap = await _db.collection('chambers').doc(chamberIdForNotify).get();
+              final operatorUid = (chamberSnap.data()?['operatorUid'] ?? '').toString();
+              if (operatorUid.isNotEmpty && operatorUid != uid && operatorUid != claimedByUid) {
+                await NotificationService.createNotification(
+                  userId: operatorUid,
+                  title: 'New Appointment Request',
+                  body: '$patName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
+                  type: 'new_appointment_request',
+                  relatedId: docRef.id,
+                );
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
     } catch (_) {}
 
     return {

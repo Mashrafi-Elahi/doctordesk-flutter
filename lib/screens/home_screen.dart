@@ -26,6 +26,8 @@ import '../services/notification_service.dart';
 import '../services/update_checker.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_constants.dart';
+import '../services/firestore_service.dart';
+import '../services/appointment_queries.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int, {String? searchQuery})? onTabSwitch;
@@ -55,6 +57,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _isOffline = false;
   String? _error;
+
+  // Role-scoped appointment query data
+  String _doctorProfileId = '';
+  List<String> _operatorAssignments = [];
 
   // Search suggestions
   bool _showSuggestions = false;
@@ -180,27 +186,37 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 14),
             StreamBuilder<QuerySnapshot>(
-              stream: uid != null
-                  ? FirebaseFirestore.instance
-                      .collection('appointments')
-                      .snapshots()
-                  : null,
+              stream: uid == null
+                  ? null
+                  : widget.role == UserRole.doctor && _doctorProfileId.isNotEmpty
+                      ? AppointmentQueries.pendingRequestsForDoctor(_doctorProfileId).snapshots()
+                      : widget.role == UserRole.operator && _operatorAssignments.isNotEmpty
+                          ? AppointmentQueries.pendingRequestsForOperator(_operatorAssignments).snapshots()
+                          : null,
               builder: (ctx, apptSnap) {
                 final allDocs = apptSnap.data?.docs ?? [];
-                final todayStr = DateTime.now().toIso8601String().split('T')[0];
+                final now = DateTime.now();
+                final startOfDay = DateTime(now.year, now.month, now.day);
+                final endOfDay = startOfDay.add(const Duration(days: 1));
                 int todayCount = 0;
                 int pendingRequests = 0;
 
                 for (final doc in allDocs) {
                   final d = doc.data() as Map<String, dynamic>? ?? {};
                   final status = (d['status'] ?? '').toString();
-                  final scheduledTime = (d['scheduledTime'] ?? '').toString();
+                  final rawTime = d['scheduledTime'];
+                  DateTime? scheduledTime;
+                  if (rawTime is Timestamp) {
+                    scheduledTime = rawTime.toDate();
+                  }
 
                   if (status == 'requested') {
                     pendingRequests++;
                   }
-                  if ((status == 'confirmed' || status == 'waiting' || status == 'in_progress') &&
-                      scheduledTime.startsWith(todayStr)) {
+                  if ((status == 'confirmed' || status == 'in_progress') &&
+                      scheduledTime != null &&
+                      !scheduledTime.isBefore(startOfDay) &&
+                      scheduledTime.isBefore(endOfDay)) {
                     todayCount++;
                   }
                 }
@@ -510,6 +526,22 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
+      // Load role-specific profile data for scoped appointment queries
+      final uid = AuthService.currentUser?.uid;
+      if (uid != null) {
+        try {
+          final profile = await FirestoreService.fetchUserProfile(uid);
+          if (profile != null && mounted) {
+            setState(() {
+              _doctorProfileId = (profile['doctorProfileId'] ?? '').toString();
+              _operatorAssignments = ((profile['operatorAssignments'] as List?) ?? [])
+                  .map((e) => e.toString())
+                  .toList();
+            });
+          }
+        } catch (_) {}
+      }
+
       final prefs = await SharedPreferences.getInstance();
       final localTodayMood = prefs.getString('mood_$_todayDateKey');
       if (localTodayMood != null) {

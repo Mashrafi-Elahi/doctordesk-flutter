@@ -324,15 +324,37 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       return;
     }
 
-    final chambers = doctor.chambers
-        .map((c) => c.hospitalName ?? '')
-        .where((s) => s.isNotEmpty)
-        .toList();
-    if (chambers.isEmpty) {
-      chambers.add(doctor.chamber?.hospitalName ?? 'Main Consultation Chamber');
+    // Build (id, label) pairs -- chamberId must be the Firestore doc ID, not the name.
+    final chamberOptions = <({String id, String label})>[];
+    for (final c in doctor.chambers) {
+      final id = (c.id ?? '').trim();
+      final label = (c.hospitalName ?? '').trim();
+      if (id.isNotEmpty) {
+        chamberOptions.add((id: id, label: label.isEmpty ? 'Unnamed chamber' : label));
+      }
+    }
+    if (chamberOptions.isEmpty && doctor.chamber != null) {
+      final c = doctor.chamber!;
+      final id = (c.id ?? '').trim();
+      final label = (c.hospitalName ?? '').trim();
+      if (id.isNotEmpty) {
+        chamberOptions.add((id: id, label: label.isEmpty ? 'Main Chamber' : label));
+      }
+    }
+    if (chamberOptions.isEmpty) {
+      debugPrint('[Booking] No chamber IDs found for doctor ${doctor.id}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No bookable chamber found for this doctor. Please try again later.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
     }
 
-    String selectedChamber = chambers.first;
+    String selectedChamberId = chamberOptions.first.id;
     DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
     TimeOfDay selectedTime = const TimeOfDay(hour: 10, minute: 0);
     final patientNameCtrl = TextEditingController(
@@ -385,20 +407,20 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      initialValue: selectedChamber,
+                      initialValue: selectedChamberId,
                       decoration: const InputDecoration(
                         labelText: 'Select Chamber',
                         prefixIcon: Icon(Icons.location_on_outlined),
                         border: OutlineInputBorder(),
                         isDense: true,
                       ),
-                      items: chambers
-                          .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)))
+                      items: chamberOptions
+                          .map((opt) => DropdownMenuItem(
+                              value: opt.id, child: Text(opt.label)))
                           .toList(),
                       onChanged: (val) {
                         if (val != null) {
-                          setSheetState(() => selectedChamber = val);
+                          setSheetState(() => selectedChamberId = val);
                         }
                       },
                     ),
@@ -463,7 +485,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                           ? patientNameCtrl.text.trim()
                                           : 'Patient',
                                   scheduledTime: scheduled,
-                                  chamberId: selectedChamber,
+                                  chamberId: selectedChamberId,
                                   doctorId: doctor.id,
                                   doctorName: doctor.name,
                                   status: 'requested',
