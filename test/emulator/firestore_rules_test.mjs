@@ -123,6 +123,6 @@ describe('appointment authorization', () => {
       orderBy('createdAt', 'desc'),
     ));
     assert.equal(snapshot.docs.length, 1);
-    assert.equal(snapshot.docs.first.data().status, 'requested');
+    assert.equal(snapshot.docs[0].data().status, 'requested');
   });
 });

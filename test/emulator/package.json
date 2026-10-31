@@ -2,7 +2,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:rules": "node firestore_rules_test.mjs"
+    "test": "node --test firestore_rules_test.mjs",
+    "test:rules": "node --test firestore_rules_test.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.0",
