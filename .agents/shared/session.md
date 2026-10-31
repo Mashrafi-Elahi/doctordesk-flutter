@@ -60,3 +60,9 @@
 
 - Added `assets/dhaka_places.json` with 51 approximate Dhaka-area centers, Bengali labels, and Banglish aliases. Nearby Doctors now returns local area/chamber matches immediately (2+ characters), calls Photon in parallel after a 300 ms debounce, and uses Nominatim only for exact-address-shaped input with a one-request-per-second guard.
 - Network failures now log their HTTP/status details and show a visible suggestion error. This work is committed on branch `firebase-only` as `368b282` (`feat(location): add reliable Dhaka place suggestions`); no Firestore writes or migrations ran.
+
+## In-app update checker
+
+- Added a Firestore-backed Android update checker using `package_info_plus` and `url_launcher`. It checks `app_config/android` once after Home loads, shows a dismissible update dialog for optional releases, and enforces a non-dismissible update dialog below `minVersion`.
+- Added public-read/client-write-denied Firestore rules for `app_config`; deployed the merged rules successfully to `docdesk-1e4cc` on 2026-10-31.
+- Validation: `flutter analyze` passed with no issues and `flutter build apk --debug` produced `build/app/outputs/flutter-apk/app-debug.apk`.

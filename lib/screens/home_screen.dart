@@ -18,6 +18,7 @@ import '../widgets/chamber_accessibility.dart';
 import 'health_chat_screen.dart';
 import 'notifications_screen.dart';
 import '../services/notification_service.dart';
+import '../services/update_checker.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_constants.dart';
 
@@ -140,6 +141,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) UpdateChecker.checkForUpdate(context);
+    });
     _searchController.addListener(_onSearchInputChanged);
     _loadData();
     _authSubscription = AuthService.authStateChanges.listen((user) {

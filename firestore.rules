@@ -32,6 +32,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // App releases are public metadata and can only be changed outside clients.
+    match /app_config/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Admins: Read own admin doc.
     match /admins/{uid} {
       allow read: if request.auth != null && request.auth.uid == uid;
