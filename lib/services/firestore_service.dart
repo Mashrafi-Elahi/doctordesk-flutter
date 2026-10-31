@@ -651,6 +651,7 @@ class FirestoreService {
         await _db.collection('doctors').doc(doctorId).set({
           'ratingAverage': 0.0,
           'ratingCount': 0,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       } else {
         double sum = 0;
@@ -667,6 +668,7 @@ class FirestoreService {
         await _db.collection('doctors').doc(doctorId).set({
           'ratingAverage': double.parse(avg.toStringAsFixed(1)),
           'ratingCount': allReviews.length,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
     } catch (e) {
@@ -734,6 +736,7 @@ class FirestoreService {
         await _db.collection('doctors').doc(doctorId).set({
           'ratingAverage': double.parse(avg.toStringAsFixed(1)),
           'ratingCount': allReviews.length,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
     } catch (e) {
@@ -932,13 +935,13 @@ class FirestoreService {
     // 1. Update user document
     final userRef = _db.collection('users').doc(operatorUid);
     await userRef.set({
-      'name': operatorName,
-      'email': operatorEmail,
+
+
       'roles': {
         'isOperator': true,
       },
       'operatorAssignments': FieldValue.arrayUnion([chamberId]),
-      'assignedDoctorId': doctorId,
+      'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
     // 2. Update the doctor document's chambers list
@@ -987,6 +990,7 @@ class FirestoreService {
         currentAssignments.remove(chamberId);
         await userRef.set({
           'operatorAssignments': currentAssignments,
+          'updatedAt': FieldValue.serverTimestamp(),
           if (currentAssignments.isEmpty)
             'roles': {
               'isOperator': false,
@@ -1023,6 +1027,7 @@ class FirestoreService {
     String? phone,
     String? role,
     bool isDoctor = false,
+    String? photoUrl,
   }) async {
     try {
       final userRef = _db.collection('users').doc(uid);
@@ -1035,7 +1040,9 @@ class FirestoreService {
           'email': email ?? '',
           'name': name ?? '',
           'username': generatedUsername,
+          'photoUrl': photoUrl ?? '',
           'phone': phone ?? '',
+
           'roles': {
             'isDoctor': false,
             'isOperator': false,
@@ -1053,6 +1060,7 @@ class FirestoreService {
             'status': 'pending',
             'appliedAt': FieldValue.serverTimestamp(),
             'phone': phone ?? '',
+
             'name': name ?? '',
             'email': email ?? '',
           };
@@ -1100,6 +1108,11 @@ class FirestoreService {
             };
           }
         }
+        if (photoUrl != null && photoUrl.isNotEmpty && existing.data()?['photoUrl'] != photoUrl) {
+          updates['photoUrl'] = photoUrl;
+        }
+        updates['lastLoginAt'] = FieldValue.serverTimestamp();
+        updates['updatedAt'] = FieldValue.serverTimestamp();
         if (updates.isNotEmpty) {
           await userRef.update(updates);
         }

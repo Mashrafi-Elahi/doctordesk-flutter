@@ -55,4 +55,6 @@ serviceAccountKey.json
 build/
 *.apk
 .env
+tools/serviceAccount.json
+CODEBASE_REPORT.md
 

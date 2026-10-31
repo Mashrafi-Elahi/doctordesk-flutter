@@ -113,6 +113,7 @@ class AuthService {
       await ApiService.syncUser(
         uid: credential.user!.uid,
         email: email.trim(),
+        photoUrl: credential.user?.photoURL,
       );
       await fetchUserRoles();
       if (_currentUserRoles.isAdmin) {
@@ -153,6 +154,7 @@ class AuthService {
       await ApiService.syncUser(
         uid: credential.user!.uid,
         email: email.trim(),
+        photoUrl: credential.user?.photoURL,
         name: name ?? '',
         phone: phone ?? '',
         isDoctor: isDoctor,
@@ -201,6 +203,7 @@ class AuthService {
           email: user.email ?? '',
           name: user.displayName ?? '',
           isDoctor: isDoctor,
+          photoUrl: user.photoURL,
         );
       }
       await fetchUserRoles();

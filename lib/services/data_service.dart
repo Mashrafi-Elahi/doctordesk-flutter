@@ -207,6 +207,7 @@ class DataService {
     String? phone,
     String? role,
     bool isDoctor = false,
+    String? photoUrl,
   }) {
     if (isFirestore) {
       return FirestoreService.syncUser(
@@ -216,6 +217,7 @@ class DataService {
         phone: phone,
         role: role,
         isDoctor: isDoctor,
+        photoUrl: photoUrl,
       );
     }
     return ApiService.syncUser(
@@ -225,6 +227,7 @@ class DataService {
       phone: phone,
       role: role,
       isDoctor: isDoctor,
+      photoUrl: photoUrl,
     );
   }
 
