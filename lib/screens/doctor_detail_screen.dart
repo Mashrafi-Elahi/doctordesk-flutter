@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/doctor.dart';
+import '../models/user_role.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
@@ -124,15 +125,19 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       builder: (_) => _ClaimSheet(
         doctorId: widget.doctorId,
         doctorName: doctor.name,
-        onSuccess: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Claim submitted — BMDC verification will be reviewed manually within 2–3 business days.',
+        onSuccess: () async {
+          await AuthService.saveRole(UserRole.doctor);
+          await AuthService.fetchUserRoles();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Doctor profile claimed successfully! You now have full doctor privileges.',
+                ),
+                duration: Duration(seconds: 4),
               ),
-              duration: Duration(seconds: 5),
-            ),
-          );
+            );
+          }
           _loadDoctor();
         },
       ),
@@ -209,18 +214,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please log in to book an appointment.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-    if (!doctor.isClaimed ||
-        doctor.claimedByUid == null ||
-        doctor.claimedByUid!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'This doctor profile is not claimed yet, so appointments are unavailable.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -368,6 +361,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   scheduledTime: scheduled,
                                   chamberId: selectedChamber,
                                   doctorId: doctor.id,
+                                  doctorName: doctor.name,
                                   status: 'waiting',
                                 );
                                 if (ctx.mounted) Navigator.pop(ctx);
@@ -546,27 +540,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
-                        // Outlined "BOOK" button
-                        OutlinedButton(
-                          onPressed: () => _showBookingSheet(doctor),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: AppColors.primary, width: 1.5),
-                            backgroundColor: Colors.white,
-                            foregroundColor: AppColors.primary,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                            ),
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          child: Text(
-                            'BOOK',
-                            style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600),
-                          ),
-                        ),
                         if (doctor.chambers.isNotEmpty || doctor.chamber != null) ...[
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           Text(
                             doctor.chambers.isNotEmpty
                                 ? doctor.chambers.map((c) => c.hospitalName).whereType<String>().join(', ')
@@ -917,76 +892,94 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
 
     String buttonLabel = 'Write a review';
     if (isDoctor) {
-      buttonLabel = 'Rate as Doctor Specialist (Realtime Database)';
+      buttonLabel = 'Rate as Doctor Specialist (Peer review)';
     } else if (isOperator) {
-      buttonLabel = 'Rate as Chamber Operator (Realtime Database)';
+      buttonLabel = 'Rate as Chamber Operator';
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (_isReviewsLoading)
-          const Center(child: CircularProgressIndicator())
-        else if (_reviews.isEmpty)
-          Column(
-            children: [
-              Icon(Icons.rate_review_outlined,
-                  size: 40, color: Colors.grey[300]),
-              const SizedBox(height: 8),
-              Text(
-                'No reviews yet',
-                style: TextStyle(color: Colors.grey[500], fontSize: 14),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: FirestoreService.reviewsStream(widget.doctorId),
+      builder: (context, snapshot) {
+        final reviews = snapshot.data ?? _reviews;
+        final isLoading = snapshot.connectionState == ConnectionState.waiting && _isReviewsLoading;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isLoading)
+              const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
+            else if (reviews.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  children: [
+                    Icon(Icons.rate_review_outlined,
+                        size: 40, color: Colors.grey[300]),
+                    const SizedBox(height: 8),
+                    Text(
+                      'No reviews yet',
+                      style: TextStyle(color: Colors.grey[500], fontSize: 14),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Be the first to share your experience',
+                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Column(
+                children: reviews
+                    .map((review) => _ReviewCard(
+                          review: review,
+                          doctorId: widget.doctorId,
+                          onDeleted: () {
+                            _loadDoctor();
+                          },
+                        ))
+                    .toList(),
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Be the first to share your experience',
-                style: TextStyle(color: Colors.grey[400], fontSize: 12),
+            const SizedBox(height: 12),
+            if (!isSignedIn) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.visibility_outlined,
+                        size: 18, color: Colors.grey.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Guest Mode: Viewing ratings only. Sign in to rate this doctor.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () =>
+                          showDoctorDeskAuthModal(context, isSignUp: false),
+                      child: const Text('Sign In',
+                          style:
+                              TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              TextButton.icon(
+                onPressed: _openReviewSheet,
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: Text(buttonLabel),
               ),
             ],
-          )
-        else
-          Column(
-            children:
-                _reviews.map((review) => _ReviewCard(review: review)).toList(),
-          ),
-        const SizedBox(height: 12),
-        if (!isSignedIn) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.visibility_outlined,
-                    size: 18, color: Colors.grey.shade700),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Guest Mode: Viewing ratings only. Sign in to rate this doctor.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () =>
-                      showDoctorDeskAuthModal(context, isSignUp: false),
-                  child: const Text('Sign In',
-                      style:
-                          TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ),
-        ] else ...[
-          TextButton.icon(
-            onPressed: _openReviewSheet,
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: Text(buttonLabel),
-          ),
-        ],
-      ],
+          ],
+        );
+      },
     );
   }
 
@@ -995,7 +988,73 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   // ──────────────────────────────────────────────────────────────────────────
 
   Widget _buildClaimContent(Doctor doctor) {
-    final isSignedIn = AuthService.isSignedIn;
+    final isSignedIn = AuthService.isSignedIn && !AuthService.isGuest;
+    final currentUid = AuthService.currentUser?.uid;
+    final isClaimedByMe = doctor.isClaimed &&
+        doctor.claimedByUid != null &&
+        doctor.claimedByUid == currentUid;
+
+    if (isClaimedByMe) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.green.shade200),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.verified, color: Colors.green, size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'You have claimed this profile',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green.shade900,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    'BMDC: ${doctor.bmdcRegNumber ?? "Verified"} • Full control enabled',
+                    style: TextStyle(
+                      color: Colors.green.shade700,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            FilledButton.tonal(
+              onPressed: () async {
+                await AuthService.saveRole(UserRole.doctor);
+                await AuthService.fetchUserRoles();
+                if (mounted) {
+                  Navigator.of(context).pop();
+                }
+              },
+              child: const Text('Doctor Desk'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (doctor.isClaimed) {
+      return Row(
+        children: [
+          const Icon(Icons.verified, size: 18, color: AppColors.primary),
+          const SizedBox(width: 8),
+          Text(
+            'This profile is claimed and BMDC-verified.',
+            style: TextStyle(color: Colors.grey[700], fontSize: 13),
+          ),
+        ],
+      );
+    }
 
     if (!isSignedIn) {
       return Row(
@@ -1032,8 +1091,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
 
 class _ReviewCard extends StatelessWidget {
   final Map<String, dynamic> review;
+  final String? doctorId;
+  final VoidCallback? onDeleted;
 
-  const _ReviewCard({required this.review});
+  const _ReviewCard({
+    required this.review,
+    this.doctorId,
+    this.onDeleted,
+  });
 
   String _formatDate(String? isoString) {
     if (isoString == null || isoString.isEmpty) return '';
@@ -1064,11 +1129,16 @@ class _ReviewCard extends StatelessWidget {
     final int rating = (review['rating'] as num?)?.toInt() ?? 0;
     final String comment = (review['comment'] as String?) ?? '';
     final bool isProofVerified = review['isProofVerified'] == true;
+    final String? proofImageUrl = review['proofImageUrl'] as String?;
     final String dateStr = _formatDate(review['createdAt'] as String?);
     final String raterName = (review['raterName'] as String?)?.isNotEmpty == true
         ? (review['raterName'] as String)
         : 'Patient';
     final String? raterRole = review['raterRole'] as String?;
+    final currentUid = AuthService.currentUser?.uid;
+    final canDelete = (review['userId'] != null && review['userId'] == currentUid) ||
+        (review['patientUid'] != null && review['patientUid'] == currentUid) ||
+        AuthService.userRoles.isAdmin;
 
     final initials = raterName.isNotEmpty ? raterName[0].toUpperCase() : 'P';
 
@@ -1150,6 +1220,37 @@ class _ReviewCard extends StatelessWidget {
                   );
                 }),
               ),
+              if (canDelete) ...[
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: Icon(Icons.delete_outline, size: 18, color: Colors.red.shade400),
+                  tooltip: 'Delete review',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Delete Review'),
+                        content: const Text('Are you sure you want to delete this review?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                          FilledButton(
+                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Delete'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirm == true && doctorId != null) {
+                      final reviewId = review['id'] ?? '${doctorId}_$currentUid';
+                      await ApiService.deleteReview(doctorId!, reviewId);
+                      onDeleted?.call();
+                    }
+                  },
+                ),
+              ],
             ],
           ),
           if (isProofVerified) ...[
@@ -1158,7 +1259,7 @@ class _ReviewCard extends StatelessWidget {
               children: [
                 const Icon(Icons.check_circle, size: 13, color: AppColors.success),
                 const SizedBox(width: 4),
-                Text('Verified visit', style: AppTheme.captionSmall.copyWith(color: AppColors.success, fontWeight: FontWeight.w600)),
+                Text('Verified visit prescription', style: AppTheme.captionSmall.copyWith(color: AppColors.success, fontWeight: FontWeight.w600)),
               ],
             ),
           ],
@@ -1167,6 +1268,19 @@ class _ReviewCard extends StatelessWidget {
             Text(
               comment,
               style: AppTheme.body,
+            ),
+          ],
+          if (proofImageUrl != null && proofImageUrl.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                proofImageUrl,
+                height: 120,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
             ),
           ],
         ],
@@ -1409,11 +1523,15 @@ class _ReviewSheetState extends State<_ReviewSheet> {
     super.dispose();
   }
 
-  Future<void> _pickAndUploadProof() async {
+  Future<void> _pickAndUploadProof({ImageSource source = ImageSource.gallery}) async {
     final uid = AuthService.currentUser!.uid;
     final picker = ImagePicker();
-    final XFile? picked =
-        await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    final XFile? picked = await picker.pickImage(
+      source: source,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 70,
+    );
     if (picked == null) return;
 
     setState(() {
@@ -1422,24 +1540,33 @@ class _ReviewSheetState extends State<_ReviewSheet> {
       _proofDownloadUrl = null;
     });
 
-    final ref =
-        FirebaseStorage.instance.ref('reviews/$uid/${widget.doctorId}.jpg');
-    final task = ref.putFile(_proofFile!);
+    try {
+      final fileName = 'proof_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final ref = FirebaseStorage.instance.ref('reviews/$uid/$fileName');
+      final task = ref.putFile(_proofFile!);
 
-    task.snapshotEvents.listen((snapshot) {
+      task.snapshotEvents.listen((snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _uploadProgress = snapshot.bytesTransferred / snapshot.totalBytes;
+        });
+      });
+
+      final snap = await task;
+      final url = await snap.ref.getDownloadURL();
       if (!mounted) return;
       setState(() {
-        _uploadProgress = snapshot.bytesTransferred / snapshot.totalBytes;
+        _proofDownloadUrl = url;
+        _uploadProgress = null;
       });
-    });
-
-    final snap = await task;
-    final url = await snap.ref.getDownloadURL();
-    if (!mounted) return;
-    setState(() {
-      _proofDownloadUrl = url;
-      _uploadProgress = null;
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _uploadProgress = null);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to upload image: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _submit() async {
@@ -1567,65 +1694,94 @@ class _ReviewSheetState extends State<_ReviewSheet> {
             const SizedBox(height: 16),
 
             // Proof upload
-            Text('Proof of visit (optional)',
+            Text('Attach prescription or visit photo (optional)',
                 style: theme.textTheme.labelMedium
-                    ?.copyWith(color: Colors.grey[600])),
+                    ?.copyWith(color: Colors.grey[700], fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(
-              'Upload a prescription photo as proof of visit (optional). '
-              'This photo is used only for verification — it will not be shown to other users.',
+              'Upload a prescription photo as proof of visit (compressed for fast mobile upload).',
               style: TextStyle(color: Colors.grey[500], fontSize: 12),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                IconButton.outlined(
-                  icon: const Icon(Icons.upload_file),
-                  onPressed:
-                      _uploadProgress != null ? null : _pickAndUploadProof,
-                  tooltip: 'Upload prescription photo',
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _uploadProgress != null
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            LinearProgressIndicator(value: _uploadProgress),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${((_uploadProgress ?? 0) * 100).toStringAsFixed(0)}% uploaded',
-                              style: TextStyle(
-                                  fontSize: 12, color: Colors.grey[600]),
-                            ),
-                          ],
-                        )
-                      : _proofDownloadUrl != null
-                          ? Row(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(6),
-                                  child: Image.file(_proofFile!,
-                                      width: 48, height: 48, fit: BoxFit.cover),
-                                ),
-                                const SizedBox(width: 8),
-                                const Icon(Icons.check_circle,
-                                    color: Colors.green, size: 20),
-                                const SizedBox(width: 4),
-                                Text('Uploaded',
-                                    style: TextStyle(
-                                        color: Colors.green[700],
-                                        fontSize: 13)),
-                              ],
-                            )
-                          : Text(
-                              'No photo selected',
-                              style: TextStyle(
-                                  color: Colors.grey[600], fontSize: 13),
-                            ),
-                ),
-              ],
-            ),
+            const SizedBox(height: 10),
+            if (_proofFile != null) ...[
+              Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.file(_proofFile!,
+                        width: double.infinity, height: 140, fit: BoxFit.cover),
+                  ),
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: CircleAvatar(
+                      radius: 16,
+                      backgroundColor: Colors.black54,
+                      child: IconButton(
+                        icon: const Icon(Icons.close, size: 16, color: Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _proofFile = null;
+                            _proofDownloadUrl = null;
+                            _uploadProgress = null;
+                          });
+                        },
+                      ),
+                    ),
+                  ),
+                  if (_uploadProgress != null)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black38,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircularProgressIndicator(
+                                value: _uploadProgress,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${((_uploadProgress ?? 0) * 100).toStringAsFixed(0)}% uploaded',
+                                style: const TextStyle(color: Colors.white, fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ] else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.camera_alt_outlined, size: 18),
+                      label: const Text('Camera'),
+                      onPressed: _uploadProgress != null
+                          ? null
+                          : () => _pickAndUploadProof(source: ImageSource.camera),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.photo_library_outlined, size: 18),
+                      label: const Text('Gallery'),
+                      onPressed: _uploadProgress != null
+                          ? null
+                          : () => _pickAndUploadProof(source: ImageSource.gallery),
+                    ),
+                  ),
+                ],
+              ),
+            ],
 
             const SizedBox(height: 24),
 

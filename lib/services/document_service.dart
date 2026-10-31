@@ -56,14 +56,22 @@ class HealthDocument {
 }
 
 class DocumentService {
-  static const String _prefsKey = 'health_documents_v1';
+  static String get _prefsKey {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return 'health_documents_guest';
+    return 'health_documents_$uid';
+  }
+
   static final ImagePicker _picker = ImagePicker();
 
   // ── Local Storage ────────────────────────────────────────────────────────
 
-  /// Loads all locally stored documents for this device.
+  /// Loads all locally stored documents for the current signed in user.
   static Future<List<HealthDocument>> loadLocalDocuments() async {
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return [];
+
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_prefsKey);
       if (raw == null || raw.isEmpty) return [];
@@ -78,7 +86,7 @@ class DocumentService {
     }
   }
 
-  /// Saves the full documents list back to SharedPreferences.
+  /// Saves the full documents list back to SharedPreferences for this user.
   static Future<void> _saveList(List<HealthDocument> docs) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
@@ -92,10 +100,24 @@ class DocumentService {
     required String type,
     bool fromCamera = false,
   }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('Please sign in to upload and store health documents.');
+    }
     try {
       final XFile? file = fromCamera
-          ? await _picker.pickImage(source: ImageSource.camera, imageQuality: 85)
-          : await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+          ? await _picker.pickImage(
+              source: ImageSource.camera,
+              maxWidth: 1024,
+              maxHeight: 1024,
+              imageQuality: 70,
+            )
+          : await _picker.pickImage(
+              source: ImageSource.gallery,
+              maxWidth: 1024,
+              maxHeight: 1024,
+              imageQuality: 70,
+            );
 
       if (file == null) return null;
 

@@ -51,8 +51,9 @@ class DataService {
   static Future<List<Doctor>> fetchNearbyDoctors({
     required double lat,
     required double lng,
-    int radiusKm = 10,
+    int radiusKm = 8,
     String? speciality,
+    String? areaFilter,
     int page = 1,
     int limit = 20,
   }) {
@@ -62,6 +63,7 @@ class DataService {
         lng: lng,
         radiusKm: radiusKm,
         speciality: speciality,
+        areaFilter: areaFilter,
         page: page,
         limit: limit,
       );
@@ -71,6 +73,7 @@ class DataService {
       lng: lng,
       radiusKm: radiusKm,
       speciality: speciality,
+      areaFilter: areaFilter,
       page: page,
       limit: limit,
     );
@@ -310,6 +313,7 @@ class DataService {
     required String title,
     String? content,
     String? youtubeUrl,
+    String? imageUrl,
     String? authorName,
     String? authorRole,
     bool isBmdcVerified = false,
@@ -320,6 +324,7 @@ class DataService {
         title: title,
         content: content,
         youtubeUrl: youtubeUrl,
+        imageUrl: imageUrl,
         authorName: authorName,
         authorRole: authorRole,
         isBmdcVerified: isBmdcVerified,
@@ -330,6 +335,7 @@ class DataService {
       title: title,
       content: content,
       youtubeUrl: youtubeUrl,
+      imageUrl: imageUrl,
       authorName: authorName,
       authorRole: authorRole,
       isBmdcVerified: isBmdcVerified,
@@ -393,6 +399,20 @@ class DataService {
       return FirestoreService.deleteFeedPost(postId);
     }
     return ApiService.deleteFeedPost(postId);
+  }
+
+  static Future<void> deleteDoctorAnswer(String postId) {
+    if (isFirestore) {
+      return FirestoreService.deleteDoctorAnswer(postId);
+    }
+    return Future.value();
+  }
+
+  static Future<void> deletePostComment(String postId, String commentId) {
+    if (isFirestore) {
+      return FirestoreService.deletePostComment(postId, commentId);
+    }
+    return Future.value();
   }
 
   // --- MODERATOR MANAGEMENT ---
@@ -461,6 +481,7 @@ class DataService {
     required DateTime scheduledTime,
     String? chamberId,
     String? doctorId,
+    String? doctorName,
     String? operatorNote,
     String status = 'waiting',
   }) {
@@ -470,6 +491,7 @@ class DataService {
         scheduledTime: scheduledTime,
         chamberId: chamberId,
         doctorId: doctorId,
+        doctorName: doctorName,
         operatorNote: operatorNote,
         status: status,
       );
@@ -479,6 +501,7 @@ class DataService {
       scheduledTime: scheduledTime,
       chamberId: chamberId,
       doctorId: doctorId,
+      doctorName: doctorName,
       operatorNote: operatorNote,
       status: status,
     );
@@ -511,5 +534,80 @@ class DataService {
       return FirestoreService.clearAllAppointments();
     }
     return ApiService.clearAllAppointments();
+  }
+
+  static Future<Map<String, dynamic>> updateUsername({
+    required String uid,
+    required String newUsername,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.updateUsername(uid: uid, newUsername: newUsername);
+    }
+    return Future.value({'success': true, 'username': newUsername});
+  }
+
+  static Future<List<Map<String, dynamic>>> searchUsersByUsername(String query) {
+    if (isFirestore) {
+      return FirestoreService.searchUsersByUsername(query);
+    }
+    return Future.value([]);
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchChambersDirectory({String? areaFilter}) {
+    if (isFirestore) {
+      return FirestoreService.fetchChambersDirectory(areaFilter: areaFilter);
+    }
+    return Future.value([]);
+  }
+
+  static Future<void> applyForDeskOperator({
+    required String chamberId,
+    required String chamberName,
+    required String doctorId,
+    required String doctorName,
+    String? note,
+    String? phone,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.applyForDeskOperator(
+        chamberId: chamberId,
+        chamberName: chamberName,
+        doctorId: doctorId,
+        doctorName: doctorName,
+        note: note,
+        phone: phone,
+      );
+    }
+    return Future.value();
+  }
+
+  static Future<void> approveOperatorApplication({
+    required String applicationId,
+    required String doctorId,
+    required String chamberId,
+    required String applicantUid,
+    required String applicantName,
+    required String applicantEmail,
+    required String chamberName,
+  }) {
+    if (isFirestore) {
+      return FirestoreService.approveOperatorApplication(
+        applicationId: applicationId,
+        doctorId: doctorId,
+        chamberId: chamberId,
+        applicantUid: applicantUid,
+        applicantName: applicantName,
+        applicantEmail: applicantEmail,
+        chamberName: chamberName,
+      );
+    }
+    return Future.value();
+  }
+
+  static Future<void> rejectOperatorApplication(String applicationId) {
+    if (isFirestore) {
+      return FirestoreService.rejectOperatorApplication(applicationId);
+    }
+    return Future.value();
   }
 }

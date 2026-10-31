@@ -257,8 +257,9 @@ class ApiService {
   static Future<List<Doctor>> fetchNearbyDoctors({
     required double lat,
     required double lng,
-    int radiusKm = 10,
+    int radiusKm = 8,
     String? speciality,
+    String? areaFilter,
     int page = 1,
     int limit = 20,
   }) async {
@@ -268,6 +269,7 @@ class ApiService {
         lng: lng,
         radiusKm: radiusKm,
         speciality: speciality,
+        areaFilter: areaFilter,
         page: page,
         limit: limit,
       );
@@ -403,6 +405,12 @@ class ApiService {
     }
     throw Exception(
         'fetchReviews: HTTP ${response.statusCode} — ${response.reasonPhrase}');
+  }
+
+  static Future<void> deleteReview(String doctorId, String reviewId) async {
+    if (FirestoreConfig.useFirestore) {
+      return FirestoreService.deleteReview(doctorId, reviewId);
+    }
   }
 
   /// POST /api/v1/doctors/:id/reviews
@@ -669,6 +677,7 @@ class ApiService {
     required String title,
     String? content,
     String? youtubeUrl,
+    String? imageUrl,
     String? authorName,
     String? authorRole,
     bool isBmdcVerified = false,
@@ -679,6 +688,7 @@ class ApiService {
         title: title,
         content: content,
         youtubeUrl: youtubeUrl,
+        imageUrl: imageUrl,
         authorName: authorName,
         authorRole: authorRole,
         isBmdcVerified: isBmdcVerified,
@@ -776,6 +786,7 @@ class ApiService {
     required DateTime scheduledTime,
     String? chamberId,
     String? doctorId,
+    String? doctorName,
     String? operatorNote,
     String status = 'waiting',
   }) async {
@@ -785,6 +796,7 @@ class ApiService {
         scheduledTime: scheduledTime,
         chamberId: chamberId,
         doctorId: doctorId,
+        doctorName: doctorName,
         operatorNote: operatorNote,
         status: status,
       );

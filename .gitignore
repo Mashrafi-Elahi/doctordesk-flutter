@@ -48,6 +48,7 @@ app.*.map.json
 scripts/node_modules/
 scripts/package-lock.json
 *-sa.json
+*service-account*.json
 *serviceAccount*.json
 *adminsdk*.json
 serviceAccountKey.json

@@ -383,7 +383,7 @@ class DoctorSearchIndex {
   // SPECIALTY → SYMPTOMS MAP (inverse, built once at startup)
   // Lets us add symptom keywords to a doctor's index purely from their specialty.
   // =========================================================================
-  static late final Map<String, List<String>> _specialtyToSymptoms = _buildSpecialtyToSymptoms();
+  static final Map<String, List<String>> _specialtyToSymptoms = _buildSpecialtyToSymptoms();
 
   static Map<String, List<String>> _buildSpecialtyToSymptoms() {
     final result = <String, List<String>>{};
@@ -736,7 +736,9 @@ class DoctorSearchIndex {
             final expAbbrevs = specialtyAbbreviations[normExp];
             if (expAbbrevs != null) {
               values.addAll(expAbbrevs);
-              expAbbrevs.forEach((e) => canonicalNames.add(normalize(e)));
+              for (final e in expAbbrevs) {
+                canonicalNames.add(normalize(e));
+              }
             }
           }
         }

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/app_language.dart';
@@ -31,16 +33,41 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
           actions: const [
             ProfileAvatarButton(),
           ],
-          bottom: TabBar(
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            tabs: [
-              Tab(text: tr('Upcoming')),
-              Tab(text: tr('Past Visits')),
-            ],
-            labelColor: theme.colorScheme.primary,
-            unselectedLabelColor: Colors.grey[600],
-            indicatorColor: theme.colorScheme.primary,
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(52),
+            child: Container(
+              height: 42,
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: TabBar(
+                isScrollable: false,
+                indicatorSize: TabBarIndicatorSize.tab,
+                indicator: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                labelColor: theme.colorScheme.primary,
+                labelStyle: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: theme.colorScheme.primary,
+                ),
+                unselectedLabelColor: Colors.white,
+                unselectedLabelStyle: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                ),
+                dividerColor: Colors.transparent,
+                tabs: [
+                  Tab(text: tr('Upcoming')),
+                  Tab(text: tr('Past Visits')),
+                ],
+              ),
+            ),
           ),
         ),
         body: currentUid == null
@@ -828,6 +855,30 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
                         style: TextStyle(fontSize: 13, color: Colors.grey),
                       ),
                     ],
+                    const SizedBox(height: 14),
+                    const Divider(height: 1),
+                    const SizedBox(height: 10),
+                    Text(
+                      selectedFeeling != null
+                          ? 'Change mood for this date:'
+                          : 'Log mood for this date:',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _calendarMoodButton('great', '🌟', 'Great', selectedKey, selectedFeeling),
+                        _calendarMoodButton('good', '😊', 'Good', selectedKey, selectedFeeling),
+                        _calendarMoodButton('okay', '😐', 'Okay', selectedKey, selectedFeeling),
+                        _calendarMoodButton('low', '😔', 'Low', selectedKey, selectedFeeling),
+                        _calendarMoodButton('unwell', '🤒', 'Unwell', selectedKey, selectedFeeling),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -939,6 +990,70 @@ class _HealthCalendarTabState extends State<_HealthCalendarTab> {
         ],
       ),
     );
+  }
+
+  Widget _calendarMoodButton(
+    String key,
+    String emoji,
+    String label,
+    String dateKey,
+    String? currentFeeling,
+  ) {
+    final isSelected = currentFeeling == key;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => _onLogCalendarMood(key, dateKey),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFE3F2FD) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF1E88E5) : Colors.grey.shade300,
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 20)),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                color: isSelected ? const Color(0xFF1E88E5) : Colors.grey.shade800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _onLogCalendarMood(String key, String dateKey) async {
+    setState(() {
+      _dayToFeeling[dateKey] = key;
+    });
+
+    final now = DateTime.now();
+    final todayKey = _dateKey(now);
+    if (dateKey == todayKey) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('mood_$todayKey', key);
+    }
+
+    await ApiService.logFeeling(feeling: key);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Mood updated to ${key.toUpperCase()} for this date!'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Widget _legendItem(Color color, String text) {

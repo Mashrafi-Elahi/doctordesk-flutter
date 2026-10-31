@@ -373,6 +373,44 @@ class _FeedCard extends StatelessWidget {
     );
   }
 
+  void _retractDoctorAnswer(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Retract Specialist Answer?'),
+        content: const Text(
+            'This will remove your medical answer from this health question.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Retract'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await DataService.deleteDoctorAnswer(postId);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Doctor answer retracted.')),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to retract answer: $e')),
+          );
+        }
+      }
+    }
+  }
+
   void _confirmDelete(BuildContext context) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -431,6 +469,11 @@ class _FeedCard extends StatelessWidget {
         roles.isModerator ||
         (currentUid != null && currentUid == authorUid);
     final canAnswer = roles.canAnswerFaq;
+    final canRetractAnswer = (answer != null &&
+            currentUid != null &&
+            answer['authorUid'] == currentUid) ||
+        roles.isAdmin ||
+        roles.isModerator;
 
     final badgeColor = switch (authorRole) {
       'admin' => Colors.purple,
@@ -577,6 +620,20 @@ class _FeedCard extends StatelessWidget {
               const SizedBox(height: 12),
             ],
 
+            // Attached Image (for health question/tip photo)
+            if (data['imageUrl'] != null && data['imageUrl'].toString().isNotEmpty) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  data['imageUrl'].toString(),
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
             // Question Answer Box (for Q&A posts)
             if (type == 'question') ...[
               if (answer != null) ...[
@@ -596,14 +653,25 @@ class _FeedCard extends StatelessWidget {
                           const Icon(Icons.verified,
                               size: 16, color: Colors.green),
                           const SizedBox(width: 6),
-                          Text(
-                            'Specialist Answer by ${answer['authorName'] ?? 'Doctor'}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12.5,
-                              color: Colors.green.shade900,
+                          Expanded(
+                            child: Text(
+                              'Specialist Answer by ${answer['authorName'] ?? 'Doctor'}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12.5,
+                                color: Colors.green.shade900,
+                              ),
                             ),
                           ),
+                          if (canRetractAnswer)
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline,
+                                  size: 16, color: Colors.redAccent),
+                              tooltip: 'Retract / Delete Answer',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onPressed: () => _retractDoctorAnswer(context),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 6),
@@ -931,6 +999,26 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                                                 color: Colors.blue.shade800),
                                           ),
                                         ),
+                                        const Spacer(),
+                                        if ((c['userId'] != null &&
+                                                c['userId'] ==
+                                                    AuthService
+                                                        .currentUser?.uid) ||
+                                            AuthService.userRoles.isAdmin ||
+                                            AuthService.userRoles.isModerator)
+                                          IconButton(
+                                            icon: Icon(Icons.delete_outline,
+                                                size: 15,
+                                                color: Colors.red.shade400),
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                            tooltip: 'Delete comment',
+                                            onPressed: () async {
+                                              final commentId = docs[index].id;
+                                              await DataService.deletePostComment(
+                                                  widget.postId, commentId);
+                                            },
+                                          ),
                                       ],
                                     ),
                                     const SizedBox(height: 4),

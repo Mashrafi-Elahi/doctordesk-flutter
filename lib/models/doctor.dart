@@ -5,22 +5,34 @@ class Chamber {
   final String? hospitalName;
   final String? area;
   final String? location;
+  final double? lat;
+  final double? lng;
   final String? visitingHours;
   final int? fee;
   final ChamberAccessibility? accessibility;
   final bool isAccessible;
   final List<String> accessibilityFeatures;
+  final bool hasOperator;
+  final String? operatorUid;
+  final String? operatorName;
+  final String? operatorEmail;
 
   Chamber({
     this.id,
     this.hospitalName,
     this.area,
     this.location,
+    this.lat,
+    this.lng,
     this.visitingHours,
     this.fee,
     this.accessibility,
     this.isAccessible = false,
     this.accessibilityFeatures = const [],
+    this.hasOperator = false,
+    this.operatorUid,
+    this.operatorName,
+    this.operatorEmail,
   });
 
   factory Chamber.fromJson(Map<String, dynamic> json) {
@@ -48,11 +60,17 @@ class Chamber {
       hospitalName: (json['hospitalName'] ?? json['name']) as String?,
       area: json['area'] as String?,
       location: json['location'] as String?,
+      lat: (json['lat'] as num?)?.toDouble(),
+      lng: (json['lng'] as num?)?.toDouble(),
       visitingHours: json['visitingHours'] as String?,
       fee: (json['fee'] as num?)?.toInt(),
       accessibility: accessibility,
       isAccessible: rawIsAccessible,
       accessibilityFeatures: features,
+      hasOperator: json['hasOperator'] == true,
+      operatorUid: json['operatorUid'] as String?,
+      operatorName: json['operatorName'] as String?,
+      operatorEmail: json['operatorEmail'] as String?,
     );
   }
 
@@ -61,11 +79,17 @@ class Chamber {
     'hospitalName': hospitalName,
     'area': area,
     'location': location,
+    if (lat != null) 'lat': lat,
+    if (lng != null) 'lng': lng,
     if (visitingHours != null) 'visitingHours': visitingHours,
     if (fee != null) 'fee': fee,
     'accessibility': accessibility?.toJson(),
     'isAccessible': isAccessible,
     'accessibilityFeatures': accessibilityFeatures,
+    'hasOperator': hasOperator,
+    if (operatorUid != null) 'operatorUid': operatorUid,
+    if (operatorName != null) 'operatorName': operatorName,
+    if (operatorEmail != null) 'operatorEmail': operatorEmail,
   };
 }
 
@@ -116,19 +140,25 @@ class Doctor {
   }
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
-    List<Chamber> parsedChambers = [];
-    if (json['chambers'] != null) {
-      parsedChambers = (json['chambers'] as List)
-          .map((c) => Chamber.fromJson(c))
-          .toList();
+    final List<Chamber> parsedChambers = [];
+    if (json['chambers'] != null && json['chambers'] is List) {
+      for (final c in json['chambers'] as List) {
+        if (c is Map) {
+          try {
+            parsedChambers.add(Chamber.fromJson(Map<String, dynamic>.from(c)));
+          } catch (_) {}
+        }
+      }
     }
 
     Chamber? parsedChamber;
-    if (json['chamber'] != null) {
-      parsedChamber = Chamber.fromJson(json['chamber']);
-      if (parsedChambers.isEmpty) {
-        parsedChambers.add(parsedChamber);
-      }
+    if (json['chamber'] != null && json['chamber'] is Map) {
+      try {
+        parsedChamber = Chamber.fromJson(Map<String, dynamic>.from(json['chamber'] as Map));
+        if (parsedChambers.isEmpty) {
+          parsedChambers.add(parsedChamber);
+        }
+      } catch (_) {}
     } else if (parsedChambers.isNotEmpty) {
       parsedChamber = parsedChambers.first;
     }

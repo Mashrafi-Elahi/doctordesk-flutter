@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_constants.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_role_and_nav.dart';
 import '../widgets/auth_modal.dart';
 import '../widgets/first_time_checkin_dialog.dart';
@@ -88,9 +89,7 @@ class MainShellState extends State<MainShell> {
       if (roles.isOperator) UserRole.operator,
       if (roles.isAdmin) UserRole.admin,
     ];
-    // Patient is the implicit base role, so do not let the initial patient
-    // view hide a newly loaded doctor/operator/admin portal after sign-in.
-    if (preferred != UserRole.patient && available.contains(preferred)) {
+    if (available.contains(preferred)) {
       return preferred;
     }
     if (roles.isAdmin) return UserRole.admin;
@@ -298,7 +297,11 @@ class MainShellState extends State<MainShell> {
       ),
     ];
 
-    return Scaffold(
+    final currentTheme = AppTheme.themeForRole(_currentRole);
+
+    return Theme(
+      data: currentTheme,
+      child: Scaffold(
       drawer: AppDrawer(
         currentRole: _currentRole,
         onRoleChanged: setRole,
@@ -312,7 +315,7 @@ class MainShellState extends State<MainShell> {
         child: Container(
           margin: const EdgeInsets.only(left: 12, right: 12, bottom: 12),
           decoration: BoxDecoration(
-            color: AppColors.primaryTint,
+            color: currentTheme.colorScheme.primaryContainer,
             borderRadius: BorderRadius.circular(AppConstants.radiusHero),
             boxShadow: AppConstants.softShadow,
           ),
@@ -342,7 +345,7 @@ class MainShellState extends State<MainShell> {
                             isSelected ? item.selectedIcon : item.icon,
                             size: 22,
                             color: isSelected
-                                ? AppColors.primary
+                                ? currentTheme.colorScheme.primary
                                 : AppColors.textSecondary,
                           ),
                           const SizedBox(height: 3),
@@ -355,7 +358,7 @@ class MainShellState extends State<MainShell> {
                               fontWeight:
                                   isSelected ? FontWeight.w600 : FontWeight.w400,
                               color: isSelected
-                                  ? AppColors.primary
+                                  ? currentTheme.colorScheme.primary
                                   : AppColors.textSecondary,
                             ),
                           ),
@@ -368,6 +371,7 @@ class MainShellState extends State<MainShell> {
             }).toList(),
           ),
         ),
+      ),
       ),
     );
   }

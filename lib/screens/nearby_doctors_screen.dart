@@ -4,7 +4,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
-import '../services/dhaka_locations.dart';
 import '../services/location_search_service.dart';
 import 'doctor_detail_screen.dart';
 import '../widgets/chamber_accessibility.dart';
@@ -22,6 +21,16 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
   final TextEditingController _addressController = TextEditingController();
   Timer? _suggestionDebounce;
 
+  static const List<Map<String, dynamic>> availableDoctorLocations = [
+    {'name': 'Mirpur', 'label': 'Mirpur, Dhaka', 'lat': 23.8223, 'lng': 90.3654, 'filter': 'Mirpur'},
+    {'name': 'Dhanmondi', 'label': 'Dhanmondi, Dhaka', 'lat': 23.7465, 'lng': 90.3760, 'filter': 'Dhanmondi'},
+    {'name': 'Uttara', 'label': 'Uttara, Dhaka', 'lat': 23.8759, 'lng': 90.3795, 'filter': 'Uttara'},
+    {'name': 'Kalyanpur', 'label': 'Kalyanpur, Dhaka', 'lat': 23.7788, 'lng': 90.3582, 'filter': 'Kallyanpur'},
+    {'name': 'Banasree', 'label': 'Banasree, Dhaka', 'lat': 23.7632, 'lng': 90.4379, 'filter': 'Banasree'},
+    {'name': 'Motijheel', 'label': 'Motijheel, Dhaka', 'lat': 23.7333, 'lng': 90.4176, 'filter': 'Motijheel'},
+    {'name': 'Mohammadpur', 'label': 'Mohammadpur, Dhaka', 'lat': 23.7679, 'lng': 90.3585, 'filter': 'Mohammadpur'},
+  ];
+
   List<Doctor> _doctors = [];
   List<Map<String, dynamic>> _suggestions = [];
   bool _isLoading = false;
@@ -29,8 +38,8 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
   String? _suggestionError;
   String? _error;
   String? _locationLabel;
+  String? _selectedAreaFilter;
   bool _showManualInput = false;
-  bool _isDirectoryFallback = false;
   double? _lat;
   double? _lng;
   bool _accessibleOnly = false;
@@ -53,7 +62,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
         });
       }
     } catch (error, stackTrace) {
-      debugPrint('Location suggestion preload failed: $error\\n$stackTrace');
+      debugPrint('Location suggestion preload failed: $error\n$stackTrace');
       if (mounted) {
         setState(() {
           _suggestionError =
@@ -73,20 +82,43 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
 
     if (!mounted) return;
     if (lat != null && lng != null) {
+      String? matchedFilter;
+      if (area != null) {
+        for (final loc in availableDoctorLocations) {
+          if (area.toLowerCase().contains((loc['name'] as String).toLowerCase())) {
+            matchedFilter = loc['filter'] as String;
+            break;
+          }
+        }
+      }
       setState(() {
         _lat = lat;
         _lng = lng;
         _locationLabel =
             area == null || area.isEmpty ? 'Saved area' : '$area, Dhaka';
+        _selectedAreaFilter = matchedFilter;
       });
       await _searchNearby();
       return;
     }
 
+    // Default to Mirpur if no location is saved yet
+    final defaultLoc = availableDoctorLocations.first;
+    _selectAvailableLocation(defaultLoc);
+  }
+
+  Future<void> _selectAvailableLocation(Map<String, dynamic> loc) async {
     setState(() {
-      _showManualInput = true;
-      _error = 'Choose your area or use device location to find doctors.';
+      _lat = loc['lat'] as double;
+      _lng = loc['lng'] as double;
+      _locationLabel = loc['label'] as String;
+      _selectedAreaFilter = loc['filter'] as String;
+      _showManualInput = false;
+      _addressController.clear();
+      _suggestions = [];
     });
+    await _persistLocation(label: _locationLabel!, lat: _lat!, lng: _lng!);
+    await _searchNearby();
   }
 
   Future<void> _requestLocationAndSearch() async {
@@ -176,36 +208,19 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
     setState(() {
       _isLoading = true;
       _error = null;
-      _isDirectoryFallback = false;
     });
 
     try {
       final doctors = await ApiService.fetchNearbyDoctors(
         lat: _lat!,
         lng: _lng!,
-        radiusKm: 50,
+        radiusKm: 6,
         speciality: widget.initialSpeciality,
+        areaFilter: _selectedAreaFilter,
       );
-      // Older Firestore imports may not have geocoded chamber metadata yet.
-      // Keep the screen useful for the demo instead of showing a blank page.
-      Map<String, dynamic>? fallback;
-      if (doctors.isEmpty) {
-        fallback = await ApiService.fetchDoctors(
-          limit: 20,
-          speciality: widget.initialSpeciality,
-        );
-        // The symptom matcher and source directory occasionally use slightly
-        // different specialty labels. Never strand a patient on an empty list.
-        if (widget.initialSpeciality != null &&
-            List<Doctor>.from(fallback['doctors'] ?? []).isEmpty) {
-          fallback = await ApiService.fetchDoctors(limit: 20);
-        }
-      }
+
       setState(() {
-        _doctors = doctors.isNotEmpty
-            ? doctors
-            : List<Doctor>.from(fallback?['doctors'] ?? []);
-        _isDirectoryFallback = doctors.isEmpty && _doctors.isNotEmpty;
+        _doctors = doctors;
         _isLoading = false;
       });
     } catch (e) {
@@ -304,10 +319,20 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
     final lng = suggestion['lng'] as num?;
     if (lat == null || lng == null) return;
     final label = (suggestion['displayName'] ?? 'Selected area').toString();
+
+    String? matchedFilter;
+    for (final loc in availableDoctorLocations) {
+      if (label.toLowerCase().contains((loc['name'] as String).toLowerCase())) {
+        matchedFilter = loc['filter'] as String;
+        break;
+      }
+    }
+
     setState(() {
       _lat = lat.toDouble();
       _lng = lng.toDouble();
       _locationLabel = label;
+      _selectedAreaFilter = matchedFilter;
       _suggestions = [];
       _addressController.clear();
       _showManualInput = false;
@@ -385,6 +410,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                       style: TextStyle(
                         color: colorScheme.primary,
                         fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -401,6 +427,52 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                 ],
               ),
             ),
+
+          // Available locations horizontal quick bar
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.location_city, size: 15, color: colorScheme.primary),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Available Locations:',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.bold,
+                          color: colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 8),
+                  ...availableDoctorLocations.map((loc) {
+                    final isSelected = _selectedAreaFilter == loc['filter'] ||
+                        (_locationLabel != null && _locationLabel!.toLowerCase().contains((loc['name'] as String).toLowerCase()));
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        visualDensity: VisualDensity.compact,
+                        selected: isSelected,
+                        label: Text(loc['name'] as String, style: const TextStyle(fontSize: 11.5)),
+                        avatar: Icon(Icons.place, size: 14, color: isSelected ? Colors.white : colorScheme.primary),
+                        onSelected: (_) => _selectAvailableLocation(loc),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
 
           // Filter row
           if (_doctors.isNotEmpty)
@@ -462,14 +534,12 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
-                    children: DhakaLocations.all.take(10).map((location) {
+                    children: availableDoctorLocations.map((location) {
                       return ActionChip(
                         avatar:
                             const Icon(Icons.location_on_outlined, size: 16),
-                        label: Text(location.name),
-                        onPressed: () => _selectSuggestion(
-                          location.toSuggestion(),
-                        ),
+                        label: Text(location['name'] as String),
+                        onPressed: () => _selectAvailableLocation(location),
                       );
                     }).toList(),
                   ),
@@ -522,77 +592,70 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _isDirectoryFallback
-                    ? Column(
-                        children: [
-                          Container(
-                            width: double.infinity,
-                            margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: colorScheme.secondaryContainer,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              'No mapped chambers were found nearby yet. Showing matching doctors from the directory.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: colorScheme.onSecondaryContainer,
+                : _error != null && _doctors.isEmpty && !_showManualInput
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.location_off_outlined,
+                                  size: 48, color: Colors.grey[400]),
+                              const SizedBox(height: 16),
+                              Text(_error!,
+                                  textAlign: TextAlign.center,
+                                  style:
+                                      TextStyle(color: Colors.grey[600])),
+                              const SizedBox(height: 16),
+                              FilledButton.tonal(
+                                onPressed: _requestLocationAndSearch,
+                                child: const Text('Try Again'),
                               ),
-                            ),
+                            ],
                           ),
-                          Expanded(child: _buildDoctorList()),
-                        ],
+                        ),
                       )
-                    : _error != null && _doctors.isEmpty && !_showManualInput
+                    : _doctors.isEmpty && !_showManualInput && _lat != null
                         ? Center(
-                            child: Padding(
+                            child: SingleChildScrollView(
                               padding: const EdgeInsets.all(24),
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.location_off_outlined,
-                                      size: 48, color: Colors.grey[400]),
+                                  Icon(Icons.location_city_outlined,
+                                      size: 56, color: Colors.grey.shade400),
                                   const SizedBox(height: 16),
-                                  Text(_error!,
-                                      textAlign: TextAlign.center,
-                                      style:
-                                          TextStyle(color: Colors.grey[600])),
+                                  Text(
+                                    'No doctors found in ${_locationLabel ?? "this area"}',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'We do not have listed doctor chambers in this specific area yet.\nPlease select one of the available locations:',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                                  ),
                                   const SizedBox(height: 16),
-                                  FilledButton.tonal(
-                                    onPressed: _requestLocationAndSearch,
-                                    child: const Text('Try Again'),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    alignment: WrapAlignment.center,
+                                    children: availableDoctorLocations.map((loc) {
+                                      return ActionChip(
+                                        avatar: const Icon(Icons.place, size: 14),
+                                        label: Text(loc['name'] as String),
+                                        onPressed: () => _selectAvailableLocation(loc),
+                                      );
+                                    }).toList(),
                                   ),
                                 ],
                               ),
                             ),
                           )
-                        : _doctors.isEmpty && !_showManualInput && _lat != null
-                            ? Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(24),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.search_off,
-                                          size: 48, color: Colors.grey[400]),
-                                      const SizedBox(height: 16),
-                                      Text('No doctors found nearby',
-                                          style: theme.textTheme.titleMedium),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Try increasing the search radius or searching a different area',
-                                        textAlign: TextAlign.center,
-                                        style:
-                                            TextStyle(color: Colors.grey[600]),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                            : _doctors.isNotEmpty
-                                ? _buildDoctorList()
-                                : const SizedBox.shrink(),
+                        : _doctors.isNotEmpty
+                            ? _buildDoctorList()
+                            : const SizedBox.shrink(),
           ),
         ],
       ),

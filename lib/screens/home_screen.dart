@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,6 +16,8 @@ import '../services/specialty_matcher.dart';
 import '../services/gemini_service.dart';
 import '../widgets/chamber_accessibility.dart';
 import 'health_chat_screen.dart';
+import 'notifications_screen.dart';
+import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_constants.dart';
 
@@ -51,6 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Symptom inline detection in main search bar
   MatchResult? _symptomMatch;
   bool _isAiSuggestingSpecialty = false;
+  StreamSubscription<User?>? _authSubscription;
 
   String get _greetingName {
     final displayName = AuthService.currentUser?.displayName ?? '';
@@ -99,20 +103,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
 
-  String _formatCount(int number) {
-    final str = number.toString();
-    final buffer = StringBuffer();
-    int count = 0;
-    for (int i = str.length - 1; i >= 0; i--) {
-      buffer.write(str[i]);
-      count++;
-      if (count % 3 == 0 && i > 0) {
-        buffer.write(',');
-      }
-    }
-    return buffer.toString().split('').reversed.join('');
-  }
-
   String _moodEmoji(String? mood) {
     switch (mood) {
       case 'great':
@@ -152,10 +142,17 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _searchController.addListener(_onSearchInputChanged);
     _loadData();
+    _authSubscription = AuthService.authStateChanges.listen((user) {
+      if (mounted) {
+        setState(() {});
+        _loadData();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     _searchDebounce?.cancel();
     _searchController.removeListener(_onSearchInputChanged);
     _searchController.dispose();
@@ -397,7 +394,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       AppConstants.screenPadding,
                       12,
                       AppConstants.screenPadding,
-                      20,
+                      14,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -462,10 +459,56 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ],
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.notifications_none, color: Colors.white),
-                              tooltip: 'Notifications',
-                              onPressed: () {},
+                            StreamBuilder<List<AppNotification>>(
+                              stream: NotificationService.notificationsStream(
+                                  AuthService.currentUser?.uid ?? 'guest'),
+                              builder: (context, snapshot) {
+                                final unreadCount = snapshot.data
+                                        ?.where((n) => !n.isRead)
+                                        .length ??
+                                    0;
+                                return Stack(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.notifications_none, color: Colors.white),
+                                      tooltip: 'Notifications',
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => const NotificationsScreen(),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    if (unreadCount > 0)
+                                      Positioned(
+                                        right: 8,
+                                        top: 8,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: const BoxDecoration(
+                                            color: AppColors.error,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          constraints: const BoxConstraints(
+                                            minWidth: 16,
+                                            minHeight: 16,
+                                          ),
+                                          child: Text(
+                                            unreadCount > 9 ? '9+' : '$unreadCount',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                );
+                              },
                             ),
                           ],
                         ),
@@ -1057,52 +1100,90 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildFeelingSection(BuildContext context, ColorScheme colorScheme) {
-    if (_isMoodSubmittedToday) {
-      // Once a mood is submitted, keep widget collapsed/hidden for the rest of that calendar day
+    if (_isMoodSubmittedToday && !_isMoodExpanded) {
+      // Today's mood is logged, but user can tap the card or "Change" anytime to update it!
       return Card(
         elevation: 0.6,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Text(_moodEmoji(_todayFeeling),
-                        style: const TextStyle(fontSize: 18)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        "Today's mood logged: ${_moodLabel(_todayFeeling)}",
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () {
+            setState(() {
+              _isMoodExpanded = true;
+            });
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Text(_moodEmoji(_todayFeeling),
+                          style: const TextStyle(fontSize: 22)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              "Today's feeling: ${_moodLabel(_todayFeeling)}",
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 13.5),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Tap to change',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: colorScheme.primary,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              TextButton(
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  icon: const Icon(Icons.edit_outlined, size: 14),
+                  label: const Text('Change', style: TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    setState(() {
+                      _isMoodExpanded = true;
+                    });
+                  },
                 ),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const HealthCalendarScreen()),
-                  );
-                },
-                child: const Text('Calendar', style: TextStyle(fontSize: 12)),
-              ),
-            ],
+                const SizedBox(width: 4),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const HealthCalendarScreen()),
+                    );
+                  },
+                  child: const Text('Calendar', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
           ),
         ),
       );

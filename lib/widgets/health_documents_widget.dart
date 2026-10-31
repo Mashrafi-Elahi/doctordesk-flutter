@@ -3,10 +3,13 @@
 // A self-contained expandable card for the profile screen (or appointment screen)
 // that lets patients store documents locally and share with a doctor via Firebase.
 
+import 'dart:async';
 import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/document_service.dart';
+import 'auth_modal.dart';
 
 class HealthDocumentsWidget extends StatefulWidget {
   const HealthDocumentsWidget({super.key});
@@ -19,6 +22,7 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
   List<HealthDocument> _docs = [];
   bool _loading = true;
   final Map<String, double> _uploadProgress = {};
+  StreamSubscription<User?>? _authSubscription;
 
   static const List<_DocType> _docTypes = [
     _DocType('prescription', 'Prescription', Icons.receipt_long_outlined),
@@ -31,6 +35,15 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
   void initState() {
     super.initState();
     _loadDocs();
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen((_) {
+      _loadDocs();
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadDocs() async {
@@ -107,6 +120,17 @@ class _HealthDocumentsWidgetState extends State<HealthDocumentsWidget> {
   }
 
   void _showAddOptions() {
+    if (FirebaseAuth.instance.currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in to upload and store personal health documents.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      showDoctorDeskAuthModal(context, isSignUp: false);
+      return;
+    }
+
     showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(

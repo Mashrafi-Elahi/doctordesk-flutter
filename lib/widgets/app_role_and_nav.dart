@@ -123,6 +123,9 @@ class RoleSwitcher extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!roles.hasMultipleRoles) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(
@@ -156,10 +159,10 @@ class RoleSwitcher extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                       decoration: BoxDecoration(
-                        color: isSelected ? AppColors.primaryTint : Colors.transparent,
+                        color: isSelected ? colorScheme.primaryContainer : Colors.transparent,
                         borderRadius: BorderRadius.circular(AppConstants.radiusChip),
                         border: Border.all(
-                          color: isSelected ? AppColors.primary : AppColors.borderSubtle,
+                          color: isSelected ? colorScheme.primary : AppColors.borderSubtle,
                           width: 1,
                         ),
                       ),
@@ -167,7 +170,7 @@ class RoleSwitcher extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           if (isSelected) ...[
-                            const Icon(Icons.check, size: 16, color: AppColors.primary),
+                            Icon(Icons.check, size: 16, color: colorScheme.primary),
                             const SizedBox(width: 6),
                           ],
                           Text(
@@ -175,7 +178,7 @@ class RoleSwitcher extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                              color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                              color: isSelected ? colorScheme.primary : AppColors.textSecondary,
                             ),
                           ),
                         ],

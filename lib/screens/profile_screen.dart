@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_constants.dart';
@@ -12,6 +14,8 @@ import '../services/app_language.dart';
 import '../services/tts_service.dart';
 import 'settings_screen.dart';
 import 'admin_console_screen.dart';
+import 'chamber_discovery_screen.dart';
+import '../services/firestore_service.dart';
 import '../widgets/health_documents_widget.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -34,19 +38,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool get _isSignedIn => AuthService.isSignedIn;
   UserRoles _userRoles = AuthService.userRoles;
   Map<String, dynamic>? _userProfile;
+  StreamSubscription<User?>? _authSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadUserRoles();
+    _authSubscription = AuthService.authStateChanges.listen((user) {
+      if (!mounted) return;
+      if (user == null) {
+        setState(() {
+          _userProfile = null;
+          _userRoles = const UserRoles();
+        });
+      } else {
+        _loadUserRoles();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadUserRoles() async {
-    final roles = await AuthService.fetchUserRoles();
     final uid = AuthService.currentUser?.uid;
     if (uid != null) {
       _userProfile = await DataService.fetchUserProfile(uid);
+    } else {
+      _userProfile = null;
     }
+    final roles = await AuthService.fetchUserRoles();
     if (mounted) {
       setState(() {
         _userRoles = roles;
@@ -257,13 +281,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
       try {
         final fName = firstNameCtrl.text.trim();
         final lName = lastNameCtrl.text.trim();
-        final uName = usernameCtrl.text.trim();
-        final fullName = uName.isNotEmpty ? uName : '$fName $lName'.trim();
+        final rawUName = usernameCtrl.text.trim();
+        final fullName = '$fName $lName'.trim().isNotEmpty
+            ? '$fName $lName'.trim()
+            : (rawUName.isNotEmpty ? rawUName : 'User');
+
+        String cleanUsername = rawUName;
+        if (rawUName.isNotEmpty && rawUName != _userProfile?['username']) {
+          final res = await FirestoreService.updateUsername(uid: uid, newUsername: rawUName);
+          if (res['success'] != true) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(res['error'] ?? 'Username unavailable.'),
+                  backgroundColor: AppColors.error,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+            return;
+          }
+          cleanUsername = res['username'] ?? rawUName;
+        }
 
         final updates = <String, dynamic>{
           'firstName': fName,
           'lastName': lName,
-          'username': uName,
+          if (cleanUsername.isNotEmpty) 'username': cleanUsername,
           'name': fullName,
           'phone': phoneCtrl.text.trim(),
           'designation': designationCtrl.text.trim(),
@@ -376,6 +420,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _getRoleDisplayName() {
+    if (!_isSignedIn) {
+      return switch (widget.role) {
+        UserRole.doctor => 'Doctor',
+        UserRole.operator => 'Chamber Operator',
+        UserRole.admin => 'Administrator',
+        UserRole.patient => 'Guest Patient',
+      };
+    }
     final user = AuthService.currentUser;
     final profileName = _userProfile?['name']?.toString().trim();
     if (profileName != null && profileName.isNotEmpty) return profileName;
@@ -429,11 +481,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       UserRole.patient => 'Patient Profile',
     };
 
-    final emailOrPhone = AuthService.currentUser?.email?.isNotEmpty == true
-        ? AuthService.currentUser!.email!
-        : (AuthService.currentUser?.phoneNumber?.isNotEmpty == true
-            ? AuthService.currentUser!.phoneNumber!
-            : _getRoleSubtitle());
+    final emailOrPhone = !_isSignedIn
+        ? _getRoleSubtitle()
+        : (AuthService.currentUser?.email?.isNotEmpty == true
+            ? AuthService.currentUser!.email!
+            : (AuthService.currentUser?.phoneNumber?.isNotEmpty == true
+                ? AuthService.currentUser!.phoneNumber!
+                : _getRoleSubtitle()));
 
     final List<_SettingsItem> settingsItems = [
       if (_isSignedIn) ...[
@@ -478,6 +532,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 builder: (_) => const SettingsScreen(role: UserRole.operator)),
           ),
         ),
+      _SettingsItem(
+        icon: Icons.store_mall_directory_outlined,
+        title: 'Chambers Directory & Desk Discovery',
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ChamberDiscoveryScreen()),
+        ),
+      ),
       _SettingsItem(
         icon: Icons.notifications_outlined,
         title: 'Notifications',
@@ -601,9 +663,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     RoleSwitcher(
                       roles: _userRoles,
                       current: widget.role,
-                      onSwitch: (newRole) {
+                      onSwitch: (newRole) async {
+                        await AuthService.saveRole(newRole);
                         widget.onRoleChanged?.call(newRole);
-                        setState(() {});
+                        if (mounted) setState(() {});
                       },
                     ),
                     const SizedBox(height: 16),
@@ -928,6 +991,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     if (context.mounted) {
                       setState(() {
                         _userRoles = const UserRoles();
+                        _userProfile = null;
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(

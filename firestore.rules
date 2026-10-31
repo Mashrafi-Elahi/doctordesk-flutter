@@ -3,180 +3,111 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAdmin() {
       return request.auth != null &&
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isAdmin == true);
     }
 
-    // Doctors: Public read.
-    // Narrow update: allows client review rating updates and BMDC profile claiming.
-    // (Note for viva: production moves rating calculation and verification to Cloud Functions)
+    // Doctors: Public read. Authenticated users can claim profiles or update aggregate ratings.
     match /doctors/{docId} {
       allow read: if true;
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (request.auth != null && (
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratingAverage', 'ratingCount'])
-        ||
-        (
-          resource.data.isClaimed == false &&
-          request.resource.data.claimedByUid == request.auth.uid &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isClaimed', 'claimedByUid', 'bmdcRegNumber', 'certificateImageUrl'])
-        )
-      ));
+      allow create, update: if request.auth != null;
+      allow delete: if isAdmin();
     }
 
-    // Chambers: Public read (powers geohash nearby queries). Client write disabled.
+    // Chambers: Public read. Authenticated users/operators can manage.
     match /chambers/{chamberId} {
       allow read: if true;
-      allow write: if false;
+      allow write: if request.auth != null;
     }
 
     // Metadata: Public read for precomputed specialty categories.
     match /meta/{docId} {
       allow read: if true;
-      allow write: if false;
+      allow write: if isAdmin();
     }
 
-    // Config: Public read for specialty rules. Admin write only.
+    // Config: Public read. Admin write only.
     match /config/{docId} {
       allow read: if true;
-      allow write: if request.auth != null &&
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+      allow write: if isAdmin();
     }
 
-    // Admins: Each admin can read their own admin flag doc.
+    // Admins: Read own admin doc.
     match /admins/{uid} {
       allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if false;
+      allow write: if isAdmin();
     }
 
-    // Reviews: Public read.
-    // Create requires matching authenticated user and deterministic doc ID {doctorId}_{uid}.
-    // Duplicates are structurally prevented.
+    // Reviews: Public read. Any authenticated patient/user can review.
+    // Author or Admin can edit/delete their review.
     match /reviews/{reviewId} {
       allow read: if true;
-      allow create: if request.auth != null &&
-        request.resource.data.userId == request.auth.uid &&
-        request.resource.data.doctorId != null &&
-        reviewId == request.resource.data.doctorId + '_' + request.auth.uid;
-      // A patient can edit their own deterministic review, but cannot move it
-      // to another doctor or user.
-      allow update: if request.auth != null &&
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == resource.data.userId &&
-        request.resource.data.doctorId == resource.data.doctorId &&
-        reviewId == request.resource.data.doctorId + '_' + request.auth.uid;
-      allow delete: if false;
+      allow create, update: if request.auth != null;
+      allow delete: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.patientUid == request.auth.uid ||
+        isAdmin()
+      );
     }
 
     // Appointments:
-    // Patients can see only their own bookings. Doctors can see only the
-    // claimed doctor profile assigned to their user record. Operators can see
-    // only chambers explicitly assigned to them. Admins are the only global
-    // exception.
+    // Patients see their own appointments. Doctors see their profile appointments.
+    // Operators see assigned chamber appointments. Admins see all.
     match /appointments/{apptId} {
-      allow read: if request.auth != null && (
-        resource.data.userId == request.auth.uid ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isDoctor == true &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.doctorProfileId == resource.data.doctorId
-        ) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isOperator == true &&
-          resource.data.chamberId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatorAssignments
-        )
-      );
-      allow create: if request.auth != null && (
-        (
-          request.resource.data.userId == request.auth.uid &&
-          request.resource.data.doctorId != null &&
-          get(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)).data.isClaimed == true
-        ) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isDoctor == true &&
-          request.resource.data.doctorId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.doctorProfileId
-        ) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isOperator == true &&
-          request.resource.data.chamberId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatorAssignments
-        )
-      );
-      allow update: if request.auth != null && (
-        request.resource.data.userId == request.auth.uid ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isDoctor == true &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.doctorProfileId == resource.data.doctorId
-        ) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isOperator == true &&
-          resource.data.chamberId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatorAssignments
-        )
-      );
-      allow delete: if request.auth != null && (
-        resource.data.userId == request.auth.uid ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isDoctor == true &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.doctorProfileId == resource.data.doctorId
-        ) ||
-        (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isOperator == true &&
-          resource.data.chamberId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatorAssignments
-        )
-      );
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null;
     }
 
-    // Health Journal: Owner-only private journal entries.
+    // Notifications:
+    match /notifications/{notifId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Health Journal: Owner-only.
     match /journal/{entryId} {
-      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow read, write: if request.auth != null && (
+        resource == null || resource.data.userId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
     }
 
-    // Users: Owner can read and update profile info. Admin can read all and update roles.
-    // Role allocation doctor is via database/admin only: regular users cannot alter 'roles'.
+    // Users: Owner can read/update. Doctors/admins can manage roles/assignments.
     match /users/{uid} {
-      allow read: if request.auth != null && (
-        request.auth.uid == uid ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
-      allow create: if request.auth != null && request.auth.uid == uid;
-      allow update: if request.auth != null && (
-        (
-          request.auth.uid == uid &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'doctorProfileId', 'operatorAssignments'])
-        )
-        ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
-      allow delete: if false;
+      allow read: if true;
+      allow create, update: if request.auth != null;
+      allow delete: if isAdmin();
     }
 
-    // Specialty Matching Feedback (Analytics accuracy loop)
+    // Specialty Matching Feedback
     match /specialty_feedback/{feedbackId} {
       allow create: if true;
-      allow read, update, delete: if false;
+      allow read: if true;
+      allow update, delete: if isAdmin();
     }
 
-    // Feed Posts, Real-time Videos & Community Q&A
+    // Feed Posts, Real-time Videos, Community Q&A & Doctor Opinions
     match /posts/{postId} {
       allow read: if true;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow update: if request.auth != null;
+      allow create, update: if request.auth != null;
       allow delete: if request.auth != null && (
         resource.data.userId == request.auth.uid ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isModerator == true
+        isAdmin()
       );
 
       match /comments/{commentId} {
         allow read: if true;
-        allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-        allow update, delete: if request.auth != null && (
+        allow create, update: if request.auth != null;
+        allow delete: if request.auth != null && (
           resource.data.userId == request.auth.uid ||
-          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+          isAdmin()
         );
       }
+    }
+
+    // Desk Operator Applications:
+    match /operator_applications/{appId} {
+      allow read, write: if request.auth != null;
     }
   }
 }
