@@ -10,7 +10,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/doctor.dart';
-import '../models/user_role.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
@@ -133,37 +132,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           ' Their areas of focus include ${doctor.concentrations.join(", ")}.');
     }
     return buffer.toString();
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Claim bottom sheet
-  // ──────────────────────────────────────────────────────────────────────────
-
-  void _openClaimSheet(Doctor doctor) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _ClaimSheet(
-        doctorId: widget.doctorId,
-        doctorName: doctor.name,
-        onSuccess: () {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Claim request submitted for admin review. No role is granted until verified.',
-                ),
-                duration: Duration(seconds: 4),
-              ),
-            );
-          }
-          _loadDoctor();
-        },
-      ),
-    );
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1114,129 +1082,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Claim content widget
-  // ──────────────────────────────────────────────────────────────────────────
-
-  Widget _buildClaimContent(Doctor doctor) {
-    final isSignedIn = AuthService.isSignedIn && !AuthService.isGuest;
-    final currentUid = AuthService.currentUser?.uid;
-    final isClaimedByMe = doctor.isClaimed &&
-        doctor.claimedByUid != null &&
-        doctor.claimedByUid == currentUid;
-
-    if (isClaimedByMe) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.green.shade50,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.green.shade200),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.verified, color: Colors.green, size: 24),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'You have claimed this profile',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green.shade900,
-                      fontSize: 13,
-                    ),
-                  ),
-                  Text(
-                    'BMDC: ${doctor.bmdcRegNumber ?? "Verified"} • Full control enabled',
-                    style: TextStyle(
-                      color: Colors.green.shade700,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            FilledButton.tonal(
-              onPressed: () async {
-                await AuthService.saveRole(UserRole.doctor);
-                await AuthService.fetchUserRoles();
-                if (mounted) {
-                  Navigator.of(context).pop();
-                }
-              },
-              child: const Text('Doctor Desk'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (doctor.claimStatus == 'pending') {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.amber.shade50,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.amber.shade300),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.hourglass_empty, color: Colors.amber, size: 22),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'A claim request has been submitted for this profile and is pending admin verification.',
-                style: TextStyle(color: Colors.amber.shade900, fontSize: 12.5),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (doctor.isClaimed) {
-      return Row(
-        children: [
-          const Icon(Icons.verified, size: 18, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Text(
-            'This profile is claimed and BMDC-verified.',
-            style: TextStyle(color: Colors.grey[700], fontSize: 13),
-          ),
-        ],
-      );
-    }
-
-    if (!isSignedIn) {
-      return Row(
-        children: [
-          Icon(Icons.lock_outline, size: 18, color: Colors.grey[400]),
-          const SizedBox(width: 8),
-          Text('Sign in to claim this profile.',
-              style: TextStyle(color: Colors.grey[600])),
-        ],
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Are you ${doctor.name}? Claim this profile to manage your information, '
-          'respond to reviews, and display your BMDC verification badge.',
-          style: TextStyle(color: Colors.grey[700], height: 1.5),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonal(
-          onPressed: () => _openClaimSheet(doctor),
-          child: const Text('Claim this profile'),
-        ),
-      ],
-    );
-  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1447,22 +1292,25 @@ class _ReviewCard extends StatelessWidget {
 // Claim bottom sheet (multi-step)
 // ════════════════════════════════════════════════════════════════════════════
 
-class _ClaimSheet extends StatefulWidget {
+/// Claiming is intentionally exposed only from Profile > Are you a Doctor.
+/// This reusable sheet is kept separate from the doctor detail route.
+class ProfileDoctorClaimSheet extends StatefulWidget {
   final String doctorId;
   final String doctorName;
   final VoidCallback onSuccess;
 
-  const _ClaimSheet({
+  const ProfileDoctorClaimSheet({
+    super.key,
     required this.doctorId,
     required this.doctorName,
     required this.onSuccess,
   });
 
   @override
-  State<_ClaimSheet> createState() => _ClaimSheetState();
+  State<ProfileDoctorClaimSheet> createState() => _ProfileDoctorClaimSheetState();
 }
 
-class _ClaimSheetState extends State<_ClaimSheet> {
+class _ProfileDoctorClaimSheetState extends State<ProfileDoctorClaimSheet> {
   final _bmdcController = TextEditingController();
   File? _certFile;
   double? _uploadProgress;

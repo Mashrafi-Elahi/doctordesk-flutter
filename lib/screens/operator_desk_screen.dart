@@ -1,1196 +1,451 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../services/firestore_service.dart';
-import '../services/auth_service.dart';
 import 'package:flutter/material.dart';
+
 import '../models/user_role.dart';
-import '../widgets/profile_avatar_button.dart';
-import '../services/api_service.dart';
+import '../services/appointment_queries.dart';
+import '../services/auth_service.dart';
 import '../services/data_service.dart';
+import '../services/firestore_service.dart';
+import '../widgets/profile_avatar_button.dart';
 
-// ---------------------------------------------------------------------------
-// Local view model for the Firestore appointment fields used by the desk.
-// ---------------------------------------------------------------------------
-
-class QueueEntry {
-  final String id;
-  String patientName;
-  DateTime scheduledTime;
-  String status; // 'waiting' | 'in_progress' | 'done'
-  int queuePosition;
-  String operatorNote;
-  final String doctorName;
-  final String? doctorId;
-
-  QueueEntry({
-    required this.id,
-    required this.patientName,
-    required this.scheduledTime,
-    required this.status,
-    required this.queuePosition,
-    required this.operatorNote,
-    this.doctorName = 'Doctor not specified',
-    this.doctorId,
-  });
-
-  factory QueueEntry.fromJson(Map<String, dynamic> json) => QueueEntry(
-        id: (json['_id'] ?? json['id'] ?? '').toString(),
-        patientName: (json['patientName'] as String?) ?? 'Patient',
-        scheduledTime: DateTime.parse(json['scheduledTime'] as String),
-        status: (json['status'] as String?) ?? 'waiting',
-        queuePosition: (json['queuePosition'] as int?) ?? 0,
-        operatorNote: (json['operatorNote'] as String?) ?? '',
-        doctorName: (json['doctorName'] as String?) ?? 'Doctor not specified',
-        doctorId: json['doctorId'] as String?,
-      );
-}
-
-// ---------------------------------------------------------------------------
-// Main Operator Desk screen
-// ---------------------------------------------------------------------------
-
+/// Operator Desk starts with assigned chambers. Selecting one opens a focused
+/// request / queue / completed workspace without exposing document IDs.
 class OperatorDeskScreen extends StatefulWidget {
+  const OperatorDeskScreen({super.key, this.chamberId, this.showAppBar = true});
+
   final String? chamberId;
   final bool showAppBar;
-
-  const OperatorDeskScreen({
-    super.key,
-    this.chamberId,
-    this.showAppBar = true,
-  });
 
   @override
   State<OperatorDeskScreen> createState() => _OperatorDeskScreenState();
 }
 
 class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
-  List<QueueEntry> _queue = [];
+  final Map<String, String> _chamberNames = {};
+  final Map<String, Future<List<String>>> _doctorFutures = {};
+  List<String> _assignedChambers = const [];
   bool _loading = true;
-  String? _errorMessage;
-  late String _activeChamberId;
-  List<String> _assignedChambers = [];
-  String _selectedDoctorFilter = 'All';
+  String? _error;
 
-  /// Tracks which entries have their note editor expanded (by entry id).
-  final Set<String> _expandedNotes = {};
-
-  /// TextEditingControllers keyed by entry id, created lazily.
-  final Map<String, TextEditingController> _noteControllers = {};
-
-  // ---------------------------------------------------------------------------
-  // Lifecycle
-  // ---------------------------------------------------------------------------
+  bool get _isDetail => widget.chamberId != null && widget.chamberId!.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
-    _activeChamberId = widget.chamberId ?? '';
-    _loadAssignedChambers();
-    if (_activeChamberId.isNotEmpty) _loadQueue();
+    _loadAssignments();
   }
 
-  final Map<String, String> _chamberNames = {};
-
-  Future<void> _loadAssignedChambers() async {
+  Future<void> _loadAssignments() async {
     try {
       final uid = AuthService.currentUser?.uid;
-      if (uid != null) {
-        final profile = await ApiService.fetchUserProfile(uid);
-        final assignments = (profile?['operatorAssignments'] as List?)
-                ?.map((e) => e.toString())
-                .where((e) => e.isNotEmpty)
-                .toList() ??
-            AuthService.userRoles.operatorAssignments;
-
-        final assignedChambers = (profile?['assignedChambers'] as List?) ?? [];
-        for (final item in assignedChambers) {
-          if (item is Map) {
-            final cid = (item['chamberId'] ?? item['id'] ?? '').toString();
-            final cname = (item['chamberName'] ?? item['name'] ?? '').toString();
-            if (cid.isNotEmpty && cname.isNotEmpty) {
-              _chamberNames[cid] = cname;
-            }
-          }
-        }
-
-        for (final cid in assignments) {
-          if (!_chamberNames.containsKey(cid)) {
-            final docSnap = await FirebaseFirestore.instance.collection('chambers').doc(cid).get();
-            if (docSnap.exists) {
-              final d = docSnap.data() ?? {};
-              final name = (d['name'] ?? d['chamberName'] ?? d['hospitalName'] ?? '').toString();
-              if (name.isNotEmpty) _chamberNames[cid] = name;
-            }
-          }
-        }
-
-        if (mounted && assignments.isNotEmpty) {
-          setState(() {
-            _assignedChambers = assignments;
-            if (_activeChamberId.isEmpty && assignments.isNotEmpty) {
-              _activeChamberId = assignments.first;
-            }
-          });
-          _loadQueue();
+      final profile = uid == null ? null : await DataService.fetchUserProfile(uid);
+      final assigned = (profile?['operatorAssignments'] as List?)
+              ?.map((value) => value.toString())
+              .where((value) => value.isNotEmpty)
+              .toList() ??
+          AuthService.userRoles.operatorAssignments;
+      final assignedDetails = (profile?['assignedChambers'] as List?) ?? const [];
+      for (final detail in assignedDetails) {
+        if (detail is Map) {
+          final id = (detail['chamberId'] ?? detail['id'] ?? '').toString();
+          final name = (detail['chamberName'] ?? detail['name'] ?? '').toString().trim();
+          if (id.isNotEmpty && name.isNotEmpty) _chamberNames[id] = name;
         }
       }
-    } catch (_) {}
+      for (final chamberId in assigned) {
+        if (_chamberNames.containsKey(chamberId)) continue;
+        final chamber = await FirebaseFirestore.instance.collection('chambers').doc(chamberId).get();
+        final data = chamber.data();
+        final name = (data?['name'] ?? data?['chamberName'] ?? data?['hospitalName'] ?? '').toString().trim();
+        if (name.isNotEmpty) _chamberNames[chamberId] = name;
+      }
+      if (!mounted) return;
+      setState(() {
+        _assignedChambers = assigned;
+        _loading = false;
+        _error = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Unable to load chamber assignments.';
+      });
+    }
   }
 
-  String _resolveChamberName(String cId) {
-    if (_chamberNames.containsKey(cId)) return _chamberNames[cId]!;
-    return 'Assigned chamber';
-  }
+  String _chamberName(String chamberId) => _chamberNames[chamberId] ?? 'Assigned chamber';
+
+  Future<List<String>> _doctorsFor(String chamberId) =>
+      _doctorFutures.putIfAbsent(chamberId, () => DataService.fetchChamberDoctors(chamberId));
 
   @override
-  void dispose() {
-    for (final controller in _noteControllers.values) {
-      controller.dispose();
-    }
-    super.dispose();
+  Widget build(BuildContext context) {
+    final body = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : _error != null
+            ? _ErrorState(message: _error!, onRetry: _loadAssignments)
+            : _isDetail
+                ? _ChamberDeskDetail(chamberId: widget.chamberId!, chamberName: _chamberName(widget.chamberId!))
+                : _ChamberOverview(
+                    chamberIds: _assignedChambers,
+                    chamberName: _chamberName,
+                    doctorsFor: _doctorsFor,
+                  );
+    if (!widget.showAppBar) return body;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_isDetail ? _chamberName(widget.chamberId!) : 'Desk status'),
+        actions: const [ProfileAvatarButton(role: UserRole.operator)],
+      ),
+      body: body,
+    );
   }
+}
 
-  // ---------------------------------------------------------------------------
-  // API helpers
-  // ---------------------------------------------------------------------------
+class _ChamberOverview extends StatelessWidget {
+  const _ChamberOverview({
+    required this.chamberIds,
+    required this.chamberName,
+    required this.doctorsFor,
+  });
 
-  Future<void> _loadQueue() async {
-    if (_activeChamberId.isEmpty) {
-      setState(() {
-        _loading = false;
-        _errorMessage = 'No chamber assignment is available for this desk.';
-      });
-      return;
-    }
-    setState(() {
-      _loading = true;
-      _errorMessage = null;
-    });
+  final List<String> chamberIds;
+  final String Function(String) chamberName;
+  final Future<List<String>> Function(String) doctorsFor;
 
-    try {
-      final data = await ApiService.fetchTodayQueue(_activeChamberId);
-      final entries = data.map((e) => QueueEntry.fromJson(e)).toList();
-
-      _applyQueue(entries);
-      return;
-    } catch (_) {
-      setState(() {
-        _loading = false;
-        _errorMessage =
-            'Could not load appointment queue. Check your connection.';
-      });
-    }
-  }
-
-  void _applyQueue(List<QueueEntry> entries) {
-    entries.sort((a, b) => a.queuePosition.compareTo(b.queuePosition));
-
-    // Dispose controllers for entries that are no longer present.
-    final incomingIds = entries.map((e) => e.id).toSet();
-    for (final id in _noteControllers.keys.toSet().difference(incomingIds)) {
-      _noteControllers[id]?.dispose();
-      _noteControllers.remove(id);
-    }
-
-    // Initialise controllers for new entries.
-    for (final entry in entries) {
-      _noteControllers.putIfAbsent(
-        entry.id,
-        () => TextEditingController(text: entry.operatorNote),
+  @override
+  Widget build(BuildContext context) {
+    if (chamberIds.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text('No chamber assignments are available for this operator.'),
+        ),
       );
     }
-
-    setState(() {
-      _queue = entries;
-      _loading = false;
-      _errorMessage = null;
-    });
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: AppointmentQueries.pendingRequestsForOperator(chamberIds).snapshots(),
+      builder: (context, requestSnapshot) {
+        final requests = requestSnapshot.data?.docs ?? const [];
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text('Assigned chambers', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text('Open a chamber to manage requests and today\'s queue.', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 16),
+            for (final chamberId in chamberIds)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _ChamberCard(
+                  chamberId: chamberId,
+                  name: chamberName(chamberId),
+                  requestCount: requests.where((doc) => doc.data()['chamberId'] == chamberId).length,
+                  doctors: doctorsFor(chamberId),
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
+}
 
-  /// PATCH /appointments/queue-order — persist reordered positions.
-  Future<void> _persistQueueOrder() async {
-    try {
-      final updates = _queue
-          .asMap()
-          .entries
-          .map((e) => {'id': e.value.id, 'queuePosition': e.key + 1})
-          .toList();
+class _ChamberCard extends StatelessWidget {
+  const _ChamberCard({
+    required this.chamberId,
+    required this.name,
+    required this.requestCount,
+    required this.doctors,
+  });
 
-      await ApiService.updateQueueOrder(updates);
-    } catch (_) {
-      // Local state already updated
-    }
+  final String chamberId;
+  final String name;
+  final int requestCount;
+  final Future<List<String>> doctors;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: AppointmentQueries.todayQueueForChamber(chamberId).snapshots(),
+      builder: (context, queueSnapshot) {
+        final waiting = queueSnapshot.data?.docs.length ?? 0;
+        return Card(
+          clipBehavior: Clip.antiAlias,
+          child: ListTile(
+            contentPadding: const EdgeInsets.fromLTRB(18, 14, 12, 14),
+            leading: const CircleAvatar(child: Icon(Icons.local_hospital_outlined)),
+            title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 5),
+                FutureBuilder<List<String>>(
+                  future: doctors,
+                  builder: (context, snapshot) {
+                    final doctorNames = snapshot.data ?? const [];
+                    return Text(
+                      doctorNames.isEmpty ? 'No doctors listed' : doctorNames.join(' • '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    );
+                  },
+                ),
+                const SizedBox(height: 7),
+                Text('$requestCount requests, $waiting waiting', style: Theme.of(context).textTheme.labelMedium),
+              ],
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => OperatorDeskScreen(chamberId: chamberId)),
+            ),
+          ),
+        );
+      },
+    );
   }
+}
 
-  /// PATCH /appointments/:id — update one or more fields on a single entry.
-  Future<void> _patchAppointment(
-    String id,
-    Map<String, dynamic> fields,
-  ) async {
-    try {
-      await ApiService.updateAppointment(id, fields);
-    } catch (_) {
-      // Optimistic update
-    }
-  }
+class _ChamberDeskDetail extends StatelessWidget {
+  const _ChamberDeskDetail({required this.chamberId, required this.chamberName});
 
-  // ---------------------------------------------------------------------------
-  // Interaction handlers
-  // ---------------------------------------------------------------------------
+  final String chamberId;
+  final String chamberName;
 
-  void _onReorder(int oldIndex, int newIndex) {
-    setState(() {
-      if (newIndex > oldIndex) newIndex -= 1;
-      final entry = _queue.removeAt(oldIndex);
-      _queue.insert(newIndex, entry);
-      for (int i = 0; i < _queue.length; i++) {
-        _queue[i].queuePosition = i + 1;
-      }
-    });
-    _persistQueueOrder();
-  }
-
-  void _toggleNote(String id) {
-    setState(() {
-      if (_expandedNotes.contains(id)) {
-        _expandedNotes.remove(id);
-      } else {
-        _expandedNotes.add(id);
-      }
-    });
-  }
-
-  void _submitNote(QueueEntry entry) {
-    final note = _noteControllers[entry.id]?.text.trim() ?? '';
-    if (note == entry.operatorNote) return;
-    setState(() => entry.operatorNote = note);
-    _patchAppointment(entry.id, {'operatorNote': note});
-  }
-
-  Future<void> _deleteAppointment(QueueEntry entry) async {
-    setState(() {
-      _queue.removeWhere((e) => e.id == entry.id);
-      for (int i = 0; i < _queue.length; i++) {
-        _queue[i].queuePosition = i + 1;
-      }
-    });
-    try {
-      await ApiService.deleteAppointment(entry.id);
-    } catch (_) {}
-  }
-
-  Future<void> _clearAllAppointments() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Clear All Appointments?'),
-        content: const Text(
-            'This will remove all hardcoded and current appointments from the queue.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Clear Queue'),
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(chamberName, style: Theme.of(context).textTheme.titleMedium),
+            ),
+          ),
+          const TabBar(tabs: [Tab(text: 'Requests'), Tab(text: "Today's Queue"), Tab(text: 'Done')]),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _AppointmentList(query: AppointmentQueries.pendingRequestsForOperator([chamberId]), view: _DeskView.requests),
+                _AppointmentList(query: AppointmentQueries.todayQueueForChamber(chamberId), view: _DeskView.queue),
+                _AppointmentList(query: AppointmentQueries.completedForChamber(chamberId), view: _DeskView.done),
+              ],
+            ),
           ),
         ],
       ),
     );
-
-    if (confirm != true) return;
-
-    setState(() => _queue.clear());
-    try {
-      await ApiService.clearAllAppointments();
-    } catch (_) {}
   }
+}
 
-  void _showAddAppointmentDialog() {
-    final nameController = TextEditingController();
-    final noteController = TextEditingController();
-    TimeOfDay selectedTime = TimeOfDay.now();
+enum _DeskView { requests, queue, done }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDlgState) => AlertDialog(
-          title: const Text('Add Patient to Queue'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                    labelText: 'Patient Name', hintText: 'e.g. John Doe'),
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.access_time),
-                title: Text('Scheduled Time: ${selectedTime.format(context)}'),
-                trailing: TextButton(
-                  onPressed: () async {
-                    final t = await showTimePicker(
-                        context: context, initialTime: selectedTime);
-                    if (t != null) setDlgState(() => selectedTime = t);
-                  },
-                  child: const Text('Change'),
-                ),
-              ),
-              TextField(
-                controller: noteController,
-                decoration:
-                    const InputDecoration(labelText: 'Desk Note (Optional)'),
-              ),
-            ],
+class _AppointmentList extends StatelessWidget {
+  const _AppointmentList({required this.query, required this.view});
+
+  final Query<Map<String, dynamic>> query;
+  final _DeskView view;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: query.snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return _ErrorState(message: 'Unable to load appointments.', onRetry: () {});
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final docs = snapshot.data!.docs;
+        if (docs.isEmpty) {
+          final message = switch (view) {
+            _DeskView.requests => 'No appointment requests.',
+            _DeskView.queue => 'No patients are waiting today.',
+            _DeskView.done => 'No completed appointments today.',
+          };
+          return Center(child: Text(message));
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, index) => _AppointmentRow(
+            reference: docs[index].reference,
+            data: docs[index].data(),
+            view: view,
           ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () async {
-                final name = nameController.text.trim();
-                if (name.isEmpty) return;
-                Navigator.pop(ctx);
-                final now = DateTime.now();
-                final sched = DateTime(now.year, now.month, now.day,
-                    selectedTime.hour, selectedTime.minute);
-
-                try {
-                  await ApiService.createAppointment(
-                    patientName: name,
-                    scheduledTime: sched,
-                    chamberId: _activeChamberId,
-                    status: 'waiting',
-                    operatorNote: noteController.text.trim(),
-                  );
-                  await _loadQueue();
-                } catch (_) {}
-              },
-              child: const Text('Add Patient'),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
+}
 
-  void _showEditAppointmentDialog(QueueEntry entry) {
-    final nameController = TextEditingController(text: entry.patientName);
-    final noteController = TextEditingController(text: entry.operatorNote);
-    TimeOfDay selectedTime = TimeOfDay.fromDateTime(entry.scheduledTime);
-    String currentStatus = entry.status;
+class _AppointmentRow extends StatelessWidget {
+  const _AppointmentRow({required this.reference, required this.data, required this.view});
 
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDlgState) => AlertDialog(
-          title: const Text('Edit Appointment'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'Patient Name'),
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.access_time),
-                  title: Text('Time: ${selectedTime.format(context)}'),
-                  trailing: TextButton(
-                    onPressed: () async {
-                      final t = await showTimePicker(
-                          context: context, initialTime: selectedTime);
-                      if (t != null) setDlgState(() => selectedTime = t);
-                    },
-                    child: const Text('Pick Time'),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text('Status:',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  children: ['waiting', 'in_progress', 'done'].map((s) {
-                    return ChoiceChip(
-                      label: Text(_chipLabel(s)),
-                      selected: currentStatus == s,
-                      onSelected: (_) => setDlgState(() => currentStatus = s),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: noteController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                      labelText: 'Desk Note', border: OutlineInputBorder()),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              icon: const Icon(Icons.delete_outline, size: 18),
-              label: const Text('Delete'),
-              onPressed: () {
-                Navigator.pop(ctx);
-                _deleteAppointment(entry);
-              },
-            ),
-            FilledButton(
-              onPressed: () {
-                final newName = nameController.text.trim();
-                final now = entry.scheduledTime;
-                final newTime = DateTime(now.year, now.month, now.day,
-                    selectedTime.hour, selectedTime.minute);
-                final newNote = noteController.text.trim();
+  final DocumentReference<Map<String, dynamic>> reference;
+  final Map<String, dynamic> data;
+  final _DeskView view;
 
-                setState(() {
-                  if (newName.isNotEmpty) entry.patientName = newName;
-                  entry.scheduledTime = newTime;
-                  entry.status = currentStatus;
-                  entry.operatorNote = newNote;
-                });
-                _patchAppointment(entry.id, {
-                  'patientName': entry.patientName,
-                  'scheduledTime': newTime.toIso8601String(),
-                  'status': currentStatus,
-                  'operatorNote': newNote,
-                });
-                if (currentStatus == 'done') {
-                  FirestoreService.markAppointmentCompletedAndUnlockChat(entry.id);
-                }
-                Navigator.pop(ctx);
-              },
-              child: const Text('Save Details'),
-            ),
-          ],
-        ),
-      ),
-    );
+  DateTime? get _scheduledTime {
+    final value = data['scheduledTime'];
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    return null;
   }
 
-  // ---------------------------------------------------------------------------
-  // Display helpers
-  // ---------------------------------------------------------------------------
-
-  int get _remainingCount => _queue.where((e) => e.status != 'done').length;
-
-  String _formatTime(DateTime dt) {
-    final hour = dt.hour == 0
-        ? 12
-        : dt.hour > 12
-            ? dt.hour - 12
-            : dt.hour;
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final period = dt.hour < 12 ? 'AM' : 'PM';
-    return '$hour:$minute $period';
+  String get _patientName {
+    final value = data['patientName']?.toString().trim() ?? '';
+    return value.isEmpty ? 'Patient' : value;
   }
 
-  Color _chipBg(String status, ColorScheme cs) => switch (status) {
-        'requested' => Colors.amber.shade100,
-        'confirmed' => Colors.green.shade100,
-        'in_progress' => cs.primaryContainer,
-        'done' => const Color(0xFFE8F5E9),
-        _ => cs.surfaceContainerHighest,
-      };
+  String get _doctorName {
+    final value = data['doctorName']?.toString().trim() ?? '';
+    return value.isEmpty ? 'Doctor not specified' : value;
+  }
 
-  Color _chipFg(String status, ColorScheme cs) => switch (status) {
-        'requested' => Colors.amber.shade900,
-        'confirmed' => Colors.green.shade900,
-        'in_progress' => cs.onPrimaryContainer,
-        'done' => const Color(0xFF2E7D32), // green[800]
-        _ => const Color(0xFF616161), // grey[700]
-      };
+  String _timeLabel(BuildContext context) {
+    final time = _scheduledTime;
+    if (time == null) return 'Time not selected';
+    return TimeOfDay.fromDateTime(time).format(context);
+  }
 
-  String _chipLabel(String status) => switch (status) {
-        'requested' => 'Requested',
-        'confirmed' => 'Confirmed',
-        'in_progress' => 'In Progress',
-        'done' => 'Done',
-        _ => 'Waiting',
-      };
-
-  Future<void> _confirmAppointment(QueueEntry entry) async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(entry.scheduledTime),
-    );
-    if (picked == null || !mounted) return;
-
-    final now = DateTime.now();
-    final confirmedDateTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      picked.hour,
-      picked.minute,
-    );
-
+  Future<void> _confirm(BuildContext context) async {
+    final initial = _scheduledTime ?? DateTime.now();
+    final picked = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initial));
+    if (picked == null || !context.mounted) return;
+    final date = _scheduledTime ?? DateTime.now();
+    final confirmed = DateTime(date.year, date.month, date.day, picked.hour, picked.minute);
     try {
-      await DataService.confirmAppointment(
-        appointmentId: entry.id,
-        confirmedTime: confirmedDateTime,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Appointment confirmed and queue number assigned!')),
-      );
-      _loadQueue();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error confirming: $e'), backgroundColor: Colors.red),
-      );
+      await DataService.confirmAppointment(appointmentId: reference.id, confirmedTime: confirmed);
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment confirmed.')));
+    } catch (error) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not confirm: $error')));
     }
   }
 
-  Future<void> _rescheduleAppointment(QueueEntry entry) async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(entry.scheduledTime),
-    );
-    if (picked == null || !mounted) return;
-
-    final now = DateTime.now();
-    final newDateTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      picked.hour,
-      picked.minute,
-    );
-
+  Future<void> _reschedule(BuildContext context) async {
+    final initial = _scheduledTime ?? DateTime.now();
+    final picked = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initial));
+    if (picked == null || !context.mounted) return;
+    final moved = DateTime(initial.year, initial.month, initial.day, picked.hour, picked.minute);
     try {
-      await DataService.rescheduleAppointment(
-        appointmentId: entry.id,
-        newTime: newDateTime,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Appointment rescheduled and patient notified.')),
-      );
-      _loadQueue();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error rescheduling: $e'), backgroundColor: Colors.red),
-      );
+      await DataService.rescheduleAppointment(appointmentId: reference.id, newTime: moved);
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment rescheduled.')));
+    } catch (error) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not reschedule: $error')));
     }
   }
 
-  Future<void> _rejectAppointment(QueueEntry entry) async {
-    final reasonCtrl = TextEditingController();
+  Future<void> _reject(BuildContext context) async {
+    final reason = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Reject Appointment Request'),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reject request'),
         content: TextField(
-          controller: reasonCtrl,
-          decoration: const InputDecoration(
-            labelText: 'Reason for decline',
-            hintText: 'e.g. Doctor unavailable or slot full',
-          ),
+          controller: reason,
+          autofocus: true,
+          maxLines: 2,
+          decoration: const InputDecoration(labelText: 'Reason required'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () {
-              if (reasonCtrl.text.trim().isEmpty) {
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(content: Text('A reason is required to reject a request.')),
-                );
+              if (reason.text.trim().isEmpty) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(const SnackBar(content: Text('Enter a rejection reason.')));
                 return;
               }
-              Navigator.pop(ctx, true);
+              Navigator.pop(dialogContext, true);
             },
             child: const Text('Reject'),
           ),
         ],
       ),
     );
-
-    if (confirmed == true && mounted) {
-      try {
-        await DataService.rejectAppointment(
-          appointmentId: entry.id,
-          reason: reasonCtrl.text.trim(),
-        );
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Appointment rejected.')),
-        );
-        _loadQueue();
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error rejecting: $e'), backgroundColor: Colors.red),
-        );
-      }
+    if (confirmed != true) return;
+    try {
+      await DataService.rejectAppointment(appointmentId: reference.id, reason: reason.text.trim());
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment rejected.')));
+    } catch (error) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not reject: $error')));
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Build
-  // ---------------------------------------------------------------------------
+  Future<void> _markDone(BuildContext context) async {
+    try {
+      await FirestoreService.markAppointmentCompletedAndUnlockChat(reference.id);
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment marked done; follow-up chat unlocked.')));
+    } catch (error) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not complete: $error')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-
-    final body = _buildBody(cs);
-
-    if (!widget.showAppBar) {
-      return body;
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
+    final queuePosition = (data['queuePosition'] as num?)?.toInt();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(_resolveChamberName(_activeChamberId), style: const TextStyle(fontSize: 16)),
-            if (!_loading && _errorMessage == null)
-              Text(
-                '${_queue.length} patient${_queue.length == 1 ? "" : "s"}'
-                ' · $_remainingCount remaining today',
-                style: tt.labelSmall?.copyWith(
-                  color: cs.onSurface.withValues(alpha: 0.65),
-                ),
-              ),
-          ],
-        ),
-        actions: const [
-          ProfileAvatarButton(role: UserRole.operator),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        heroTag: null,
-        onPressed: _loadQueue,
-        icon: const Icon(Icons.refresh),
-        label: const Text('Refresh'),
-      ),
-      body: body,
-    );
-  }
-
-  Widget _buildBody(ColorScheme cs) {
-    // 1. Loading State
-    if (_loading) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Loading live patient queue...',
-                style: TextStyle(color: Colors.grey)),
-          ],
-        ),
-      );
-    }
-
-    // 2. Error State + Retry Button (Standardized across app)
-    if (_errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.cloud_off_outlined, size: 56, color: cs.error),
-              const SizedBox(height: 16),
-              Text(
-                'Error loading queue',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 16, color: cs.error),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _errorMessage!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-              ),
-              const SizedBox(height: 18),
-              FilledButton.icon(
-                onPressed: _loadQueue,
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // 3. Honest Empty State (No fake fallback)
-    if (_queue.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.event_available_outlined,
-                  size: 56, color: Colors.grey[350]),
-              const SizedBox(height: 16),
-              Text(
-                'No patients in queue today.',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                  color: Colors.grey[800],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'New patient appointments scheduled for this chamber will appear here.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[500], fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: _loadQueue,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Check for Updates'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final uniqueDoctorNames = ['All', ..._queue.map((e) => e.doctorName).toSet()];
-    final visibleEntries = _selectedDoctorFilter == 'All'
-        ? _queue
-        : _queue.where((e) => e.doctorName == _selectedDoctorFilter).toList();
-
-    // 4. Success State — Interactive Reorderable List with controls
-    return Column(
-      children: [
-        if (_assignedChambers.length > 1)
-          Container(
-            width: double.infinity,
-            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
+            Row(
               children: [
-                const Icon(Icons.swap_horiz, size: 18, color: Colors.teal),
-                const SizedBox(width: 8),
-                const Text('Chamber:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: _assignedChambers.map((cId) {
-                        final isSelected = cId == _activeChamberId;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: ChoiceChip(
-                            label: Text(_resolveChamberName(cId), style: const TextStyle(fontSize: 11.5)),
-                            selected: isSelected,
-                            onSelected: (val) {
-                              if (val && _activeChamberId != cId) {
-                                setState(() {
-                                  _activeChamberId = cId;
-                                  _selectedDoctorFilter = 'All';
-                                });
-                                _loadQueue();
-                              }
-                            },
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
+                CircleAvatar(child: Text(queuePosition == null ? '–' : '#$queuePosition')),
+                const SizedBox(width: 12),
+                Expanded(child: Text(_patientName, style: const TextStyle(fontWeight: FontWeight.w700))),
+                Text(_timeLabel(context), style: Theme.of(context).textTheme.labelMedium),
               ],
             ),
-          ),
-        if (uniqueDoctorNames.length > 2)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: uniqueDoctorNames.map((dName) {
-                  final isSelected = _selectedDoctorFilter == dName;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(
-                      label: Text(dName == 'All' ? 'All Doctors' : dName, style: const TextStyle(fontSize: 11)),
-                      selected: isSelected,
-                      onSelected: (val) {
-                        if (val) {
-                          setState(() => _selectedDoctorFilter = dName);
-                        }
-                      },
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Live Queue (${_queue.length})',
-                style:
-                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
+            const SizedBox(height: 7),
+            Text(_doctorName, style: Theme.of(context).textTheme.bodySmall),
+            if (view == _DeskView.requests) ...[
+              const SizedBox(height: 12),
               Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  FilledButton.tonalIcon(
-                    onPressed: _showAddAppointmentDialog,
-                    icon: const Icon(Icons.person_add, size: 16),
-                    label: const Text('Add Patient'),
-                  ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    icon: const Icon(Icons.delete_sweep_outlined,
-                        color: Colors.redAccent),
-                    tooltip: 'Clear all/hardcoded appointments',
-                    onPressed: _clearAllAppointments,
-                  ),
+                  Expanded(child: FilledButton(onPressed: () => _confirm(context), child: const Text('Confirm'))),
+                  const SizedBox(width: 8),
+                  Expanded(child: OutlinedButton(onPressed: () => _reschedule(context), child: const Text('Reschedule'))),
+                  IconButton(onPressed: () => _reject(context), tooltip: 'Reject', icon: const Icon(Icons.close, color: Colors.red)),
                 ],
               ),
-            ],
-          ),
+            ] else if (view == _DeskView.queue)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(onPressed: () => _markDone(context), icon: const Icon(Icons.check_circle_outline), label: const Text('Mark done')),
+              ),
+          ],
         ),
-        Expanded(
-          child: ReorderableListView.builder(
-            padding: const EdgeInsets.only(top: 8, bottom: 88),
-            itemCount: visibleEntries.length,
-            buildDefaultDragHandles: false,
-            // ignore: deprecated_member_use
-            onReorder: _onReorder,
-            proxyDecorator: (child, index, animation) => Material(
-              elevation: 4,
-              borderRadius: BorderRadius.circular(12),
-              color: Colors.transparent,
-              child: child,
-            ),
-            itemBuilder: (context, index) {
-              final entry = visibleEntries[index];
-              final expanded = _expandedNotes.contains(entry.id);
-              return _buildTile(
-                context: context,
-                entry: entry,
-                index: index,
-                cs: cs,
-                expanded: expanded,
-              );
-            },
-          ),
-        ),
-      ],
+      ),
     );
   }
+}
 
-  Widget _buildTile({
-    required BuildContext context,
-    required QueueEntry entry,
-    required int index,
-    required ColorScheme cs,
-    required bool expanded,
-  }) {
-    return Padding(
-      key: ValueKey(entry.id),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Material(
-        borderRadius: BorderRadius.circular(12),
-        color: cs.surface,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: cs.outlineVariant),
-          ),
+class _ErrorState extends StatelessWidget {
+  const _ErrorState({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                contentPadding: const EdgeInsets.only(
-                  left: 4,
-                  right: 4,
-                  top: 2,
-                  bottom: 2,
-                ),
-                onTap: () => _showEditAppointmentDialog(entry),
-                leading: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      constraints: const BoxConstraints(
-                        minWidth: 32,
-                        minHeight: 32,
-                      ),
-                      padding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(
-                        entry.status == 'done'
-                            ? Icons.check_circle
-                            : Icons.radio_button_unchecked,
-                        color: entry.status == 'done'
-                            ? const Color(0xFF16A34A)
-                            : Colors.grey.shade400,
-                        size: 24,
-                      ),
-                      tooltip: entry.status == 'done'
-                          ? 'Mark as Waiting'
-                          : 'Tick as Done',
-                      onPressed: () {
-                        final nextStatus =
-                            entry.status == 'done' ? 'waiting' : 'done';
-                        setState(() => entry.status = nextStatus);
-                        _patchAppointment(entry.id, {'status': nextStatus});
-                        if (nextStatus == 'done') {
-                          FirestoreService.markAppointmentCompletedAndUnlockChat(entry.id);
-                        }
-                      },
-                    ),
-                    _PositionBadge(
-                      position: entry.queuePosition,
-                      bgColor: cs.primary,
-                      fgColor: cs.onPrimary,
-                    ),
-                  ],
-                ),
-                title: Text(
-                  entry.patientName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    decoration: entry.status == 'done'
-                        ? TextDecoration.lineThrough
-                        : null,
-                    color: entry.status == 'done' ? Colors.grey : null,
-                  ),
-                ),
-                subtitle: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _formatTime(entry.scheduledTime),
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                    const SizedBox(width: 8),
-                    _StatusChip(
-                      label: _chipLabel(entry.status),
-                      bgColor: _chipBg(entry.status, cs),
-                      fgColor: _chipFg(entry.status, cs),
-                    ),
-                  ],
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      constraints: const BoxConstraints(
-                        minWidth: 32,
-                        minHeight: 32,
-                      ),
-                      padding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Edit details',
-                      icon: Icon(Icons.edit_outlined,
-                          size: 18, color: Colors.grey[700]),
-                      onPressed: () => _showEditAppointmentDialog(entry),
-                    ),
-                    IconButton(
-                      constraints: const BoxConstraints(
-                        minWidth: 32,
-                        minHeight: 32,
-                      ),
-                      padding: EdgeInsets.zero,
-                      tooltip: expanded ? 'Hide note' : 'Add / view note',
-                      icon: Icon(
-                        expanded ? Icons.notes : Icons.edit_note_outlined,
-                        size: 20,
-                        color: Colors.grey[600],
-                      ),
-                      onPressed: () => _toggleNote(entry.id),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    ReorderableDragStartListener(
-                      index: index,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 4),
-                        child: Icon(Icons.drag_handle, color: Colors.grey),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (entry.status == 'requested')
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF16A34A),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          icon: const Icon(Icons.check, size: 16),
-                          label: const Text('Confirm', style: TextStyle(fontSize: 12)),
-                          onPressed: () => _confirmAppointment(entry),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton.tonalIcon(
-                          style: FilledButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          icon: const Icon(Icons.edit_calendar, size: 16),
-                          label: const Text('Reschedule', style: TextStyle(fontSize: 12)),
-                          onPressed: () => _rescheduleAppointment(entry),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        tooltip: 'Reject request',
-                        icon: const Icon(Icons.cancel_outlined, color: Colors.red, size: 20),
-                        onPressed: () => _rejectAppointment(entry),
-                      ),
-                    ],
-                  ),
-                ),
-              AnimatedCrossFade(
-                duration: const Duration(milliseconds: 200),
-                crossFadeState: expanded
-                    ? CrossFadeState.showSecond
-                    : CrossFadeState.showFirst,
-                firstChild: const SizedBox.shrink(),
-                secondChild: _NoteEditor(
-                  controller: _noteControllers[entry.id]!,
-                  onSubmitted: () => _submitNote(entry),
-                ),
-              ),
+              const Icon(Icons.cloud_off_outlined, size: 44),
+              const SizedBox(height: 12),
+              Text(message, textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _PositionBadge extends StatelessWidget {
-  final int position;
-  final Color bgColor;
-  final Color fgColor;
-
-  const _PositionBadge({
-    required this.position,
-    required this.bgColor,
-    required this.fgColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return CircleAvatar(
-      radius: 18,
-      backgroundColor: bgColor,
-      child: Text(
-        '$position',
-        style: TextStyle(
-          color: fgColor,
-          fontWeight: FontWeight.bold,
-          fontSize: 14,
-        ),
-      ),
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  final String label;
-  final Color bgColor;
-  final Color fgColor;
-
-  const _StatusChip({
-    required this.label,
-    required this.bgColor,
-    required this.fgColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: fgColor,
-        ),
-      ),
-    );
-  }
-}
-
-class _NoteEditor extends StatelessWidget {
-  final TextEditingController controller;
-  final VoidCallback onSubmitted;
-
-  const _NoteEditor({
-    required this.controller,
-    required this.onSubmitted,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      child: TextField(
-        controller: controller,
-        maxLines: 2,
-        minLines: 1,
-        textInputAction: TextInputAction.done,
-        decoration: InputDecoration(
-          hintText: 'Operator note…',
-          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
-          isDense: true,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.grey[300]!),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.grey[300]!),
-          ),
-        ),
-        onEditingComplete: onSubmitted,
-        onSubmitted: (_) => onSubmitted(),
-      ),
-    );
-  }
+      );
 }

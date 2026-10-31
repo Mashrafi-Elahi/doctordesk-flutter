@@ -22,6 +22,29 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   final String _userId = NotificationService.currentUserId;
 
+  Future<void> _confirmClearAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Clear all notifications?'),
+        content: const Text('This removes every notification from this account.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await NotificationService.clearAll(_userId);
+    if (mounted) setState(() {});
+  }
+
   IconData _iconForType(String type) => switch (type) {
         'comment' => Icons.chat_bubble_outline_rounded,
         'appointment' => Icons.calendar_today_rounded,
@@ -80,10 +103,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () async {
-              await NotificationService.clearAll(_userId);
-              if (mounted) setState(() {});
-            },
+            onPressed: _confirmClearAll,
             child: const Text('Clear all'),
           ),
         ],

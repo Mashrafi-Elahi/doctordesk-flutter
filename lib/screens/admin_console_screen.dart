@@ -33,6 +33,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   final TextEditingController _manualUidController = TextEditingController();
   bool _isUploadingBundled = false;
   int _bundledUploadCursor = 0;
+  int _bundledDoctorTotal = 0;
   double _bundledUploadProgress = 0.0;
   String _bundledUploadStatus = '';
   final TextEditingController _moderatorUidController = TextEditingController();
@@ -64,10 +65,12 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final cur = prefs.getInt('admin_bundled_doctors_upload_cursor') ?? 0;
+      final total = await FirestoreService.bundledDoctorCount();
       if (mounted) {
         setState(() {
           _bundledUploadCursor = cur;
-          _bundledUploadProgress = (cur / 6048.0).clamp(0.0, 1.0);
+          _bundledDoctorTotal = total;
+          _bundledUploadProgress = total > 0 ? (cur / total).clamp(0.0, 1.0) : 0.0;
         });
       }
     } catch (_) {}
@@ -707,32 +710,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     }
   }
 
-  Future<void> _updateDoctorVerification(String doctorId, String newStatus) async {
-    final adminUid = AuthService.currentUser?.uid ?? 'admin';
-    setState(() => _loading = true);
-    try {
-      await FirestoreService.updateDoctorVerificationStatus(
-        doctorId: doctorId,
-        status: newStatus,
-        adminUid: adminUid,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Doctor status updated to $newStatus')),
-        );
-      }
-      await _loadVerificationDoctors();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating verification status: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
   Future<void> _approveClaim(Map<String, dynamic> claim) async {
     final adminUid = AuthService.currentUser?.uid ?? 'admin';
     final requestId = claim['id'] as String;
@@ -961,8 +938,9 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               const SizedBox(height: 16),
             ],
 
-            // Doctor Role Allocation Section (Role allocation via database only)
-            _sectionTitle('DOCTOR ROLE ALLOCATION & DATABASE APPROVALS'),
+
+            // 1. Verification Section
+            _sectionTitle('VERIFICATION'),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -1184,254 +1162,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               ),
             ),
             const SizedBox(height: 20),
-
-            // Doctor Directory Management Section
-            _sectionTitle('DOCTOR DIRECTORY (ADD & DELETE DOCTOR)'),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Doctor Profiles Directory',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 13),
-                        ),
-                        FilledButton.icon(
-                          icon: const Icon(Icons.person_add, size: 16),
-                          label: const Text('Add Doctor'),
-                          onPressed: _showAddDoctorDialog,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Admins can add verified doctors directly or manage profiles in the directory.',
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.cloud_upload_outlined, color: Colors.teal),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'Upload Bundled Doctors to Firestore',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                          ),
-                        ),
-                        if (_bundledUploadCursor >= 6048)
-                          const Chip(
-                            label: Text('Synced', style: TextStyle(fontSize: 11, color: Colors.teal)),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Uploads the 6,048 bundled doctors to Firestore with stable IDs in batches of 500. Resumable and idempotent.',
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 12),
-                    if (_isUploadingBundled) ...[
-                      LinearProgressIndicator(value: _bundledUploadProgress),
-                      const SizedBox(height: 8),
-                      Text(
-                        _bundledUploadStatus.isNotEmpty ? _bundledUploadStatus : 'Writing batches of 500...',
-                        style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.w600),
-                      ),
-                    ] else ...[
-                      Text(
-                        'Uploaded: $_bundledUploadCursor / 6048 doctors live in Firestore',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          FilledButton.icon(
-                            icon: Icon(_bundledUploadCursor >= 6048 ? Icons.sync : Icons.cloud_upload, size: 16),
-                            label: Text(
-                              _bundledUploadCursor == 0
-                                  ? 'Start Upload (Batches of 500)'
-                                  : _bundledUploadCursor < 6048
-                                      ? 'Resume Upload ($_bundledUploadCursor/6048)'
-                                      : 'Re-sync All to Firestore',
-                            ),
-                            onPressed: () => _startBundledUpload(restart: _bundledUploadCursor >= 6048),
-                          ),
-                          if (_bundledUploadCursor > 0 && _bundledUploadCursor < 6048)
-                            OutlinedButton(
-                              onPressed: () => _startBundledUpload(restart: true),
-                              child: const Text('Restart from 0'),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Moderator Management Section
-            _sectionTitle('MODERATOR APPOINTMENTS & PERMISSIONS'),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'System Administrators can appoint and remove moderators. Moderators can post YouTube videos, publish clinical tips, and answer community Q&A. Moderators cannot remove other moderators.',
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 12),
-                    if (!AuthService.userRoles.isAdmin)
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.amber.shade300),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.lock_outline,
-                                size: 18, color: Colors.amber.shade900),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Restricted: You are viewing as a Moderator. Moderators cannot add or remove other moderators.',
-                                style: TextStyle(
-                                    fontSize: 12, color: Colors.amber.shade900),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Active Moderators (${_moderators.length})',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 13),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.refresh, size: 20),
-                          tooltip: 'Refresh moderators',
-                          onPressed: _loading ? null : _loadModerators,
-                        ),
-                      ],
-                    ),
-                    const Divider(height: 1),
-                    if (_moderators.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Center(
-                          child: Text(
-                            'No moderators appointed yet.',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                          ),
-                        ),
-                      )
-                    else
-                      ..._moderators.map((mod) {
-                        final uid = mod['uid'] ?? '';
-                        final name = mod['name'] ?? 'Moderator User';
-                        final email = mod['email'] ?? '';
-                        final isAdmin = AuthService.userRoles.isAdmin;
-
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const CircleAvatar(
-                            backgroundColor: Colors.deepOrange,
-                            child: Icon(Icons.security,
-                                color: Colors.white, size: 18),
-                          ),
-                          title: Text('$name',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 13.5)),
-                          subtitle: Text(
-                              'UID: $uid${email.isNotEmpty ? ' • $email' : ''}',
-                              style: const TextStyle(fontSize: 11)),
-                          trailing: isAdmin
-                              ? OutlinedButton(
-                                  style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.red),
-                                  onPressed: _loading
-                                      ? null
-                                      : () => _toggleModeratorRole(uid, false),
-                                  child: const Text('Revoke'),
-                                )
-                              : null,
-                        );
-                      }),
-                    if (AuthService.userRoles.isAdmin) ...[
-                      const SizedBox(height: 12),
-                      const Divider(),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Appoint New Moderator (by UID):',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 12.5),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _moderatorUidController,
-                              decoration: const InputDecoration(
-                                hintText: 'Enter user UID to make moderator',
-                                isDense: true,
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton(
-                            style: FilledButton.styleFrom(
-                                backgroundColor: Colors.deepOrange),
-                            onPressed: _loading
-                                ? null
-                                : () {
-                                    final uid =
-                                        _moderatorUidController.text.trim();
-                                    if (uid.isNotEmpty) {
-                                      _toggleModeratorRole(uid, true);
-                                    }
-                                  },
-                            child: const Text('Appoint'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Appointment & Queue Controls
-            _sectionTitle('DOCTOR VERIFICATION (BY STATUS)'),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -1596,36 +1327,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                       }
                                     },
                                   ),
-                                  const SizedBox(width: 6),
-                                  if (status != 'verified')
-                                    FilledButton.tonal(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.green.shade50,
-                                        foregroundColor: Colors.green.shade800,
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                      onPressed: _loading ? null : () => _updateDoctorVerification(docId, 'verified'),
-                                      child: const Text('Mark Verified', style: TextStyle(fontSize: 11)),
-                                    ),
-                                  const SizedBox(width: 6),
-                                  if (status != 'rejected')
-                                    OutlinedButton(
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.red.shade700,
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                      onPressed: _loading ? null : () => _updateDoctorVerification(docId, 'rejected'),
-                                      child: const Text('Reject', style: TextStyle(fontSize: 11)),
-                                    ),
-                                  if (status != 'pending' && status != 'unverified')
-                                    Padding(
-                                      padding: const EdgeInsets.only(left: 6),
-                                      child: TextButton(
-                                        style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                                        onPressed: _loading ? null : () => _updateDoctorVerification(docId, 'pending'),
-                                        child: const Text('Set Pending', style: TextStyle(fontSize: 11)),
-                                      ),
-                                    ),
                                 ],
                               ),
                               const SizedBox(height: 6),
@@ -1684,9 +1385,10 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            const SizedBox(height: 20),
 
-            // Claim Requests Section
-            _sectionTitle('DOCTOR PROFILE CLAIM REQUESTS'),
+            // 2. Claims Section
+            _sectionTitle('CLAIMS'),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.link, color: Colors.indigo),
@@ -1873,9 +1575,117 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            const SizedBox(height: 20),
 
-            // Paid Telehealth & Consultation Review Section
-            _sectionTitle('TELEHEALTH & PAID CONSULTATION APPROVALS'),
+            // 3. Doctors Section
+            _sectionTitle('DOCTORS'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Doctor Profiles Directory',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        FilledButton.icon(
+                          icon: const Icon(Icons.person_add, size: 16),
+                          label: const Text('Add Doctor'),
+                          onPressed: _showAddDoctorDialog,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Admins can add verified doctors directly or manage profiles in the directory.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.cloud_upload_outlined, color: Colors.teal),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Upload Bundled Doctors to Firestore',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                        ),
+                        if (_bundledDoctorTotal > 0 && _bundledUploadCursor >= _bundledDoctorTotal)
+                          const Chip(
+                            label: Text('Synced', style: TextStyle(fontSize: 11, color: Colors.teal)),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _bundledDoctorTotal > 0
+                          ? 'Uploads $_bundledDoctorTotal bundled doctors to Firestore with stable IDs in batches of 500. Resumable and idempotent.'
+                          : 'Uploads bundled doctors to Firestore with stable IDs in batches of 500. Resumable and idempotent.',
+                      style: const TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    if (_isUploadingBundled) ...[
+                      LinearProgressIndicator(value: _bundledUploadProgress),
+                      const SizedBox(height: 8),
+                      Text(
+                        _bundledUploadStatus.isNotEmpty ? _bundledUploadStatus : 'Writing batches of 500...',
+                        style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.w600),
+                      ),
+                    ] else ...[
+                      Text(
+                        'Uploaded: $_bundledUploadCursor / $_bundledDoctorTotal doctors live in Firestore',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            icon: Icon(_bundledDoctorTotal > 0 && _bundledUploadCursor >= _bundledDoctorTotal ? Icons.sync : Icons.cloud_upload, size: 16),
+                            label: Text(
+                              _bundledUploadCursor == 0
+                                  ? 'Start Upload (Batches of 500)'
+                                  : _bundledUploadCursor < _bundledDoctorTotal
+                                      ? 'Resume Upload ($_bundledUploadCursor/$_bundledDoctorTotal)'
+                                      : 'Re-sync All to Firestore',
+                            ),
+                            onPressed: () => _startBundledUpload(restart: _bundledDoctorTotal > 0 && _bundledUploadCursor >= _bundledDoctorTotal),
+                          ),
+                          if (_bundledUploadCursor > 0 && _bundledUploadCursor < _bundledDoctorTotal)
+                            OutlinedButton(
+                              onPressed: () => _startBundledUpload(restart: true),
+                              child: const Text('Restart from 0'),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const SizedBox(height: 20),
+
+            // 4. Consultations Section
+            _sectionTitle('CONSULTATIONS'),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.payment, color: Colors.teal),
@@ -1893,10 +1703,150 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            const SizedBox(height: 20),
 
-            // Appointment & Queue Controls (Wrapped in kDebugMode)
+            // 5. Maintenance Section
+            _sectionTitle('MAINTENANCE'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'System Administrators can appoint and remove moderators. Moderators can post YouTube videos, publish clinical tips, and answer community Q&A. Moderators cannot remove other moderators.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    if (!AuthService.userRoles.isAdmin)
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.lock_outline,
+                                size: 18, color: Colors.amber.shade900),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Restricted: You are viewing as a Moderator. Moderators cannot add or remove other moderators.',
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.amber.shade900),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Active Moderators (${_moderators.length})',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh, size: 20),
+                          tooltip: 'Refresh moderators',
+                          onPressed: _loading ? null : _loadModerators,
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 1),
+                    if (_moderators.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: Text(
+                            'No moderators appointed yet.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      ..._moderators.map((mod) {
+                        final uid = mod['uid'] ?? '';
+                        final name = mod['name'] ?? 'Moderator User';
+                        final email = mod['email'] ?? '';
+                        final isAdmin = AuthService.userRoles.isAdmin;
+
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const CircleAvatar(
+                            backgroundColor: Colors.deepOrange,
+                            child: Icon(Icons.security,
+                                color: Colors.white, size: 18),
+                          ),
+                          title: Text('$name',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 13.5)),
+                          subtitle: Text(
+                              'UID: $uid${email.isNotEmpty ? ' • $email' : ''}',
+                              style: const TextStyle(fontSize: 11)),
+                          trailing: isAdmin
+                              ? OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.red),
+                                  onPressed: _loading
+                                      ? null
+                                      : () => _toggleModeratorRole(uid, false),
+                                  child: const Text('Revoke'),
+                                )
+                              : null,
+                        );
+                      }),
+                    if (AuthService.userRoles.isAdmin) ...[
+                      const SizedBox(height: 12),
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Appoint New Moderator (by UID):',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 12.5),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _moderatorUidController,
+                              decoration: const InputDecoration(
+                                hintText: 'Enter user UID to make moderator',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                                backgroundColor: Colors.deepOrange),
+                            onPressed: _loading
+                                ? null
+                                : () {
+                                    final uid =
+                                        _moderatorUidController.text.trim();
+                                    if (uid.isNotEmpty) {
+                                      _toggleModeratorRole(uid, true);
+                                    }
+                                  },
+                            child: const Text('Appoint'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const SizedBox(height: 12),
             if (kDebugMode) ...[
-              _sectionTitle('APPOINTMENTS & QUEUE MANAGEMENT (DEBUG)'),
               Card(
                 child: Column(
                   children: [
@@ -1916,7 +1866,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               const SizedBox(height: 20),
 
               // Role Impersonation & Testing
-              _sectionTitle('ROLE & SESSION SWITCHER (DEBUG)'),
               Card(
                 child: Column(
                   children: [
@@ -1964,7 +1913,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
               const SizedBox(height: 20),
 
               // Database Utilities
-              _sectionTitle('DATABASE & CACHE UTILITIES (DEBUG)'),
               Card(
                 child: Column(
                   children: [
@@ -1987,6 +1935,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                 ),
               ),
             ],
+            const SizedBox(height: 20),
           ],
         ),
       ),

@@ -66,6 +66,15 @@ class AppointmentQueries {
         .orderBy('scheduledTime');
   }
 
+  /// Completed appointments for one chamber, most recently scheduled first.
+  static Query<Map<String, dynamic>> completedForChamber(String chamberId) {
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('status', isEqualTo: 'done')
+        .orderBy('scheduledTime', descending: true);
+  }
+
   /// All appointments for a patient, newest first.
   static Query<Map<String, dynamic>> patientAppointments(String userId) {
     return _db

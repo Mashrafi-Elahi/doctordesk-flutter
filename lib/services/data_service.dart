@@ -634,18 +634,6 @@ class DataService {
     );
   }
 
-  static Future<void> updateDoctorVerificationStatus({
-    required String doctorId,
-    required String status,
-    String? adminUid,
-  }) {
-    return FirestoreService.updateDoctorVerificationStatus(
-      doctorId: doctorId,
-      status: status,
-      adminUid: adminUid,
-    );
-  }
-
   static Future<void> recordManualBmdcVerification({
     required String doctorId,
     required String registrationNumber,

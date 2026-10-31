@@ -126,11 +126,13 @@ service cloud.firestore {
         isAdmin() ||
         (request.resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().doctorProfileId == request.resource.data.doctorId) ||
+         getUserData().doctorProfileId == request.resource.data.doctorId &&
+         request.resource.data.status != 'requested') ||
         (request.resource.data.chamberId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().operatorAssignments != null &&
-         request.resource.data.chamberId in getUserData().operatorAssignments)
+         request.resource.data.chamberId in getUserData().operatorAssignments &&
+         request.resource.data.status != 'requested')
       );
       allow read: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||

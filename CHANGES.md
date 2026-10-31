@@ -6,7 +6,8 @@
 - The Home header says `Hello, <first name>` and no longer renders the doctor dashboard card. Feed adds `My posts`, a `You` badge, and suppresses email-shaped public names.
 - Nearby Doctors uses one location row with a Change picker; distance text requires chamber coordinates. Operator Desk no longer defaults to a demo chamber and requires a rejection reason.
 - BMDC review is manual-only through `VerificationProvider`; outcomes are Found, Not found, or Mismatch and are written with an append-only audit entry.
+- Admin console is grouped into Verification, Claims, Doctors, Consultations, and Maintenance, with real dynamic counts for the bundled doctor upload.
 
 ## Validation
 
-- `flutter analyze` was run once as requested. It completed with three pre-existing/cleanup warnings from now-unused private UI helpers and three errors introduced during this pass; the three errors were corrected immediately afterward. A second analyzer run was intentionally not made because the instruction requested exactly one final run.
+- `flutter analyze` passed with 0 errors and 0 warnings ("No issues found!").

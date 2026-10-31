@@ -1,7 +1,7 @@
 # Implementation Progress — fix/safety
 
 **Branch:** fix/safety  
-**Last commit:** `fb80425` (pre-implementation baseline)  
+**Last commit:** `3ffc573` step 1: booking flow  
 **Last updated:** 2026-11-01
 
 ---
@@ -10,8 +10,8 @@
 
 | Step | Name | Status |
 |------|------|--------|
-| 1 | Booking Flow (Query builders, chamberId fix, notifications) | 🔄 In Progress |
-| 2 | Roles & Active Portal | ⬜ Not Started |
+| 1 | Booking Flow (Query builders, chamberId fix, notifications) | ✅ Done |
+| 2 | Roles & Active Portal | 🔄 In Progress |
 | 3 | Home, Header & Removals | ⬜ Not Started |
 | 4 | Doctors Near Me | ⬜ Not Started |
 | 5 | Operator Desk Redesign | ⬜ Not Started |
@@ -27,24 +27,34 @@
 
 ## Step Details
 
-### Step 1: Booking Flow
-**What is next:** 
-1. Create `lib/services/appointment_queries.dart` — single source of truth for all appointment queries.
-2. Fix `chamberId` in `doctor_detail_screen.dart:327` — use `c.id` not `c.hospitalName`.
-3. Fix notification in `firestore_service.dart:2164` — "Request sent" to patient; doctor and operator get "New request".
-4. Add missing composite indexes to `firestore.indexes.json`.
-5. Fix `isDoctorManagingOperator` in `firestore.rules:43` — add `assignedChambers`.
-6. Fix chat message rule null-field guard in `firestore.rules:334`.
+### Step 1: Booking Flow ✅
+**Commit:** `3ffc573`
+**Changes:**
+- Created `lib/services/appointment_queries.dart` — single source of truth for all appointment queries (operator requests, doctor requests, today queue, patient appointments, badge counts).
+- Fixed `doctor_detail_screen.dart:327-335` — `chamberId` now uses `c.id` (Firestore doc ID) not `c.hospitalName`.
+- Fixed `firestore_service.dart:2164-2173` — patient gets "Appointment Requested" (not "Confirmed"); doctor (via `claimedByUid`) and chamber operator (via `operatorUid`) now also get notified.
+- Fixed `firestore.rules:43` — added `assignedChambers` to `isDoctorManagingOperator` allowed keys.
+- Fixed `firestore.rules:334-336` — guarded `expiresAt` and `messageLimit` null fields in chat message create rule.
+- Fixed `firestore.indexes.json` — replaced wrong `(notifications, userId, createdAt)` index with `(userId, timestamp)`. Added 4 composite indexes for `appointments` (chamberId+status+createdAt, doctorId+status+createdAt, chamberId+status+scheduledTime, doctorId+status+scheduledTime).
+- Fixed `home_screen.dart:182-212` — scoped appointment stream by role (doctor/operator) using `AppointmentQueries`; fixed `todayCount` Timestamp comparison (was using `toString().startsWith()` which never matched).
+- Added `_doctorProfileId` and `_operatorAssignments` state fields to home screen, loaded from user profile in `_loadData()`.
 
 **Known issues:**
-- Existing appointments in Firestore have `chamberId = "Bup"` or `"BSL"` (chamber names, not IDs). These cannot be back-filled by the app; they need a one-time migration script or manual correction.
+- Existing appointments in Firestore have `chamberId = "Bup"` or `"BSL"` (chamber names, not IDs). These cannot be back-filled by the app; they need a one-time migration script or manual correction (logged in QUESTIONS.md Q1).
+
+### Step 2: Roles & Active Portal
+**What is next:**
+1. Remove "Rate as Chamber Operator" prompt from patient-facing doctor profiles unless viewer is a doctor.
+2. Add rule: patient cannot book with their own `doctorProfileId`.
+3. Add rule: operator cannot create `status == 'requested'` for a chamber they operate.
+4. Show rules diff for any changes.
 
 ---
 
 ## Handoff Notes for Codex
 
 **Current branch:** fix/safety  
-**What was done before this:** Full audit (REVIEW.md) identifying 10 P0/P1/P2 issues across booking, rules, BMDC, UI.  
+**What was done:** Step 1 complete — booking flow fixes (chamberId, notifications, query builders, indexes, rules).  
 **Important constraints:**
 - `tools/serviceAccount.json` and `.env` are gitignored; do not commit them.
 - `lib/services/chat_service.dart` — do NOT touch (works correctly).

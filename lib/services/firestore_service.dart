@@ -2368,34 +2368,6 @@ class FirestoreService {
     } catch (_) {}
   }
 
-  /// Admin updates doctor verification status directly
-  static Future<void> updateDoctorVerificationStatus({
-    required String doctorId,
-    required String status,
-    String? adminUid,
-  }) async {
-    final uid = adminUid ?? _auth.currentUser?.uid ?? 'admin';
-    final docRef = _db.collection('doctors').doc(doctorId);
-    await docRef.set({
-      'verificationStatus': status,
-      'isBmdcVerified': status == 'verified',
-      'verifiedBy': uid,
-      'verifiedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    try {
-      final docSnap = await docRef.get();
-      final claimedUid = docSnap.data()?['claimedByUid']?.toString();
-      if (claimedUid != null && claimedUid.isNotEmpty) {
-        await _db.collection('users').doc(claimedUid).set({
-          'isBmdcVerified': status == 'verified',
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-    } catch (_) {}
-  }
-
   /// Stores a manual BMDC decision and an immutable audit entry in one batch.
   /// Firestore rules require the caller to be represented by /admins/{uid}.
   static Future<void> recordManualBmdcVerification({
@@ -2481,6 +2453,10 @@ class FirestoreService {
       return _cachedBundledDoctors!;
     }
   }
+
+  /// Returns the actual number of records in the APK's bundled directory.
+  /// Admin upload UI uses this instead of a hand-maintained display constant.
+  static Future<int> bundledDoctorCount() async => (await getBundledDoctors()).length;
 
   static List<Map<String, dynamic>> _defaultFallbackDoctors() {
     return [
