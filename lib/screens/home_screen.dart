@@ -1,3 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/user_role.dart';
+import '../models/chat_message.dart';
+import '../services/chat_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,6 +14,7 @@ import 'appointment_screen.dart';
 import 'doctor_detail_screen.dart';
 import 'doctors_screen.dart';
 import 'nearby_doctors_screen.dart';
+import 'doctor_manager_screen.dart';
 import 'profile_screen.dart';
 import '../services/auth_service.dart';
 import '../services/specialty_matcher.dart';
@@ -24,8 +29,13 @@ import '../theme/app_constants.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int, {String? searchQuery})? onTabSwitch;
+  final UserRole role;
 
-  const HomeScreen({super.key, this.onTabSwitch});
+  const HomeScreen({
+    super.key,
+    this.onTabSwitch,
+    this.role = UserRole.patient,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -62,6 +72,232 @@ class _HomeScreenState extends State<HomeScreen> {
     if (displayName.trim().isEmpty) return '';
     final firstName = displayName.trim().split(' ').first;
     return firstName.isNotEmpty ? firstName : '';
+  }
+
+  String _getRoleGreeting() {
+    return switch (widget.role) {
+      UserRole.doctor => 'Hello, Doctor',
+      UserRole.admin => 'Hello, Admin',
+      UserRole.operator => 'Hello, Operator',
+      UserRole.patient => 'Hello, Patient',
+    };
+  }
+
+  Widget _buildRoleBadge() {
+    final label = switch (widget.role) {
+      UserRole.doctor => 'Doctor',
+      UserRole.admin => 'Admin',
+      UserRole.operator => 'Operator',
+      UserRole.patient => 'Patient',
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10.5,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDoctorDashboardCard() {
+    final uid = AuthService.currentUser?.uid;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF16A34A).withValues(alpha: 0.08),
+            const Color(0xFF16A34A).withValues(alpha: 0.02),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+        border: Border.all(color: const Color(0xFF16A34A).withValues(alpha: 0.25)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const CircleAvatar(
+                  radius: 18,
+                  backgroundColor: Color(0xFF16A34A),
+                  child: Icon(Icons.medical_services_outlined, color: Colors.white, size: 18),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'My Practice Dashboard',
+                        style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF16A34A),
+                        ),
+                      ),
+                      const Text(
+                        'Live patient line & consultation metrics',
+                        style: TextStyle(fontSize: 11.5, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+                FilledButton.tonal(
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: const Color(0xFFDCFCE7),
+                    foregroundColor: const Color(0xFF15803D),
+                  ),
+                  onPressed: () {
+                    if (widget.onTabSwitch != null) {
+                      widget.onTabSwitch!(2);
+                    } else {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const DoctorManagerScreen()),
+                      );
+                    }
+                  },
+                  child: const Text('Open Desk', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            StreamBuilder<QuerySnapshot>(
+              stream: uid != null
+                  ? FirebaseFirestore.instance
+                      .collection('appointments')
+                      .snapshots()
+                  : null,
+              builder: (ctx, apptSnap) {
+                final allDocs = apptSnap.data?.docs ?? [];
+                final todayStr = DateTime.now().toIso8601String().split('T')[0];
+                int todayCount = 0;
+                int pendingRequests = 0;
+
+                for (final doc in allDocs) {
+                  final d = doc.data() as Map<String, dynamic>? ?? {};
+                  final status = (d['status'] ?? '').toString();
+                  final scheduledTime = (d['scheduledTime'] ?? '').toString();
+
+                  if (status == 'requested') {
+                    pendingRequests++;
+                  }
+                  if ((status == 'confirmed' || status == 'waiting' || status == 'in_progress') &&
+                      scheduledTime.startsWith(todayStr)) {
+                    todayCount++;
+                  }
+                }
+
+                return StreamBuilder<List<ChatSession>>(
+                  stream: uid != null ? ChatService.streamUserChats(uid) : null,
+                  builder: (ctx, chatSnap) {
+                    final chats = chatSnap.data ?? [];
+                    final activeChats = chats.where((c) => c.status == 'active' && !c.isExpired).length;
+
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: _buildMetricTile(
+                            label: "Today's Line",
+                            value: '$todayCount',
+                            icon: Icons.people_outline,
+                            color: const Color(0xFF16A34A),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildMetricTile(
+                            label: 'Requests',
+                            value: '$pendingRequests',
+                            icon: Icons.hourglass_empty,
+                            color: const Color(0xFFEA580C),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildMetricTile(
+                            label: 'Active Chats',
+                            value: '$activeChats',
+                            icon: Icons.chat_outlined,
+                            color: const Color(0xFF0284C7),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetricTile({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 14, color: color),
+              const SizedBox(width: 4),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 10.5, color: Colors.grey, fontWeight: FontWeight.w500),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
   }
 
   String get _avatarInitials {
@@ -384,9 +620,9 @@ class _HomeScreenState extends State<HomeScreen> {
               // 1. Header: Full-width primary-color block with rounded bottom corners (radius 28)
               Container(
                 width: double.infinity,
-                decoration: const BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.only(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).primaryColor,
+                  borderRadius: const BorderRadius.only(
                     bottomLeft: Radius.circular(AppConstants.radiusHeader),
                     bottomRight: Radius.circular(AppConstants.radiusHeader),
                   ),
@@ -442,20 +678,26 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Welcome',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w400,
-                                      color: Colors.white.withValues(alpha: 0.8),
-                                    ),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        _getRoleGreeting(),
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _buildRoleBadge(),
+                                    ],
                                   ),
                                   Text(
-                                    _greetingName.isNotEmpty ? _greetingName : 'DocDesk',
+                                    _greetingName.isNotEmpty ? _greetingName : 'DocDesk Member',
                                     style: GoogleFonts.poppins(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white,
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w400,
+                                      color: Colors.white.withValues(alpha: 0.85),
                                     ),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -578,6 +820,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (widget.role == UserRole.doctor)
+                      _buildDoctorDashboardCard(),
                     // Dropdown matching doctor names / specialties / symptoms
                     _buildSearchSuggestionsDropdown(colorScheme),
                     if (_showSuggestions && _searchController.text.trim().isNotEmpty)

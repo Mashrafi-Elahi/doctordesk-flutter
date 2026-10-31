@@ -1,3 +1,6 @@
+import '../models/chat_message.dart';
+import '../models/consultation.dart';
+import '../services/chat_service.dart';
 import 'bmdc_verification_screen.dart';
 import 'chat_screen.dart';
 import 'consultation_booking_screen.dart';
@@ -47,6 +50,32 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
 
   List<Map<String, dynamic>> _reviews = [];
   bool _isReviewsLoading = true;
+
+  ChatSession? _unlockedChatSession;
+  Consultation? _activeConsultation;
+
+  Future<void> _checkChatUnlock(Doctor doctor) async {
+    final uid = AuthService.currentUser?.uid;
+    final docUid = doctor.claimedByUid;
+    if (uid != null && docUid != null && docUid.isNotEmpty) {
+      try {
+        final chat = await ChatService.getUnlockedChatForDoctorAndPatient(
+          doctorUid: docUid,
+          patientUid: uid,
+        );
+        final consult = await ConsultationService.getActiveOrPendingConsultation(
+          patientUid: uid,
+          doctorId: doctor.id,
+        );
+        if (mounted) {
+          setState(() {
+            _unlockedChatSession = chat;
+            _activeConsultation = consult;
+          });
+        }
+      } catch (_) {}
+    }
+  }
 
 
   Future<void> _handleMessageDoctor(Doctor doctor) async {
@@ -144,6 +173,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         _doctor = doctor;
         _isLoading = false;
       });
+      _checkChatUnlock(doctor);
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -913,8 +943,66 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(AppConstants.screenPadding),
-          child: (doctor.isClaimed || (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty))
-              ? Row(
+          child: Builder(
+            builder: (context) {
+              final hasUnlockedChat = _unlockedChatSession != null && _unlockedChatSession!.canSendMessage;
+              final isPaidUnconfirmed = _activeConsultation != null && _activeConsultation!.status == 'paid_unconfirmed';
+              final isDoctorClaimed = doctor.isClaimed || (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty);
+              final allowsPaidConsult = isDoctorClaimed && (doctor.messagingMode == 'paid' || doctor.consultEnabled);
+
+              if (hasUnlockedChat) {
+                return Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF16A34A),
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                        ),
+                        icon: const Icon(Icons.chat, color: Colors.white, size: 18),
+                        label: Text(
+                          'Follow-up Chat',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                chatId: _unlockedChatSession!.id,
+                                otherUserName: doctor.name,
+                                otherUserUid: doctor.claimedByUid!,
+                                isDoctor: false,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 6,
+                      child: FilledButton(
+                        onPressed: () => _showBookingSheet(doctor),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                        ),
+                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              if (isPaidUnconfirmed) {
+                return Row(
                   children: [
                     Expanded(
                       flex: 5,
@@ -924,17 +1012,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(AppConstants.radiusButton),
                           ),
-                          side: const BorderSide(color: AppColors.primary, width: 1.5),
+                          side: const BorderSide(color: Color(0xFFB45309)),
                         ),
-                        icon: const Icon(Icons.chat_outlined, color: AppColors.primary, size: 18),
-                        label: Text(
-                          'Message Doctor',
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13,
-                            color: AppColors.primary,
-                          ),
-                        ),
+                        icon: const Icon(Icons.hourglass_top, color: Color(0xFFB45309), size: 18),
+                        label: const Text('Verifying Pay', style: TextStyle(color: Color(0xFFB45309), fontSize: 12, fontWeight: FontWeight.bold)),
                         onPressed: () => _handleMessageDoctor(doctor),
                       ),
                     ),
@@ -949,27 +1030,74 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             borderRadius: BorderRadius.circular(AppConstants.radiusButton),
                           ),
                         ),
-                        child: Text(
-                          'Book Appointment',
-                          style: AppTheme.buttonText.copyWith(fontSize: 13),
-                        ),
+                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
                       ),
                     ),
                   ],
-                )
-              : FilledButton(
-                  onPressed: () => _showBookingSheet(doctor),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                );
+              }
+
+              if (allowsPaidConsult) {
+                return Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                          side: const BorderSide(color: AppColors.primary, width: 1.5),
+                        ),
+                        icon: const Icon(Icons.videocam_outlined, color: AppColors.primary, size: 18),
+                        label: Text(
+                          'Online ৳${doctor.consultFee.toInt()}',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 12.5, color: AppColors.primary),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ConsultationBookingScreen(doctor: doctor),
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                  ),
-                  child: Text(
-                    'Book Appointment',
-                    style: AppTheme.buttonText,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 6,
+                      child: FilledButton(
+                        onPressed: () => _showBookingSheet(doctor),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                        ),
+                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              return FilledButton(
+                onPressed: () => _showBookingSheet(doctor),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppConstants.radiusButton),
                   ),
                 ),
+                child: Text(
+                  'Book Appointment',
+                  style: AppTheme.buttonText,
+                ),
+              );
+            },
+          ),
         ),
       ),
     );

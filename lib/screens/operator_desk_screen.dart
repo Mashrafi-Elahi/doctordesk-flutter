@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
 import 'package:flutter/material.dart';
 import '../models/user_role.dart';
@@ -86,6 +88,8 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
     _loadQueue();
   }
 
+  final Map<String, String> _chamberNames = {};
+
   Future<void> _loadAssignedChambers() async {
     try {
       final uid = AuthService.currentUser?.uid;
@@ -96,6 +100,29 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                 .where((e) => e.isNotEmpty)
                 .toList() ??
             const <String>[];
+
+        final assignedChambers = (profile?['assignedChambers'] as List?) ?? [];
+        for (final item in assignedChambers) {
+          if (item is Map) {
+            final cid = (item['chamberId'] ?? item['id'] ?? '').toString();
+            final cname = (item['chamberName'] ?? item['name'] ?? '').toString();
+            if (cid.isNotEmpty && cname.isNotEmpty) {
+              _chamberNames[cid] = cname;
+            }
+          }
+        }
+
+        for (final cid in assignments) {
+          if (!_chamberNames.containsKey(cid)) {
+            final docSnap = await FirebaseFirestore.instance.collection('chambers').doc(cid).get();
+            if (docSnap.exists) {
+              final d = docSnap.data() ?? {};
+              final name = (d['name'] ?? d['chamberName'] ?? d['hospitalName'] ?? '').toString();
+              if (name.isNotEmpty) _chamberNames[cid] = name;
+            }
+          }
+        }
+
         if (mounted && assignments.isNotEmpty) {
           setState(() {
             _assignedChambers = assignments;
@@ -110,8 +137,12 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   }
 
   String _resolveChamberName(String cId) {
+    if (_chamberNames.containsKey(cId)) return _chamberNames[cId]!;
     if (cId == 'demo-chamber') return 'Popular Central Desk';
     if (cId == 'chamber-bup-1') return 'BUP Medical Center Desk';
+    if (cId.startsWith('chamber-')) {
+      return 'Chamber Desk (${cId.substring(8, 12.clamp(0, cId.length))})';
+    }
     return cId;
   }
 
@@ -435,6 +466,9 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   'status': currentStatus,
                   'operatorNote': newNote,
                 });
+                if (currentStatus == 'done') {
+                  FirestoreService.markAppointmentCompletedAndUnlockChat(entry.id);
+                }
                 Navigator.pop(ctx);
               },
               child: const Text('Save Details'),
@@ -918,6 +952,9 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                             entry.status == 'done' ? 'waiting' : 'done';
                         setState(() => entry.status = nextStatus);
                         _patchAppointment(entry.id, {'status': nextStatus});
+                        if (nextStatus == 'done') {
+                          FirestoreService.markAppointmentCompletedAndUnlockChat(entry.id);
+                        }
                       },
                     ),
                     _PositionBadge(

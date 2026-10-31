@@ -1628,6 +1628,53 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                     ),
                                 ],
                               ),
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  if (doc['hidden'] == true || doc['isHidden'] == true || doc['isDeleted'] == true) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.shade50,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: Colors.red.shade200),
+                                      ),
+                                      child: Text(
+                                        doc['isDeleted'] == true ? 'DELETED' : 'HIDDEN',
+                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.red.shade800),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    FilledButton.tonal(
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: Colors.teal.shade50,
+                                        foregroundColor: Colors.teal.shade800,
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      onPressed: _loading ? null : () => _restoreDoctor(docId, name),
+                                      child: const Text('Restore to Discovery', style: TextStyle(fontSize: 11)),
+                                    ),
+                                  ] else ...[
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.orange.shade900,
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      icon: const Icon(Icons.visibility_off_outlined, size: 13),
+                                      label: const Text('Hide', style: TextStyle(fontSize: 11)),
+                                      onPressed: _loading ? null : () => _showSoftHideDialog(docId, name),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_forever, size: 18, color: Colors.red),
+                                      tooltip: 'Hard Delete Doctor',
+                                      visualDensity: VisualDensity.compact,
+                                      onPressed: _loading ? null : () => _showHardDeleteDialog(docId, name),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ],
                           ),
                         );
@@ -1972,4 +2019,101 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       ),
     );
   }
+
+  Future<void> _showSoftHideDialog(String docId, String docName) async {
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Soft Hide Dr. $docName'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This doctor will be immediately removed from discovery for patients, but their record remains preserved in Firestore for admin review.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason for hiding',
+                hintText: 'e.g. License check issue, requested removal',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange.shade800),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Hide Doctor'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final uid = AuthService.currentUser?.uid ?? 'admin';
+      final reason = reasonController.text.trim().isNotEmpty
+          ? reasonController.text.trim()
+          : 'Hidden by administrator';
+      await FirestoreService.softHideDoctor(
+        doctorId: docId,
+        reason: reason,
+        adminUid: uid,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Dr. $docName is now hidden from discovery.')),
+        );
+        _loadVerificationDoctors();
+      }
+    }
+  }
+
+  Future<void> _restoreDoctor(String docId, String docName) async {
+    await FirestoreService.restoreDoctor(docId);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Dr. $docName has been restored to discovery.')),
+      );
+      _loadVerificationDoctors();
+    }
+  }
+
+  Future<void> _showHardDeleteDialog(String docId, String docName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Hard Delete Dr. $docName?'),
+        content: const Text(
+          'Warning: This permanently removes the doctor from discovery and writes a persistent tombstone so they never reappear, even from the bundled APK dataset.',
+          style: TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade800),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete Permanently'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await FirestoreService.hardDeleteDoctor(doctorId: docId, isBundled: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Dr. $docName was permanently deleted.')),
+        );
+        _loadVerificationDoctors();
+      }
+    }
+  }
+
 }

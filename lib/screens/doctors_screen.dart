@@ -490,11 +490,11 @@ class _DoctorListCard extends StatelessWidget {
                             child: const Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.hourglass_empty, size: 12, color: Colors.amber),
+                                Icon(Icons.hourglass_empty, size: 12, color: Color(0xFF78350F)),
                                 SizedBox(width: 4),
                                 Text(
                                   'Claim Pending',
-                                  style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.w600),
+                                  style: TextStyle(fontSize: 11, color: Color(0xFF78350F), fontWeight: FontWeight.w600),
                                 ),
                               ],
                             ),

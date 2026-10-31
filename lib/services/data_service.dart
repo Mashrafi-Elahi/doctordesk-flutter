@@ -654,6 +654,10 @@ class DataService {
     return FirestoreService.fetchChamberDoctors(chamberId);
   }
 
+  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId) {
+    return FirestoreService.fetchChamberDoctorDetails(chamberId);
+  }
+
   static Future<void> confirmAppointment({
     required String appointmentId,
     required DateTime confirmedTime,

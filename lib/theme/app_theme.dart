@@ -62,24 +62,24 @@ class AppTheme {
   static ThemeData themeForRole(UserRole role) {
     final (primary, primaryTint, primaryDark) = switch (role) {
       UserRole.patient => (
-          const Color(0xFF1E40AF), // Classic Royal Blue
-          const Color(0xFFEFF6FF),
-          const Color(0xFF1E3A8A),
+          const Color(0xFF0284C7), // Blue
+          const Color(0xFFE0F2FE),
+          const Color(0xFF0369A1),
         ),
       UserRole.doctor => (
-          const Color(0xFF047857), // Medical Emerald Green
-          const Color(0xFFECFDF5),
-          const Color(0xFF065F46),
+          const Color(0xFF16A34A), // Medical Green
+          const Color(0xFFDCFCE7),
+          const Color(0xFF15803D),
         ),
       UserRole.operator => (
-          const Color(0xFFB45309), // Warm Golden Ochre / Amber
-          const Color(0xFFFFFBEB),
-          const Color(0xFF92400E),
+          const Color(0xFFEA580C), // Vibrant Orange
+          const Color(0xFFFFEDD5),
+          const Color(0xFF9A3412),
         ),
       UserRole.admin => (
-          const Color(0xFFB91C1C), // Crimson Red
-          const Color(0xFFFEF2F2),
-          const Color(0xFF991B1B),
+          const Color(0xFF581C87), // Dark Purple
+          const Color(0xFFF3E8FF),
+          const Color(0xFF3B0764),
         ),
     };
 

@@ -120,6 +120,15 @@ class Doctor {
   final bool consultEnabled;
   final double consultFee;
   final String? consultAvailability;
+  final bool isHidden;
+  final String? hiddenReason;
+  final String? hiddenBy;
+  final dynamic hiddenAt;
+  final bool isDeleted;
+  final dynamic deletedAt;
+  final String messagingMode; // 'off' | 'followup' | 'paid'
+  final int followupDays;
+  final int followupMaxMessages;
 
   Doctor({
     required this.id,
@@ -148,6 +157,15 @@ class Doctor {
     this.consultEnabled = false,
     this.consultFee = 500.0,
     this.consultAvailability,
+    this.isHidden = false,
+    this.hiddenReason,
+    this.hiddenBy,
+    this.hiddenAt,
+    this.isDeleted = false,
+    this.deletedAt,
+    this.messagingMode = 'followup',
+    this.followupDays = 7,
+    this.followupMaxMessages = 20,
   })  : bmdcNumber = bmdcNumber ?? bmdcRegNumber,
         verificationStatus = verificationStatus ?? (isBmdcVerified ? 'verified' : 'unverified'),
         claimStatus = claimStatus ?? (claimedByUid != null || isClaimed ? 'claimed' : 'unclaimed');

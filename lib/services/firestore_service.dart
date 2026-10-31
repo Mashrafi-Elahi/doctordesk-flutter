@@ -10,6 +10,7 @@ import '../models/doctor.dart';
 import 'doctor_search_index.dart';
 import 'geofire_utils.dart';
 import 'notification_service.dart';
+import 'chat_service.dart';
 
 /// Cloud Firestore service providing complete data access for DoctorDesk.
 /// Matches the method signatures of [ApiService] for transparent backend switching.
@@ -132,7 +133,7 @@ class FirestoreService {
           data['_id'] = docSnap.id;
           data['id'] = docSnap.id;
           return Doctor.fromJson(data);
-        }).toList();
+        }).where((d) => !d.isHidden && !d.isDeleted).toList();
 
         List<Doctor> resultDocs = firestoreDoctors;
         if (normSearch.isNotEmpty && normSpec != null) {
@@ -219,7 +220,16 @@ class FirestoreService {
       }
     }
 
-    List<Map<String, dynamic>> records = byId.values.toList();
+    final prefs = await SharedPreferences.getInstance();
+    final hiddenIds = (prefs.getStringList('hidden_doctor_ids') ?? []).toSet();
+    final deletedIds = (prefs.getStringList('deleted_doctor_ids') ?? []).toSet();
+
+    List<Map<String, dynamic>> records = byId.values.where((data) {
+      final id = (data['_id'] ?? data['id'] ?? '').toString();
+      if (hiddenIds.contains(id) || deletedIds.contains(id)) return false;
+      if (data['hidden'] == true || data['isHidden'] == true || data['isDeleted'] == true) return false;
+      return true;
+    }).toList();
 
     if (speciality != null &&
         speciality.trim().isNotEmpty &&
@@ -974,18 +984,6 @@ class FirestoreService {
       'submittedAt': FieldValue.serverTimestamp(),
     });
 
-    final doctorRef = _db.collection('doctors').doc(doctorId);
-    await doctorRef.set({
-      'id': doctorId,
-      '_id': doctorId,
-      if (doctor != null) 'name': doctor.name,
-      if (doctor != null) 'specialities': doctor.specialities,
-      'bmdcNumber': bmdcRegNumber,
-      'bmdcRegNumber': bmdcRegNumber,
-      'claimStatus': 'pending',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
     // Notice: NO ROLE IS GRANTED AUTOMATICALLY. Admin must review and approve.
 
     try {
@@ -1084,21 +1082,69 @@ class FirestoreService {
     required String operatorName,
     required String operatorEmail,
   }) async {
-    // 1. Update user document
+    // 1. Resolve human-readable chamber name and doctor name
+    final docRef = _db.collection('doctors').doc(doctorId);
+    final docSnap = await docRef.get();
+    String chamberName = chamberId;
+    String docName = 'Doctor';
+
+    if (docSnap.exists) {
+      final data = docSnap.data() ?? {};
+      docName = (data['name'] ?? 'Doctor').toString();
+      final rawChambers = (data['chambers'] as List?) ?? [];
+      for (final c in rawChambers) {
+        if (c is Map) {
+          final cid = (c['id'] ?? c['hospitalName'] ?? c['name'] ?? '').toString();
+          if (cid == chamberId) {
+            chamberName = (c['name'] ?? c['hospitalName'] ?? chamberId).toString();
+            break;
+          }
+        }
+      }
+    }
+    if (chamberName == chamberId) {
+      if (chamberId == 'demo-chamber') {
+        chamberName = 'Popular Central Diagnostic Desk';
+      } else if (chamberId == 'chamber-bup-1') {
+        chamberName = 'BUP Medical Center Desk';
+      } else if (chamberId.startsWith('chamber-')) {
+        chamberName = 'Chamber Desk (${chamberId.substring(8, 12.clamp(0, chamberId.length))})';
+      }
+    }
+
+    // 2. Save top-level chambers document
+    await _db.collection('chambers').doc(chamberId).set({
+      'id': chamberId,
+      'chamberId': chamberId,
+      'name': chamberName,
+      'chamberName': chamberName,
+      'doctorId': doctorId,
+      'doctorName': docName,
+      'operatorUid': operatorUid,
+      'operatorName': operatorName,
+      'operatorEmail': operatorEmail,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // 3. Update user document with operator role, operatorAssignments, and structured assignedChambers
     final userRef = _db.collection('users').doc(operatorUid);
     await userRef.set({
-
-
       'roles': {
         'isOperator': true,
       },
       'operatorAssignments': FieldValue.arrayUnion([chamberId]),
+      'assignedChambers': FieldValue.arrayUnion([
+        {
+          'chamberId': chamberId,
+          'chamberName': chamberName,
+          'doctorId': doctorId,
+          'doctorName': docName,
+        }
+      ]),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 2. Update the doctor document's chambers list
-    final docRef = _db.collection('doctors').doc(doctorId);
-    final docSnap = await docRef.get();
+    // 4. Update the doctor document's chambers list
     if (docSnap.exists) {
       final data = docSnap.data() ?? {};
       final rawChambers = (data['chambers'] as List?) ?? [];
@@ -1116,12 +1162,12 @@ class FirestoreService {
       await docRef.update({'chambers': updatedChambers});
     }
 
-    // 3. Send in-app notification
+    // 5. Send in-app notification
     try {
       await NotificationService.createNotification(
         userId: operatorUid,
         title: 'Desk Operator Assigned',
-        body: 'You have been assigned as desk operator for $chamberId.',
+        body: 'You have been assigned as desk operator for $chamberName.',
         type: 'system',
         relatedId: chamberId,
       );
@@ -2840,4 +2886,166 @@ class FirestoreService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
+
+  static Future<void> softHideDoctor({
+    required String doctorId,
+    required String reason,
+    required String adminUid,
+  }) async {
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
+      'hidden': true,
+      'isHidden': true,
+      'hiddenReason': reason.trim(),
+      'hiddenBy': adminUid,
+      'hiddenAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hiddenList = prefs.getStringList('hidden_doctor_ids') ?? [];
+      if (!hiddenList.contains(doctorId)) {
+        hiddenList.add(doctorId);
+        await prefs.setStringList('hidden_doctor_ids', hiddenList);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> restoreDoctor(String doctorId) async {
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
+      'hidden': false,
+      'isHidden': false,
+      'isDeleted': false,
+      'hiddenReason': FieldValue.delete(),
+      'hiddenBy': FieldValue.delete(),
+      'hiddenAt': FieldValue.delete(),
+      'deletedAt': FieldValue.delete(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hiddenList = prefs.getStringList('hidden_doctor_ids') ?? [];
+      hiddenList.remove(doctorId);
+      await prefs.setStringList('hidden_doctor_ids', hiddenList);
+
+      final deletedList = prefs.getStringList('deleted_doctor_ids') ?? [];
+      deletedList.remove(doctorId);
+      await prefs.setStringList('deleted_doctor_ids', deletedList);
+    } catch (_) {}
+  }
+
+  static Future<void> hardDeleteDoctor({
+    required String doctorId,
+    bool isBundled = true,
+  }) async {
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
+      'isDeleted': true,
+      'deletedAt': FieldValue.serverTimestamp(),
+      'hidden': true,
+      'isHidden': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final deletedList = prefs.getStringList('deleted_doctor_ids') ?? [];
+      if (!deletedList.contains(doctorId)) {
+        deletedList.add(doctorId);
+        await prefs.setStringList('deleted_doctor_ids', deletedList);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> markAppointmentCompletedAndUnlockChat(String appointmentId) async {
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    if (!apptSnap.exists) return;
+
+    final apptData = apptSnap.data() ?? {};
+    final patientUid = (apptData['userId'] ?? '').toString();
+    final patientName = (apptData['patientName'] ?? 'Patient').toString();
+    final doctorId = (apptData['doctorId'] ?? '').toString();
+    final doctorName = (apptData['doctorName'] ?? 'Doctor').toString();
+
+    // 1. Mark appointment completed
+    await apptRef.update({
+      'status': 'completed',
+      'completedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (doctorId.isEmpty || patientUid.isEmpty) return;
+
+    // 2. Fetch doctor profile to check claimedByUid & messagingMode
+    try {
+      final docSnap = await _db.collection('doctors').doc(doctorId).get();
+      if (!docSnap.exists) return;
+
+      final docData = docSnap.data() ?? {};
+      final doctorUid = (docData['claimedByUid'] ?? '').toString();
+      if (doctorUid.isEmpty) return;
+
+      final messagingMode = (docData['messagingMode'] ?? 'followup').toString();
+      if (messagingMode == 'off' || messagingMode == 'paid') {
+        return;
+      }
+
+      final followupDays = (docData['followupDays'] as num?)?.toInt() ?? 7;
+      final followupMaxMessages = (docData['followupMaxMessages'] as num?)?.toInt() ?? 20;
+
+      await ChatService.unlockChatForCare(
+        doctorUid: doctorUid,
+        patientUid: patientUid,
+        doctorName: doctorName,
+        patientName: patientName,
+        doctorId: doctorId,
+        unlockedBy: appointmentId,
+        followupDays: followupDays,
+        followupMaxMessages: followupMaxMessages,
+      );
+    } catch (e) {
+      debugPrint('Error unlocking follow-up chat: $e');
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId) async {
+    try {
+      final snap = await _db.collection('doctors').limit(100).get();
+      final List<Map<String, dynamic>> result = [];
+      final Set<String> seenIds = {};
+
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final chambers = (d['chambers'] as List?) ?? [];
+        for (final c in chambers) {
+          if (c is Map) {
+            final id = (c['id'] ?? c['hospitalName'] ?? c['name'] ?? '').toString();
+            if (id == chamberId || c['hospitalName'] == chamberId) {
+              final docId = doc.id;
+              if (!seenIds.contains(docId)) {
+                seenIds.add(docId);
+                final hours = (c['visitingHours'] ?? c['hours'] ?? c['time'] ?? 'Visiting Hours: 5:00 PM - 9:00 PM').toString();
+                final specialities = (d['specialities'] as List?) ?? [];
+                result.add({
+                  'doctorId': docId,
+                  'name': (d['name'] ?? 'Doctor').toString(),
+                  'speciality': specialities.isNotEmpty ? specialities.first.toString() : 'Specialist',
+                  'hours': hours,
+                  'degree': (d['degree'] ?? '').toString(),
+                });
+              }
+            }
+          }
+        }
+      }
+      return result;
+    } catch (_) {
+      return [];
+    }
+  }
+
 }

@@ -253,7 +253,7 @@ class MainShellState extends State<MainShell> {
 
     // Build the dynamic pages and navigation destinations list
     final List<Widget> pages = [
-      HomeScreen(onTabSwitch: switchToTab),
+      HomeScreen(role: _currentRole, onTabSwitch: switchToTab),
       const FeedScreen(),
       if (showThirdTab) _getMiddleScreen(),
       const InboxScreen(),

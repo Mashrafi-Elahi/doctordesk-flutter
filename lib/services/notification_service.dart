@@ -87,6 +87,7 @@ class NotificationService {
       final now = DateTime.now();
       final notificationData = {
         'userId': userId,
+        'recipientId': userId,
         'title': title,
         'body': body,
         'type': type,
