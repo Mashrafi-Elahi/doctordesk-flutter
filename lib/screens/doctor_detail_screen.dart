@@ -361,14 +361,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   chamberId: selectedChamber,
                                   doctorId: doctor.id,
                                   doctorName: doctor.name,
-                                  status: 'waiting',
+                                  status: 'requested',
                                 );
                                 if (ctx.mounted) Navigator.pop(ctx);
                                 if (mounted) {
                                   messenger.showSnackBar(
                                     const SnackBar(
                                       content: Text(
-                                          'Appointment booked! Check the Appointments tab.'),
+                                          'Appointment request submitted! The chamber desk will confirm your queue number and time.'),
                                       behavior: SnackBarBehavior.floating,
                                     ),
                                   );

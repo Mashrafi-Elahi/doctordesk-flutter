@@ -97,11 +97,14 @@ service cloud.firestore {
     }
 
     // 4. Appointments Collection
-    // Create by patient (own), operator (chamber walk-in), doctor (practice walk-in), or admin.
-    // Read/update/delete by patient, doctor, assigned operator, or admin.
+    // Patient may only create as 'requested' (no confirmed status or queuePosition).
+    // Patient may only update to cancel own appointment (status == 'cancelled').
+    // Doctor, assigned operator, and admin have full lifecycle management (confirm, reschedule, reject, walk-ins).
     match /appointments/{apptId} {
       allow create: if isAuthenticated() && (
-        request.resource.data.userId == request.auth.uid ||
+        (request.resource.data.userId == request.auth.uid &&
+         request.resource.data.status == 'requested' &&
+         (!('queuePosition' in request.resource.data) || request.resource.data.queuePosition == null)) ||
         isAdmin() ||
         (request.resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
@@ -111,7 +114,7 @@ service cloud.firestore {
          getUserData().operatorAssignments != null &&
          request.resource.data.chamberId in getUserData().operatorAssignments)
       );
-      allow read, update, delete: if isAuthenticated() && (
+      allow read: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
         isAdmin() ||
         (resource.data.doctorId != null &&
@@ -122,6 +125,35 @@ service cloud.firestore {
          getUserData().operatorAssignments != null &&
          resource.data.chamberId in getUserData().operatorAssignments)
       );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments) ||
+        (resource.data.userId == request.auth.uid &&
+         request.resource.data.status == 'cancelled' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']))
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments)
+      );
+    }
+
+    // 4b. Queue Counter Documents (for transactional queue numbers: queues/{chamberId}_{yyyyMMdd})
+    match /queues/{queueId} {
+      allow read, write: if isAuthenticated();
     }
 
     // 5. Notifications Collection

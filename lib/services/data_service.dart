@@ -653,4 +653,42 @@ class DataService {
   static Future<List<String>> fetchChamberDoctors(String chamberId) {
     return FirestoreService.fetchChamberDoctors(chamberId);
   }
+
+  static Future<void> confirmAppointment({
+    required String appointmentId,
+    required DateTime confirmedTime,
+    int slotMinutes = 15,
+  }) {
+    return FirestoreService.confirmAppointment(
+      appointmentId: appointmentId,
+      confirmedTime: confirmedTime,
+      slotMinutes: slotMinutes,
+    );
+  }
+
+  static Future<void> rescheduleAppointment({
+    required String appointmentId,
+    required DateTime newTime,
+    int slotMinutes = 15,
+  }) {
+    return FirestoreService.rescheduleAppointment(
+      appointmentId: appointmentId,
+      newTime: newTime,
+      slotMinutes: slotMinutes,
+    );
+  }
+
+  static Future<void> rejectAppointment({
+    required String appointmentId,
+    required String reason,
+  }) {
+    return FirestoreService.rejectAppointment(
+      appointmentId: appointmentId,
+      reason: reason,
+    );
+  }
+
+  static Future<void> cancelAppointmentByPatient(String appointmentId) {
+    return FirestoreService.cancelAppointmentByPatient(appointmentId);
+  }
 }

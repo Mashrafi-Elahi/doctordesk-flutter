@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/user_role.dart';
 import '../widgets/profile_avatar_button.dart';
 import '../services/api_service.dart';
+import '../services/data_service.dart';
 
 // ---------------------------------------------------------------------------
 // Local view model for the Firestore appointment fields used by the desk.
@@ -462,22 +463,140 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   }
 
   Color _chipBg(String status, ColorScheme cs) => switch (status) {
+        'requested' => Colors.amber.shade100,
+        'confirmed' => Colors.green.shade100,
         'in_progress' => cs.primaryContainer,
-        'done' => const Color(0xFFC8E6C9), // green[100]
-        _ => const Color(0xFFE0E0E0), // grey[300]
+        'done' => const Color(0xFFE8F5E9),
+        _ => cs.surfaceContainerHighest,
       };
 
   Color _chipFg(String status, ColorScheme cs) => switch (status) {
+        'requested' => Colors.amber.shade900,
+        'confirmed' => Colors.green.shade900,
         'in_progress' => cs.onPrimaryContainer,
         'done' => const Color(0xFF2E7D32), // green[800]
         _ => const Color(0xFF616161), // grey[700]
       };
 
   String _chipLabel(String status) => switch (status) {
+        'requested' => 'Requested',
+        'confirmed' => 'Confirmed',
         'in_progress' => 'In Progress',
         'done' => 'Done',
         _ => 'Waiting',
       };
+
+  Future<void> _confirmAppointment(QueueEntry entry) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(entry.scheduledTime),
+    );
+    if (picked == null || !mounted) return;
+
+    final now = DateTime.now();
+    final confirmedDateTime = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      picked.hour,
+      picked.minute,
+    );
+
+    try {
+      await DataService.confirmAppointment(
+        appointmentId: entry.id,
+        confirmedTime: confirmedDateTime,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Appointment confirmed and queue number assigned!')),
+      );
+      _loadQueue();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error confirming: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _rescheduleAppointment(QueueEntry entry) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(entry.scheduledTime),
+    );
+    if (picked == null || !mounted) return;
+
+    final now = DateTime.now();
+    final newDateTime = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      picked.hour,
+      picked.minute,
+    );
+
+    try {
+      await DataService.rescheduleAppointment(
+        appointmentId: entry.id,
+        newTime: newDateTime,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Appointment rescheduled and patient notified.')),
+      );
+      _loadQueue();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error rescheduling: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _rejectAppointment(QueueEntry entry) async {
+    final reasonCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject Appointment Request'),
+        content: TextField(
+          controller: reasonCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Reason for decline',
+            hintText: 'e.g. Doctor unavailable or slot full',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        await DataService.rejectAppointment(
+          appointmentId: entry.id,
+          reason: reasonCtrl.text.trim().isEmpty ? 'Doctor schedule unavailable' : reasonCtrl.text.trim(),
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Appointment rejected.')),
+        );
+        _loadQueue();
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error rejecting: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Build
@@ -875,6 +994,42 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   ],
                 ),
               ),
+              if (entry.status == 'requested')
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF16A34A),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          icon: const Icon(Icons.check, size: 16),
+                          label: const Text('Confirm', style: TextStyle(fontSize: 12)),
+                          onPressed: () => _confirmAppointment(entry),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          icon: const Icon(Icons.edit_calendar, size: 16),
+                          label: const Text('Reschedule', style: TextStyle(fontSize: 12)),
+                          onPressed: () => _rescheduleAppointment(entry),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        tooltip: 'Reject request',
+                        icon: const Icon(Icons.cancel_outlined, color: Colors.red, size: 20),
+                        onPressed: () => _rejectAppointment(entry),
+                      ),
+                    ],
+                  ),
+                ),
               AnimatedCrossFade(
                 duration: const Duration(milliseconds: 200),
                 crossFadeState: expanded
