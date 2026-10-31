@@ -1,3 +1,4 @@
+import 'operator_desk_screen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -874,82 +875,153 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Desk Status', style: AppTheme.sectionTitle),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Assigned Chamber',
-                                      style: AppTheme.caption),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _userProfile?['operatorChamberName'] ??
-                                        'Central Clinic Desk',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Today's Queue",
-                                      style: AppTheme.caption),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '3 Waiting',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
+                      Text('Assigned Chambers & Live Queues', style: AppTheme.sectionTitle),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Live waiting counts for today across all your assigned desks.',
+                        style: AppTheme.caption,
                       ),
                       const SizedBox(height: 14),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                  AppConstants.radiusButton),
-                            ),
-                          ),
-                          onPressed: () {
-                            widget.onTabSwitch?.call(2);
-                          },
-                          child: const Text('Open Desk'),
-                        ),
+                      Builder(
+                        builder: (context) {
+                          final assignments = (_userProfile?['operatorAssignments'] as List?)
+                                  ?.map((e) => e.toString())
+                                  .where((e) => e.isNotEmpty)
+                                  .toList() ??
+                              const <String>[];
+                          final assignedChamberMaps = (_userProfile?['assignedChambers'] as List?)
+                                  ?.map((e) => Map<String, dynamic>.from(e as Map))
+                                  .toList() ??
+                              const <Map<String, dynamic>>[];
+
+                          if (assignments.isEmpty) {
+                            return Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.info_outline, color: AppColors.primary),
+                                  SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      'No chambers assigned yet. Please contact an administrator to be assigned to clinic desks.',
+                                      style: TextStyle(fontSize: 12.5),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          return Column(
+                            children: assignments.map((chamberId) {
+                              String chamberName = chamberId;
+                              for (final ac in assignedChamberMaps) {
+                                if (ac['id'] == chamberId) {
+                                  chamberName = (ac['name'] ?? ac['hospitalName'] ?? chamberId).toString();
+                                  break;
+                                }
+                              }
+                              if (chamberName == 'demo-chamber') {
+                                chamberName = 'Popular Central Diagnostic Desk';
+                              } else if (chamberName == 'chamber-bup-1') {
+                                chamberName = 'BUP Medical Center Desk';
+                              }
+
+                              return InkWell(
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => OperatorDeskScreen(chamberId: chamberId),
+                                    ),
+                                  );
+                                },
+                                borderRadius: BorderRadius.circular(12),
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primaryTint,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.15)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const CircleAvatar(
+                                        radius: 20,
+                                        backgroundColor: AppColors.primary,
+                                        child: Icon(Icons.desk, color: Colors.white, size: 20),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              chamberName,
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: AppColors.primary,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 3),
+                                            FutureBuilder<List<String>>(
+                                              future: DataService.fetchChamberDoctors(chamberId),
+                                              builder: (ctx, snap) {
+                                                final docs = snap.data ?? [];
+                                                final label = docs.isNotEmpty
+                                                    ? 'Doctors: ${docs.join(", ")}'
+                                                    : 'Chamber ID: $chamberId';
+                                                return Text(
+                                                  label,
+                                                  style: const TextStyle(fontSize: 11.5, color: Colors.grey),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                );
+                                              },
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      StreamBuilder<int>(
+                                        stream: DataService.streamTodayWaitingCount(chamberId),
+                                        builder: (ctx, snap) {
+                                          final count = snap.data ?? 0;
+                                          return Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: count > 0 ? Colors.amber.shade100 : Colors.green.shade50,
+                                              borderRadius: BorderRadius.circular(20),
+                                              border: Border.all(
+                                                color: count > 0 ? Colors.amber.shade300 : Colors.green.shade200,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              '$count Waiting',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                                color: count > 0 ? Colors.amber.shade900 : Colors.green.shade800,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(Icons.chevron_right, color: Colors.grey, size: 18),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
                       ),
                     ],
                   ),

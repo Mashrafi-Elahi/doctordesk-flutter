@@ -645,4 +645,12 @@ class DataService {
       adminUid: adminUid,
     );
   }
+
+  static Stream<int> streamTodayWaitingCount(String chamberId) {
+    return FirestoreService.streamTodayWaitingCount(chamberId);
+  }
+
+  static Future<List<String>> fetchChamberDoctors(String chamberId) {
+    return FirestoreService.fetchChamberDoctors(chamberId);
+  }
 }

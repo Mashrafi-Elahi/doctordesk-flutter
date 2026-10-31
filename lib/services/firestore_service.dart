@@ -1955,6 +1955,7 @@ class FirestoreService {
   // APPOINTMENTS & QUEUE MANAGEMENT
   // =========================================================================
 
+  /// Fetches appointments for today (00:00 to 23:59) for a chamber or doctor.
   static Future<List<Map<String, dynamic>>> fetchTodayQueue(
       String chamberId) async {
     try {
@@ -1968,19 +1969,25 @@ class FirestoreService {
               .toList() ??
           const <String>[];
 
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day, 0, 0, 0);
+      final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+
       Query<Map<String, dynamic>> query = _db.collection('appointments');
       if (roles['isDoctor'] == true &&
           doctorProfileId != null &&
           doctorProfileId.isNotEmpty) {
         query = query.where('doctorId', isEqualTo: doctorProfileId);
-      } else if (roles['isOperator'] == true &&
-          assignments.contains(chamberId)) {
+      } else if ((roles['isOperator'] == true && assignments.contains(chamberId)) || roles['isAdmin'] == true) {
         query = query.where('chamberId', isEqualTo: chamberId);
       } else {
-        // A queue must never fall back to every appointment in the database.
         return [];
       }
-      query = query.orderBy('queuePosition', descending: false);
+
+      query = query
+          .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+          .orderBy('scheduledTime', descending: false);
 
       final snapshot = await query.get();
       return snapshot.docs.map((doc) {
@@ -1995,6 +2002,50 @@ class FirestoreService {
       }).toList();
     } catch (e) {
       debugPrint('Firestore fetchTodayQueue error: $e');
+      return [];
+    }
+  }
+
+  /// Live stream of today's waiting count for a chamber (single source of truth).
+  static Stream<int> streamTodayWaitingCount(String chamberId) {
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day, 0, 0, 0);
+    final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+        .snapshots()
+        .map((snap) => snap.docs.where((doc) {
+              final status = (doc.data()['status'] ?? '').toString().toLowerCase();
+              return status != 'done' && status != 'cancelled';
+            }).length);
+  }
+
+  /// Fetches unique doctor names practicing in a chamber.
+  static Future<List<String>> fetchChamberDoctors(String chamberId) async {
+    try {
+      final snap = await _db.collection('doctors').limit(100).get();
+      final List<String> result = [];
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final chambers = (d['chambers'] as List?) ?? [];
+        for (final c in chambers) {
+          if (c is Map) {
+            final id = c['id'] ?? c['hospitalName'] ?? c['name'];
+            if (id == chamberId || c['hospitalName'] == chamberId) {
+              final name = (d['name'] ?? '').toString();
+              if (name.isNotEmpty && !result.contains(name)) {
+                result.add(name);
+              }
+            }
+          }
+        }
+      }
+      return result;
+    } catch (_) {
       return [];
     }
   }

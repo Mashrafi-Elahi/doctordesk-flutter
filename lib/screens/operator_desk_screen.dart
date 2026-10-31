@@ -1,3 +1,4 @@
+import '../services/auth_service.dart';
 import 'package:flutter/material.dart';
 import '../models/user_role.dart';
 import '../widgets/profile_avatar_button.dart';
@@ -14,6 +15,8 @@ class QueueEntry {
   String status; // 'waiting' | 'in_progress' | 'done'
   int queuePosition;
   String operatorNote;
+  final String doctorName;
+  final String? doctorId;
 
   QueueEntry({
     required this.id,
@@ -22,15 +25,19 @@ class QueueEntry {
     required this.status,
     required this.queuePosition,
     required this.operatorNote,
+    this.doctorName = 'Specialist Doctor',
+    this.doctorId,
   });
 
   factory QueueEntry.fromJson(Map<String, dynamic> json) => QueueEntry(
-        id: json['_id'] as String,
+        id: (json['_id'] ?? json['id'] ?? '').toString(),
         patientName: (json['patientName'] as String?) ?? 'Patient',
         scheduledTime: DateTime.parse(json['scheduledTime'] as String),
         status: (json['status'] as String?) ?? 'waiting',
         queuePosition: (json['queuePosition'] as int?) ?? 0,
         operatorNote: (json['operatorNote'] as String?) ?? '',
+        doctorName: (json['doctorName'] as String?) ?? 'Specialist Doctor',
+        doctorId: json['doctorId'] as String?,
       );
 }
 
@@ -56,6 +63,9 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   List<QueueEntry> _queue = [];
   bool _loading = true;
   String? _errorMessage;
+  late String _activeChamberId;
+  List<String> _assignedChambers = [];
+  String _selectedDoctorFilter = 'All';
 
   /// Tracks which entries have their note editor expanded (by entry id).
   final Set<String> _expandedNotes = {};
@@ -70,7 +80,38 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   @override
   void initState() {
     super.initState();
+    _activeChamberId = widget.chamberId;
+    _loadAssignedChambers();
     _loadQueue();
+  }
+
+  Future<void> _loadAssignedChambers() async {
+    try {
+      final uid = AuthService.currentUser?.uid;
+      if (uid != null) {
+        final profile = await ApiService.fetchUserProfile(uid);
+        final assignments = (profile?['operatorAssignments'] as List?)
+                ?.map((e) => e.toString())
+                .where((e) => e.isNotEmpty)
+                .toList() ??
+            const <String>[];
+        if (mounted && assignments.isNotEmpty) {
+          setState(() {
+            _assignedChambers = assignments;
+            if (_activeChamberId == 'demo-chamber' && assignments.isNotEmpty) {
+              _activeChamberId = assignments.first;
+            }
+          });
+          _loadQueue();
+        }
+      }
+    } catch (_) {}
+  }
+
+  String _resolveChamberName(String cId) {
+    if (cId == 'demo-chamber') return 'Popular Central Desk';
+    if (cId == 'chamber-bup-1') return 'BUP Medical Center Desk';
+    return cId;
   }
 
   @override
@@ -92,7 +133,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
     });
 
     try {
-      final data = await ApiService.fetchTodayQueue(widget.chamberId);
+      final data = await ApiService.fetchTodayQueue(_activeChamberId);
       final entries = data.map((e) => QueueEntry.fromJson(e)).toList();
 
       _applyQueue(entries);
@@ -287,7 +328,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                   await ApiService.createAppointment(
                     patientName: name,
                     scheduledTime: sched,
-                    chamberId: widget.chamberId,
+                    chamberId: _activeChamberId,
                     status: 'waiting',
                     operatorNote: noteController.text.trim(),
                   );
@@ -458,11 +499,11 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Chamber Queue — Today'),
+            Text(_resolveChamberName(_activeChamberId), style: const TextStyle(fontSize: 16)),
             if (!_loading && _errorMessage == null)
               Text(
-                '${_queue.length} patient${_queue.length == 1 ? '' : 's'}'
-                ' · $_remainingCount remaining',
+                '${_queue.length} patient${_queue.length == 1 ? "" : "s"}'
+                ' · $_remainingCount remaining today',
                 style: tt.labelSmall?.copyWith(
                   color: cs.onSurface.withValues(alpha: 0.65),
                 ),
@@ -569,9 +610,79 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
       );
     }
 
+    final uniqueDoctorNames = ['All', ..._queue.map((e) => e.doctorName).toSet()];
+    final visibleEntries = _selectedDoctorFilter == 'All'
+        ? _queue
+        : _queue.where((e) => e.doctorName == _selectedDoctorFilter).toList();
+
     // 4. Success State — Interactive Reorderable List with controls
     return Column(
       children: [
+        if (_assignedChambers.length > 1)
+          Container(
+            width: double.infinity,
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.swap_horiz, size: 18, color: Colors.teal),
+                const SizedBox(width: 8),
+                const Text('Chamber:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: _assignedChambers.map((cId) {
+                        final isSelected = cId == _activeChamberId;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: ChoiceChip(
+                            label: Text(_resolveChamberName(cId), style: const TextStyle(fontSize: 11.5)),
+                            selected: isSelected,
+                            onSelected: (val) {
+                              if (val && _activeChamberId != cId) {
+                                setState(() {
+                                  _activeChamberId = cId;
+                                  _selectedDoctorFilter = 'All';
+                                });
+                                _loadQueue();
+                              }
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (uniqueDoctorNames.length > 2)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: uniqueDoctorNames.map((dName) {
+                  final isSelected = _selectedDoctorFilter == dName;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(dName == 'All' ? 'All Doctors' : dName, style: const TextStyle(fontSize: 11)),
+                      selected: isSelected,
+                      onSelected: (val) {
+                        if (val) {
+                          setState(() => _selectedDoctorFilter = dName);
+                        }
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: Row(
@@ -605,7 +716,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         Expanded(
           child: ReorderableListView.builder(
             padding: const EdgeInsets.only(top: 8, bottom: 88),
-            itemCount: _queue.length,
+            itemCount: visibleEntries.length,
             buildDefaultDragHandles: false,
             // ignore: deprecated_member_use
             onReorder: _onReorder,
@@ -616,7 +727,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
               child: child,
             ),
             itemBuilder: (context, index) {
-              final entry = _queue[index];
+              final entry = visibleEntries[index];
               final expanded = _expandedNotes.contains(entry.id);
               return _buildTile(
                 context: context,
