@@ -646,6 +646,20 @@ class DataService {
     );
   }
 
+  static Future<void> recordManualBmdcVerification({
+    required String doctorId,
+    required String registrationNumber,
+    required String outcome,
+    String? note,
+  }) {
+    return FirestoreService.recordManualBmdcVerification(
+      doctorId: doctorId,
+      registrationNumber: registrationNumber,
+      outcome: outcome,
+      note: note,
+    );
+  }
+
   static Stream<int> streamTodayWaitingCount(String chamberId) {
     return FirestoreService.streamTodayWaitingCount(chamberId);
   }

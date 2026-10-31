@@ -1,10 +1,7 @@
 import '../models/chat_message.dart';
-import '../models/consultation.dart';
 import '../services/chat_service.dart';
 import 'bmdc_verification_screen.dart';
 import 'chat_screen.dart';
-import 'consultation_booking_screen.dart';
-import '../services/consultation_service.dart';
 import 'dart:io';
 
 import 'package:firebase_storage/firebase_storage.dart';
@@ -52,7 +49,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   bool _isReviewsLoading = true;
 
   ChatSession? _unlockedChatSession;
-  Consultation? _activeConsultation;
 
   Future<void> _checkChatUnlock(Doctor doctor) async {
     final uid = AuthService.currentUser?.uid;
@@ -63,92 +59,14 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           doctorUid: docUid,
           patientUid: uid,
         );
-        final consult = await ConsultationService.getActiveOrPendingConsultation(
-          patientUid: uid,
-          doctorId: doctor.id,
-        );
         if (mounted) {
           setState(() {
             _unlockedChatSession = chat;
-            _activeConsultation = consult;
           });
         }
       } catch (_) {}
     }
   }
-
-
-  Future<void> _handleMessageDoctor(Doctor doctor) async {
-    final patient = AuthService.currentUser;
-    if (patient == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please log in first to message the doctor.')),
-      );
-      return;
-    }
-
-    final docUid = doctor.claimedByUid;
-    if (docUid == null || docUid.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This doctor profile has not been claimed yet.')),
-      );
-      return;
-    }
-
-    if (patient.uid == docUid) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You cannot start a consultation with yourself.')),
-      );
-      return;
-    }
-
-    final existing = await ConsultationService.getActiveOrPendingConsultation(
-      patientUid: patient.uid,
-      doctorId: doctor.id,
-    );
-
-    if (!mounted) return;
-
-    if (existing != null) {
-      if (existing.status == 'active' && existing.chatId != null && existing.chatId!.isNotEmpty) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ChatScreen(
-              chatId: existing.chatId!,
-              otherUserName: doctor.name,
-              otherUserUid: docUid,
-              isDoctor: false,
-            ),
-          ),
-        );
-        return;
-      } else if (existing.status == 'paid_unconfirmed') {
-        showDialog(
-          context: context,
-          builder: (c) => AlertDialog(
-            icon: const Icon(Icons.hourglass_top, color: Colors.amber, size: 48),
-            title: const Text('Payment Verification Pending'),
-            content: Text(
-              'Your payment (TrxID: ${existing.trxId}) is being verified by Dr. ${doctor.name}.\n\nYou will receive a notification and direct chat will unlock once confirmed.',
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK')),
-            ],
-          ),
-        );
-        return;
-      }
-    }
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ConsultationBookingScreen(doctor: doctor),
-      ),
-    );
-  }
-
   @override
   void initState() {
     super.initState();
@@ -324,6 +242,16 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       return;
     }
 
+    final roles = AuthService.userRoles;
+    if (roles.doctorProfileId != null &&
+        roles.doctorProfileId!.isNotEmpty &&
+        roles.doctorProfileId == doctor.id) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You cannot book an appointment with your own profile.')),
+      );
+      return;
+    }
+
     // Build (id, label) pairs -- chamberId must be the Firestore doc ID, not the name.
     final chamberOptions = <({String id, String label})>[];
     for (final c in doctor.chambers) {
@@ -472,6 +400,12 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               setSheetState(() => isSubmitting = true);
                               final messenger = ScaffoldMessenger.of(context);
                               try {
+                                if (AuthService.userRoles.operatorAssignments
+                                    .contains(selectedChamberId)) {
+                                  throw StateError(
+                                    'Operators cannot submit a patient request for a chamber they operate.',
+                                  );
+                                }
                                 final scheduled = DateTime(
                                   selectedDate.year,
                                   selectedDate.month,
@@ -948,16 +882,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
               ),
             ),
 
-            // ── 8. Claim this profile ──────────────────────────────────────
-            if (!doctor.isClaimed)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
-                child: _SectionCard(
-                  title: 'Claim this profile',
-                  child: _buildClaimContent(doctor),
-                ),
-              ),
-
             const SizedBox(height: 100), // Reserve bottom space for floating/fixed button
           ],
         ),
@@ -968,9 +892,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           child: Builder(
             builder: (context) {
               final hasUnlockedChat = _unlockedChatSession != null && _unlockedChatSession!.canSendMessage;
-              final isPaidUnconfirmed = _activeConsultation != null && _activeConsultation!.status == 'paid_unconfirmed';
-              final isDoctorClaimed = doctor.isClaimed || (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty);
-              final allowsPaidConsult = isDoctorClaimed && (doctor.messagingMode == 'paid' || doctor.consultEnabled);
 
               if (hasUnlockedChat) {
                 return Row(
@@ -1000,88 +921,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                 otherUserUid: doctor.claimedByUid!,
                                 isDoctor: false,
                               ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 6,
-                      child: FilledButton(
-                        onPressed: () => _showBookingSheet(doctor),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                          ),
-                        ),
-                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              if (isPaidUnconfirmed) {
-                return Row(
-                  children: [
-                    Expanded(
-                      flex: 5,
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                          ),
-                          side: const BorderSide(color: Color(0xFFB45309)),
-                        ),
-                        icon: const Icon(Icons.hourglass_top, color: Color(0xFFB45309), size: 18),
-                        label: const Text('Verifying Pay', style: TextStyle(color: Color(0xFFB45309), fontSize: 12, fontWeight: FontWeight.bold)),
-                        onPressed: () => _handleMessageDoctor(doctor),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 6,
-                      child: FilledButton(
-                        onPressed: () => _showBookingSheet(doctor),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                          ),
-                        ),
-                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              if (allowsPaidConsult) {
-                return Row(
-                  children: [
-                    Expanded(
-                      flex: 5,
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                          ),
-                          side: const BorderSide(color: AppColors.primary, width: 1.5),
-                        ),
-                        icon: const Icon(Icons.videocam_outlined, color: AppColors.primary, size: 18),
-                        label: Text(
-                          'Online ৳${doctor.consultFee.toInt()}',
-                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 12.5, color: AppColors.primary),
-                        ),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ConsultationBookingScreen(doctor: doctor),
                             ),
                           );
                         },

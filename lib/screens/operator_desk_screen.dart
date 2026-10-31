@@ -28,7 +28,7 @@ class QueueEntry {
     required this.status,
     required this.queuePosition,
     required this.operatorNote,
-    this.doctorName = 'Specialist Doctor',
+    this.doctorName = 'Doctor not specified',
     this.doctorId,
   });
 
@@ -39,7 +39,7 @@ class QueueEntry {
         status: (json['status'] as String?) ?? 'waiting',
         queuePosition: (json['queuePosition'] as int?) ?? 0,
         operatorNote: (json['operatorNote'] as String?) ?? '',
-        doctorName: (json['doctorName'] as String?) ?? 'Specialist Doctor',
+        doctorName: (json['doctorName'] as String?) ?? 'Doctor not specified',
         doctorId: json['doctorId'] as String?,
       );
 }
@@ -49,12 +49,12 @@ class QueueEntry {
 // ---------------------------------------------------------------------------
 
 class OperatorDeskScreen extends StatefulWidget {
-  final String chamberId;
+  final String? chamberId;
   final bool showAppBar;
 
   const OperatorDeskScreen({
     super.key,
-    this.chamberId = 'demo-chamber',
+    this.chamberId,
     this.showAppBar = true,
   });
 
@@ -83,9 +83,9 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   @override
   void initState() {
     super.initState();
-    _activeChamberId = widget.chamberId;
+    _activeChamberId = widget.chamberId ?? '';
     _loadAssignedChambers();
-    _loadQueue();
+    if (_activeChamberId.isNotEmpty) _loadQueue();
   }
 
   final Map<String, String> _chamberNames = {};
@@ -99,7 +99,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                 ?.map((e) => e.toString())
                 .where((e) => e.isNotEmpty)
                 .toList() ??
-            const <String>[];
+            AuthService.userRoles.operatorAssignments;
 
         final assignedChambers = (profile?['assignedChambers'] as List?) ?? [];
         for (final item in assignedChambers) {
@@ -126,7 +126,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         if (mounted && assignments.isNotEmpty) {
           setState(() {
             _assignedChambers = assignments;
-            if (_activeChamberId == 'demo-chamber' && assignments.isNotEmpty) {
+            if (_activeChamberId.isEmpty && assignments.isNotEmpty) {
               _activeChamberId = assignments.first;
             }
           });
@@ -138,12 +138,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
 
   String _resolveChamberName(String cId) {
     if (_chamberNames.containsKey(cId)) return _chamberNames[cId]!;
-    if (cId == 'demo-chamber') return 'Popular Central Desk';
-    if (cId == 'chamber-bup-1') return 'BUP Medical Center Desk';
-    if (cId.startsWith('chamber-')) {
-      return 'Chamber Desk (${cId.substring(8, 12.clamp(0, cId.length))})';
-    }
-    return cId;
+    return 'Assigned chamber';
   }
 
   @override
@@ -159,6 +154,13 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   // ---------------------------------------------------------------------------
 
   Future<void> _loadQueue() async {
+    if (_activeChamberId.isEmpty) {
+      setState(() {
+        _loading = false;
+        _errorMessage = 'No chamber assignment is available for this desk.';
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _errorMessage = null;
@@ -605,7 +607,15 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () {
+              if (reasonCtrl.text.trim().isEmpty) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  const SnackBar(content: Text('A reason is required to reject a request.')),
+                );
+                return;
+              }
+              Navigator.pop(ctx, true);
+            },
             child: const Text('Reject'),
           ),
         ],
@@ -616,7 +626,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
       try {
         await DataService.rejectAppointment(
           appointmentId: entry.id,
-          reason: reasonCtrl.text.trim().isEmpty ? 'Doctor schedule unavailable' : reasonCtrl.text.trim(),
+          reason: reasonCtrl.text.trim(),
         );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

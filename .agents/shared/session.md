@@ -66,3 +66,10 @@
 - Added a Firestore-backed Android update checker using `package_info_plus` and `url_launcher`. It checks `app_config/android` once after Home loads, shows a dismissible update dialog for optional releases, and enforces a non-dismissible update dialog below `minVersion`.
 - Added public-read/client-write-denied Firestore rules for `app_config`; deployed the merged rules successfully to `docdesk-1e4cc` on 2026-10-31.
 - Validation: `flutter analyze` passed with no issues and `flutter build apk --debug` produced `build/app/outputs/flutter-apk/app-debug.apk`.
+
+## 2026-11-01 safety and workflow follow-up
+
+- Preserved the existing Firestore schema and Step 1 migration work. Added narrow rules guards for absent `roles` maps, self-booking doctor profiles, operator-owned chamber requests, and append-only admin-only manual BMDC history under `doctor_verification_history`.
+- Removed the doctor-detail claim card and patient-created consultation entry point; the page only exposes an existing unlocked follow-up chat. Notifications now expire after 30 days, can be swipe-deleted, and route by type.
+- Home, Feed, Nearby Doctors, Operator Desk, and manual BMDC review received the scoped UX changes recorded in `CHANGES.md`. No deploy or push was attempted.
+- `flutter analyze` was run once. It reported three warning-only unused private helpers plus three new errors; the errors were patched afterward without a second analyzer run, per the single-run instruction.

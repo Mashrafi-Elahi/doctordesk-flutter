@@ -710,26 +710,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Row(
-                                    children: [
-                                      Text(
-                                        _getRoleGreeting(),
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      _buildRoleBadge(),
-                                    ],
-                                  ),
                                   Text(
-                                    _greetingName.isNotEmpty ? _greetingName : 'DocDesk Member',
+                                    'Hello, ${_greetingName.isNotEmpty ? _greetingName : 'there'}',
                                     style: GoogleFonts.poppins(
-                                      fontSize: 12.5,
-                                      fontWeight: FontWeight.w400,
-                                      color: Colors.white.withValues(alpha: 0.85),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
                                     ),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -852,8 +838,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.role == UserRole.doctor)
-                      _buildDoctorDashboardCard(),
                     // Dropdown matching doctor names / specialties / symptoms
                     _buildSearchSuggestionsDropdown(colorScheme),
                     if (_showSuggestions && _searchController.text.trim().isNotEmpty)

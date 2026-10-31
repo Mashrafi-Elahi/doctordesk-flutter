@@ -6,6 +6,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/notification_service.dart';
+import '../services/auth_service.dart';
+import 'appointment_screen.dart';
+import 'feed_screen.dart';
+import 'operator_desk_screen.dart';
 import '../theme/app_constants.dart';
 
 class NotificationsScreen extends StatefulWidget {
@@ -39,6 +43,28 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
     return '${dt.day}/${dt.month}/${dt.year}';
+  }
+
+  Future<void> _openNotification(AppNotification notification) async {
+    await NotificationService.markAsRead(notification.id, _userId);
+    if (!mounted) return;
+    final type = notification.type;
+    if (type.contains('appointment') || type.contains('queue')) {
+      final roles = AuthService.userRoles;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => roles.isDoctor || roles.isOperator
+              ? const OperatorDeskScreen()
+              : const AppointmentScreen(),
+        ),
+      );
+    } else if (type.contains('comment') || type.contains('post')) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const FeedScreen()),
+      );
+    }
   }
 
   @override
@@ -121,7 +147,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             separatorBuilder: (_, __) => const SizedBox(height: 10),
             itemBuilder: (context, index) {
               final n = notifications[index];
-              return Container(
+              return Dismissible(
+                key: ValueKey(n.id),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 20),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.error,
+                    borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+                  ),
+                  child: const Icon(Icons.delete_outline, color: Colors.white),
+                ),
+                onDismissed: (_) => NotificationService.deleteNotification(n.id, _userId),
+                child: Container(
                 decoration: BoxDecoration(
                   color: n.isRead ? AppColors.surface : AppColors.primaryTint.withValues(alpha: 0.35),
                   borderRadius: BorderRadius.circular(AppConstants.radiusCard),
@@ -185,9 +224,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           ),
                         )
                       : null,
-                  onTap: () {
-                    NotificationService.markAsRead(n.id, _userId);
-                  },
+                  onTap: () => _openNotification(n),
+                ),
                 ),
               );
             },

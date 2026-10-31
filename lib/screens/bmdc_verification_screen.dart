@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/data_service.dart';
+import '../services/verification_provider.dart';
 
 class BmdcVerificationScreen extends StatefulWidget {
   final String doctorId;
@@ -26,6 +27,8 @@ class _BmdcVerificationScreenState extends State<BmdcVerificationScreen> {
   late final WebViewController _controller;
   bool _isLoading = true;
   bool _isUpdating = false;
+  final VerificationProvider _verificationProvider =
+      const ManualVerificationProvider();
 
   @override
   void initState() {
@@ -69,14 +72,8 @@ class _BmdcVerificationScreenState extends State<BmdcVerificationScreen> {
             target.dispatchEvent(new Event('input', { bubbles: true }));
             target.dispatchEvent(new Event('change', { bubbles: true }));
 
-            // Check if captcha is present on the page
-            const hasCaptcha = document.querySelector('.g-recaptcha, #recaptcha, iframe[src*="captcha"], iframe[src*="recaptcha"], [class*="captcha"]') !== null;
-            if (!hasCaptcha) {
-              const btn = document.querySelector('button[type="submit"], input[type="submit"], button.btn-primary, button.btn-search, a.btn-primary');
-              if (btn) {
-                btn.click();
-              }
-            }
+            // The admin completes any search themselves. Never auto-submit a
+            // third-party registry form or bypass its interaction controls.
           }
         } catch (e) {
           console.error('BMDC JS injection error:', e);
@@ -97,22 +94,27 @@ class _BmdcVerificationScreenState extends State<BmdcVerificationScreen> {
     );
   }
 
-  Future<void> _updateStatus(String status) async {
+  Future<void> _recordOutcome(BmdcVerificationOutcome outcome) async {
     setState(() => _isUpdating = true);
     try {
-      await DataService.updateDoctorVerificationStatus(
+      final result = _verificationProvider.recordOutcome(
+        registrationNumber: widget.bmdcNumber,
+        outcome: outcome,
+      );
+      await DataService.recordManualBmdcVerification(
         doctorId: widget.doctorId,
-        status: status,
+        registrationNumber: result.registrationNumber,
+        outcome: result.outcome.value,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              status == 'verified'
-                  ? 'Doctor marked as verified on BMDC!'
-                  : 'Doctor verification rejected.',
-            ),
-            backgroundColor: status == 'verified' ? Colors.green : Colors.red,
+            content: Text('Manual BMDC outcome recorded: ${result.outcome.label}.'),
+            backgroundColor: outcome == BmdcVerificationOutcome.found
+                ? Colors.green
+                : outcome == BmdcVerificationOutcome.mismatch
+                    ? Colors.orange
+                    : Colors.red,
           ),
         );
         Navigator.of(context).pop(true);
@@ -187,12 +189,29 @@ class _BmdcVerificationScreenState extends State<BmdcVerificationScreen> {
                         side: const BorderSide(color: Colors.red),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
-                      icon: const Icon(Icons.cancel_outlined, size: 18),
-                      label: const Text('Reject'),
-                      onPressed: _isUpdating ? null : () => _updateStatus('rejected'),
+                      icon: const Icon(Icons.search_off_outlined, size: 18),
+                      label: const Text('Not found'),
+                      onPressed: _isUpdating
+                          ? null
+                          : () => _recordOutcome(BmdcVerificationOutcome.notFound),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange.shade800,
+                        side: BorderSide(color: Colors.orange.shade800),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.compare_arrows_outlined, size: 18),
+                      label: const Text('Mismatch'),
+                      onPressed: _isUpdating
+                          ? null
+                          : () => _recordOutcome(BmdcVerificationOutcome.mismatch),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(
@@ -206,8 +225,10 @@ class _BmdcVerificationScreenState extends State<BmdcVerificationScreen> {
                               height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
-                          : const Text('Mark Verified'),
-                      onPressed: _isUpdating ? null : () => _updateStatus('verified'),
+                          : const Text('Found'),
+                      onPressed: _isUpdating
+                          ? null
+                          : () => _recordOutcome(BmdcVerificationOutcome.found),
                     ),
                   ),
                 ],

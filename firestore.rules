@@ -18,20 +18,25 @@ service cloud.firestore {
     function getUserData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
+
+    function hasRolesMap() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        ('roles' in getUserData()) &&
+        getUserData().roles is map;
+    }
     
     function isModerator() {
       return isAuthenticated() && (
         isAdmin() ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().roles.isModerator == true)
+        (hasRolesMap() && getUserData().roles.isModerator == true)
       );
     }
     
     function isDoctor() {
       return isAuthenticated() && (
         isAdmin() ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().roles.isDoctor == true)
+        (hasRolesMap() && getUserData().roles.isDoctor == true)
       );
     }
 
@@ -80,6 +85,14 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Manual BMDC reviews are an admin-only, append-only audit record.
+    match /doctor_verification_history/{historyId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.verifiedByUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
     // 3. Chambers Collection
     // Public read; write by admin or owning doctor.
     match /chambers/{chamberId} {
@@ -103,8 +116,13 @@ service cloud.firestore {
     match /appointments/{apptId} {
       allow create: if isAuthenticated() && (
         (request.resource.data.userId == request.auth.uid &&
-         request.resource.data.status == 'requested' &&
-         (!('queuePosition' in request.resource.data) || request.resource.data.queuePosition == null)) ||
+          request.resource.data.status == 'requested' &&
+          (!('queuePosition' in request.resource.data) || request.resource.data.queuePosition == null) &&
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          (!('doctorProfileId' in getUserData()) ||
+           getUserData().doctorProfileId != request.resource.data.doctorId) &&
+          (!('operatorAssignments' in getUserData()) ||
+           !(request.resource.data.chamberId in getUserData().operatorAssignments))) ||
         isAdmin() ||
         (request.resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&

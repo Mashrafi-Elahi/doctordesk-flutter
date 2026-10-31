@@ -383,6 +383,38 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
     return '${(distanceMeters / 1000).toStringAsFixed(1)} km away';
   }
 
+  Future<void> _showLocationPicker() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(title: Text('Change location', style: TextStyle(fontWeight: FontWeight.w700))),
+            ...availableDoctorLocations.map(
+              (location) => ListTile(
+                leading: const Icon(Icons.location_on_outlined),
+                title: Text(location['label'] as String),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _selectAvailableLocation(location);
+                },
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.my_location_outlined),
+              title: const Text('Use device location'),
+              onTap: () async {
+                Navigator.pop(context);
+                await _requestLocationAndSearch();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -394,9 +426,8 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
       ),
       body: Column(
         children: [
-          // Location info bar
-          if (_locationLabel != null)
-            Container(
+          // One persisted location row; locations are selected from Change.
+          Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               color: colorScheme.primaryContainer.withValues(alpha: 0.3),
@@ -406,7 +437,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      _locationLabel!,
+                      _locationLabel ?? 'Mirpur, Dhaka',
                       style: TextStyle(
                         color: colorScheme.primary,
                         fontSize: 13,
@@ -417,62 +448,12 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
                     ),
                   ),
                   TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _showManualInput = true;
-                      });
-                    },
+                    onPressed: _showLocationPicker,
                     child: const Text('Change', style: TextStyle(fontSize: 12)),
                   ),
                 ],
               ),
             ),
-
-          // Available locations horizontal quick bar
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-            ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.location_city, size: 15, color: colorScheme.primary),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Available Locations:',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.bold,
-                          color: colorScheme.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(width: 8),
-                  ...availableDoctorLocations.map((loc) {
-                    final isSelected = _selectedAreaFilter == loc['filter'] ||
-                        (_locationLabel != null && _locationLabel!.toLowerCase().contains((loc['name'] as String).toLowerCase()));
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        visualDensity: VisualDensity.compact,
-                        selected: isSelected,
-                        label: Text(loc['name'] as String, style: const TextStyle(fontSize: 11.5)),
-                        avatar: Icon(Icons.place, size: 14, color: isSelected ? Colors.white : colorScheme.primary),
-                        onSelected: (_) => _selectAvailableLocation(loc),
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            ),
-          ),
 
           // Filter row
           if (_doctors.isNotEmpty)
@@ -706,7 +687,10 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
         final doctor = displayDoctors[index];
         return _NearbyDoctorCard(
           doctor: doctor,
-          distance: _formatDistance(doctor.distance),
+          distance: (doctor.chamber?.lat != null && doctor.chamber?.lng != null) ||
+                  doctor.chambers.any((chamber) => chamber.lat != null && chamber.lng != null)
+              ? _formatDistance(doctor.distance)
+              : '',
           onTap: () {
             Navigator.push(
               context,

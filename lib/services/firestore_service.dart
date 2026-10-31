@@ -2396,6 +2396,56 @@ class FirestoreService {
     } catch (_) {}
   }
 
+  /// Stores a manual BMDC decision and an immutable audit entry in one batch.
+  /// Firestore rules require the caller to be represented by /admins/{uid}.
+  static Future<void> recordManualBmdcVerification({
+    required String doctorId,
+    required String registrationNumber,
+    required String outcome,
+    String? note,
+  }) async {
+    const allowedOutcomes = {'found', 'not_found', 'mismatch'};
+    if (!allowedOutcomes.contains(outcome)) {
+      throw ArgumentError.value(outcome, 'outcome', 'Unsupported BMDC outcome');
+    }
+    final adminUid = _auth.currentUser?.uid;
+    if (adminUid == null || adminUid.isEmpty) {
+      throw StateError('An authenticated admin is required for BMDC verification.');
+    }
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    final historyRef = _db.collection('doctor_verification_history').doc();
+    final isFound = outcome == 'found';
+    final legacyStatus = isFound ? 'verified' : outcome == 'mismatch' ? 'mismatch' : 'rejected';
+    final batch = _db.batch();
+    batch.set(doctorRef, {
+      'bmdcVerificationOutcome': outcome,
+      'verificationStatus': legacyStatus,
+      'isBmdcVerified': isFound,
+      'verifiedBy': adminUid,
+      'verifiedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    batch.set(historyRef, {
+      'doctorId': doctorId,
+      'bmdcNumber': registrationNumber.trim(),
+      'outcome': outcome,
+      'provider': 'manual',
+      'note': note?.trim() ?? '',
+      'verifiedByUid': adminUid,
+      'verifiedAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
+
+    final doctor = await doctorRef.get();
+    final claimedUid = doctor.data()?['claimedByUid']?.toString();
+    if (claimedUid != null && claimedUid.isNotEmpty) {
+      await _db.collection('users').doc(claimedUid).set({
+        'isBmdcVerified': isFound,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
   /// Fetches doctors from Firestore for verification review
   static Future<List<Map<String, dynamic>>> fetchDoctorsForVerification({
     String? statusFilter,

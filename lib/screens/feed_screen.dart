@@ -7,6 +7,12 @@ import '../services/app_language.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'create_post_screen.dart';
 
+String _publicName(String? value, {String fallback = 'Community member'}) {
+  final trimmed = value?.trim() ?? '';
+  if (trimmed.isEmpty || trimmed.contains('@')) return fallback;
+  return trimmed;
+}
+
 /// Real-time Health Feed Screen
 /// - Blended stream of clinical YouTube videos, health tips, and community Q&A.
 /// - Role permissions:
@@ -141,6 +147,8 @@ class _FeedScreenState extends State<FeedScreen> {
                   _buildFilterChip('Articles'),
                   const SizedBox(width: 8),
                   _buildFilterChip('Community Q&A'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('My posts'),
                 ],
               ),
             ),
@@ -175,7 +183,13 @@ class _FeedScreenState extends State<FeedScreen> {
                   );
                 }
 
-                final docs = snapshot.data?.docs ?? [];
+                final rawDocs = snapshot.data?.docs ?? [];
+                final currentUid = AuthService.currentUser?.uid;
+                final docs = _selectedFilter == 'My posts'
+                    ? rawDocs
+                        .where((doc) => doc.data()['userId'] == currentUid)
+                        .toList()
+                    : rawDocs;
 
                 if (docs.isEmpty) {
                   return Center(
@@ -458,7 +472,7 @@ class _FeedCard extends StatelessWidget {
     final title = data['title'] as String? ?? '';
     final content = data['content'] as String? ?? '';
     final youtubeUrl = data['youtubeUrl'] as String? ?? '';
-    final authorName = data['authorName'] as String? ?? 'Specialist';
+    final authorName = _publicName(data['authorName'] as String?, fallback: 'Specialist');
     final authorRole = data['authorRole'] as String? ?? 'doctor';
     final authorUid = data['userId'] as String? ?? '';
     final isBmdcVerified = data['isBmdcVerified'] == true;
@@ -536,6 +550,16 @@ class _FeedCard extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 6),
+                          if (currentUid != null && currentUid == authorUid)
+                            Container(
+                              margin: const EdgeInsets.only(right: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text('You', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+                            ),
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),
@@ -870,7 +894,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
       await DataService.addPostComment(
         postId: widget.postId,
         comment: text,
-        authorName: user?.displayName ?? 'Community Member',
+        authorName: _publicName(user?.displayName),
         authorRole: role,
       );
       _commentController.clear();
@@ -913,7 +937,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                 children: [
                   Icon(Icons.chat_bubble_outline, size: 20),
                   SizedBox(width: 8),
-                  Text('Community Discussion',
+                  Text('Comments',
                       style:
                           TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ],
@@ -944,7 +968,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                     itemCount: docs.length,
                     itemBuilder: (context, index) {
                       final c = docs[index].data();
-                      final author = c['authorName'] as String? ?? 'User';
+                      final author = _publicName(c['authorName'] as String?, fallback: 'User');
                       final commentText = c['comment'] as String? ?? '';
                       final role = c['authorRole'] as String? ?? 'patient';
 
