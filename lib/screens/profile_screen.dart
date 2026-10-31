@@ -1,3 +1,4 @@
+import 'consultation_management_screen.dart';
 import 'operator_desk_screen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -567,6 +568,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
         icon: Icons.shield_outlined,
         title: 'Terms & Privacy',
         onTap: () => _showTermsDialog(context),
+      ),
+      if (_userRoles.isDoctor)
+        _SettingsItem(
+          icon: Icons.video_call_outlined,
+          title: 'Doctor Telehealth & Consultations',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ConsultationManagementScreen(
+                isDoctor: true,
+                doctorProfileId: _userProfile?['doctorProfileId'] as String?,
+              ),
+            ),
+          ),
+        ),
+      _SettingsItem(
+        icon: Icons.chat_outlined,
+        title: 'My Online Consultations & Chats',
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ConsultationManagementScreen(
+              isDoctor: _userRoles.isDoctor,
+              doctorProfileId: _userProfile?['doctorProfileId'] as String?,
+            ),
+          ),
+        ),
       ),
       if (_userRoles.isAdmin)
         _SettingsItem(

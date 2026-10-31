@@ -1,4 +1,7 @@
 import 'bmdc_verification_screen.dart';
+import 'chat_screen.dart';
+import 'consultation_booking_screen.dart';
+import '../services/consultation_service.dart';
 import 'dart:io';
 
 import 'package:firebase_storage/firebase_storage.dart';
@@ -44,6 +47,78 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
 
   List<Map<String, dynamic>> _reviews = [];
   bool _isReviewsLoading = true;
+
+
+  Future<void> _handleMessageDoctor(Doctor doctor) async {
+    final patient = AuthService.currentUser;
+    if (patient == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in first to message the doctor.')),
+      );
+      return;
+    }
+
+    final docUid = doctor.claimedByUid;
+    if (docUid == null || docUid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This doctor profile has not been claimed yet.')),
+      );
+      return;
+    }
+
+    if (patient.uid == docUid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You cannot start a consultation with yourself.')),
+      );
+      return;
+    }
+
+    final existing = await ConsultationService.getActiveOrPendingConsultation(
+      patientUid: patient.uid,
+      doctorId: doctor.id,
+    );
+
+    if (!mounted) return;
+
+    if (existing != null) {
+      if (existing.status == 'active' && existing.chatId != null && existing.chatId!.isNotEmpty) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              chatId: existing.chatId!,
+              otherUserName: doctor.name,
+              otherUserUid: docUid,
+              isDoctor: false,
+            ),
+          ),
+        );
+        return;
+      } else if (existing.status == 'paid_unconfirmed') {
+        showDialog(
+          context: context,
+          builder: (c) => AlertDialog(
+            icon: const Icon(Icons.hourglass_top, color: Colors.amber, size: 48),
+            title: const Text('Payment Verification Pending'),
+            content: Text(
+              'Your payment (TrxID: ${existing.trxId}) is being verified by Dr. ${doctor.name}.\n\nYou will receive a notification and direct chat will unlock once confirmed.',
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK')),
+            ],
+          ),
+        );
+        return;
+      }
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ConsultationBookingScreen(doctor: doctor),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -838,19 +913,63 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(AppConstants.screenPadding),
-          child: FilledButton(
-            onPressed: () => _showBookingSheet(doctor),
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(double.infinity, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-              ),
-            ),
-            child: Text(
-              'Book Appointment',
-              style: AppTheme.buttonText,
-            ),
-          ),
+          child: (doctor.isClaimed || (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty))
+              ? Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                          side: const BorderSide(color: AppColors.primary, width: 1.5),
+                        ),
+                        icon: const Icon(Icons.chat_outlined, color: AppColors.primary, size: 18),
+                        label: Text(
+                          'Message Doctor',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                        onPressed: () => _handleMessageDoctor(doctor),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 6,
+                      child: FilledButton(
+                        onPressed: () => _showBookingSheet(doctor),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                        ),
+                        child: Text(
+                          'Book Appointment',
+                          style: AppTheme.buttonText.copyWith(fontSize: 13),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              : FilledButton(
+                  onPressed: () => _showBookingSheet(doctor),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                    ),
+                  ),
+                  child: Text(
+                    'Book Appointment',
+                    style: AppTheme.buttonText,
+                  ),
+                ),
         ),
       ),
     );

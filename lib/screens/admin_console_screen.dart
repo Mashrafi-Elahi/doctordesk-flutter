@@ -1,3 +1,4 @@
+import 'consultation_management_screen.dart';
 import 'bmdc_verification_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -1822,6 +1823,26 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                     ),
                   ],
                 ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Paid Telehealth & Consultation Review Section
+            _sectionTitle('TELEHEALTH & PAID CONSULTATION APPROVALS'),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.payment, color: Colors.teal),
+                title: const Text('Consultation Approvals & Chats'),
+                subtitle: const Text('Verify patient bKash/Nagad TrxIDs and activate direct consultations'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConsultationManagementScreen(isDoctor: false),
+                    ),
+                  );
+                },
               ),
             ),
             const SizedBox(height: 20),

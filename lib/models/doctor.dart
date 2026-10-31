@@ -117,6 +117,9 @@ class Doctor {
   final List<Chamber> chambers;
   final Chamber? chamber;
   final double? distance;
+  final bool consultEnabled;
+  final double consultFee;
+  final String? consultAvailability;
 
   Doctor({
     required this.id,
@@ -142,6 +145,9 @@ class Doctor {
     required this.chambers,
     this.chamber,
     this.distance,
+    this.consultEnabled = false,
+    this.consultFee = 500.0,
+    this.consultAvailability,
   })  : bmdcNumber = bmdcNumber ?? bmdcRegNumber,
         verificationStatus = verificationStatus ?? (isBmdcVerified ? 'verified' : 'unverified'),
         claimStatus = claimStatus ?? (claimedByUid != null || isClaimed ? 'claimed' : 'unclaimed');
