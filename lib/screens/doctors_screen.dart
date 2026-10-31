@@ -382,7 +382,7 @@ class _DoctorListCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (doctor.isBmdcVerified)
+                        if (doctor.verificationStatus == 'verified')
                           const Padding(
                             padding: EdgeInsets.only(left: 4.0),
                             child: Icon(Icons.verified,

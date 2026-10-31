@@ -633,4 +633,16 @@ class DataService {
       email: email,
     );
   }
+
+  static Future<void> updateDoctorVerificationStatus({
+    required String doctorId,
+    required String status,
+    String? adminUid,
+  }) {
+    return FirestoreService.updateDoctorVerificationStatus(
+      doctorId: doctorId,
+      status: status,
+      adminUid: adminUid,
+    );
+  }
 }

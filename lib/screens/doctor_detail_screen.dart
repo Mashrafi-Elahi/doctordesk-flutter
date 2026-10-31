@@ -1,3 +1,4 @@
+import 'bmdc_verification_screen.dart';
 import 'dart:io';
 
 import 'package:firebase_storage/firebase_storage.dart';
@@ -472,6 +473,30 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           'Doctor Profile',
           style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
         ),
+        actions: [
+          if (AuthService.isAdmin) ...[
+            TextButton.icon(
+              icon: const Icon(Icons.verified_outlined, color: Colors.white, size: 16),
+              label: const Text('Verify BMDC', style: TextStyle(color: Colors.white, fontSize: 12)),
+              onPressed: () async {
+                final res = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BmdcVerificationScreen(
+                      doctorId: doctor.id,
+                      doctorName: doctor.name,
+                      bmdcNumber: doctor.bmdcNumber ?? doctor.bmdcRegNumber ?? '',
+                      currentStatus: doctor.verificationStatus,
+                    ),
+                  ),
+                );
+                if (res == true) {
+                  _loadDoctor();
+                }
+              },
+            ),
+          ],
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(
@@ -634,7 +659,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       _buildBulletItem('Qualified: ${doctor.education.join(", ")}'),
                     if (doctor.concentrations.isNotEmpty)
                       _buildBulletItem('Clinical Focus: ${doctor.concentrations.join(", ")}'),
-                    if (doctor.isBmdcVerified)
+                    if (doctor.verificationStatus == 'verified')
                       _buildBulletItem('BMDC & NID Verified Specialist'),
                     if (doctor.experienceYears <= 0 && doctor.education.isEmpty)
                       _buildBulletItem('Specialist medical practitioner with registered credentials'),

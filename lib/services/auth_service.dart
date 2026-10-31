@@ -24,6 +24,7 @@ class AuthService {
 
   static UserRoles _currentUserRoles = const UserRoles();
   static UserRoles get userRoles => _currentUserRoles;
+  static bool get isAdmin => _currentUserRoles.isAdmin;
 
   static bool _isGuestMode = false;
   static bool get isGuest => _isGuestMode && !isSignedIn;

@@ -1,3 +1,4 @@
+import 'bmdc_verification_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -1573,6 +1574,28 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
+                                  OutlinedButton.icon(
+                                    icon: const Icon(Icons.open_in_browser, size: 13),
+                                    label: const Text('Verify on BMDC', style: TextStyle(fontSize: 11)),
+                                    style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+                                    onPressed: () async {
+                                      final res = await Navigator.push<bool>(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => BmdcVerificationScreen(
+                                            doctorId: docId,
+                                            doctorName: (doc['name'] ?? 'Doctor').toString(),
+                                            bmdcNumber: bmdc,
+                                            currentStatus: status,
+                                          ),
+                                        ),
+                                      );
+                                      if (res == true) {
+                                        _loadVerificationDoctors();
+                                      }
+                                    },
+                                  ),
+                                  const SizedBox(width: 6),
                                   if (status != 'verified')
                                     FilledButton.tonal(
                                       style: FilledButton.styleFrom(
@@ -1752,6 +1775,25 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.end,
                                       children: [
+                                        OutlinedButton.icon(
+                                          icon: const Icon(Icons.open_in_browser, size: 13),
+                                          label: const Text('BMDC Check', style: TextStyle(fontSize: 11)),
+                                          style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+                                          onPressed: () async {
+                                            await Navigator.push<bool>(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) => BmdcVerificationScreen(
+                                                  doctorId: (claim['doctorId'] ?? '').toString(),
+                                                  doctorName: (claim['doctorName'] ?? 'Doctor').toString(),
+                                                  bmdcNumber: bmdc,
+                                                  currentStatus: 'pending',
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                        const SizedBox(width: 6),
                                         OutlinedButton(
                                           style: OutlinedButton.styleFrom(
                                             foregroundColor: Colors.red,

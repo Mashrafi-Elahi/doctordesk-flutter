@@ -2236,15 +2236,28 @@ class FirestoreService {
   static Future<void> updateDoctorVerificationStatus({
     required String doctorId,
     required String status,
-    required String adminUid,
+    String? adminUid,
   }) async {
-    await _db.collection('doctors').doc(doctorId).set({
+    final uid = adminUid ?? _auth.currentUser?.uid ?? 'admin';
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
       'verificationStatus': status,
       'isBmdcVerified': status == 'verified',
-      'verifiedBy': adminUid,
+      'verifiedBy': uid,
       'verifiedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    try {
+      final docSnap = await docRef.get();
+      final claimedUid = docSnap.data()?['claimedByUid']?.toString();
+      if (claimedUid != null && claimedUid.isNotEmpty) {
+        await _db.collection('users').doc(claimedUid).set({
+          'isBmdcVerified': status == 'verified',
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } catch (_) {}
   }
 
   /// Fetches doctors from Firestore for verification review
