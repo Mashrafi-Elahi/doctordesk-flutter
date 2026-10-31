@@ -613,4 +613,14 @@ class DataService {
     }
     return Future.value();
   }
+
+  static Future<void> uploadBundledDoctorsToFirestore({
+    required Function(int processed, int total, String status) onProgress,
+    bool restartFromBeginning = false,
+  }) {
+    return FirestoreService.uploadBundledDoctorsToFirestore(
+      onProgress: onProgress,
+      restartFromBeginning: restartFromBeginning,
+    );
+  }
 }

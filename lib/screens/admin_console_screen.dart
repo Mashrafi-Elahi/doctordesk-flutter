@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -28,6 +29,10 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   List<Map<String, dynamic>> _doctorApplications = [];
   List<Map<String, dynamic>> _moderators = [];
   final TextEditingController _manualUidController = TextEditingController();
+  bool _isUploadingBundled = false;
+  int _bundledUploadCursor = 0;
+  double _bundledUploadProgress = 0.0;
+  String _bundledUploadStatus = '';
   final TextEditingController _moderatorUidController = TextEditingController();
   bool _manualGrantVerified = false;
   String _verificationFilter = 'all';
@@ -42,6 +47,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     _loadDoctorApplications();
     _loadModerators();
     _loadVerificationDoctors();
+    _loadBundledUploadStatus();
   }
 
   @override
@@ -51,6 +57,58 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     super.dispose();
   }
 
+
+  Future<void> _loadBundledUploadStatus() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cur = prefs.getInt('admin_bundled_doctors_upload_cursor') ?? 0;
+      if (mounted) {
+        setState(() {
+          _bundledUploadCursor = cur;
+          _bundledUploadProgress = (cur / 6048.0).clamp(0.0, 1.0);
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _startBundledUpload({bool restart = false}) async {
+    setState(() {
+      _isUploadingBundled = true;
+      _bundledUploadStatus = 'Starting bundled doctors upload...';
+    });
+
+    try {
+      await FirestoreService.uploadBundledDoctorsToFirestore(
+        restartFromBeginning: restart,
+        onProgress: (processed, total, status) {
+          if (mounted) {
+            setState(() {
+              _bundledUploadCursor = processed;
+              _bundledUploadProgress = total > 0 ? (processed / total).clamp(0.0, 1.0) : 0.0;
+              _bundledUploadStatus = status;
+            });
+          }
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Doctor catalog successfully synced to Firestore!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed or paused: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploadingBundled = false;
+        });
+      }
+    }
+  }
   Future<void> _loadDoctorApplications() async {
     try {
       final apps = await DataService.fetchDoctorApplications();
@@ -1038,6 +1096,76 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                       'Admins can add verified doctors directly or manage profiles in the directory.',
                       style: TextStyle(fontSize: 12.5, color: Colors.grey),
                     ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.cloud_upload_outlined, color: Colors.teal),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Upload Bundled Doctors to Firestore',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                        ),
+                        if (_bundledUploadCursor >= 6048)
+                          const Chip(
+                            label: Text('Synced', style: TextStyle(fontSize: 11, color: Colors.teal)),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Uploads the 6,048 bundled doctors to Firestore with stable IDs in batches of 500. Resumable and idempotent.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    if (_isUploadingBundled) ...[
+                      LinearProgressIndicator(value: _bundledUploadProgress),
+                      const SizedBox(height: 8),
+                      Text(
+                        _bundledUploadStatus.isNotEmpty ? _bundledUploadStatus : 'Writing batches of 500...',
+                        style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.w600),
+                      ),
+                    ] else ...[
+                      Text(
+                        'Uploaded: $_bundledUploadCursor / 6048 doctors live in Firestore',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            icon: Icon(_bundledUploadCursor >= 6048 ? Icons.sync : Icons.cloud_upload, size: 16),
+                            label: Text(
+                              _bundledUploadCursor == 0
+                                  ? 'Start Upload (Batches of 500)'
+                                  : _bundledUploadCursor < 6048
+                                      ? 'Resume Upload ($_bundledUploadCursor/6048)'
+                                      : 'Re-sync All to Firestore',
+                            ),
+                            onPressed: () => _startBundledUpload(restart: _bundledUploadCursor >= 6048),
+                          ),
+                          if (_bundledUploadCursor > 0 && _bundledUploadCursor < 6048)
+                            OutlinedButton(
+                              onPressed: () => _startBundledUpload(restart: true),
+                              child: const Text('Restart from 0'),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

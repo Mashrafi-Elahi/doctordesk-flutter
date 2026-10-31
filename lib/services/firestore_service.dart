@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -72,14 +73,153 @@ class FirestoreService {
   /// Fetches doctors with pagination, optional specialty filter, and indexed
   /// multilingual token search across names, specialties, symptoms, chambers, and degrees.
   /// Uses the 6,000+ bundled APK directory directly to avoid hitting Firestore 50k read limits.
+  static final Map<String, List<DocumentSnapshot>> _fetchCursors = {};
+
+  /// Fetches doctors with pagination. Firestore `doctors` is the primary source of truth.
+  /// Uses cursor-based pagination (startAfterDocument). If offline or Firestore fails,
+  /// falls back to local cache and bundled list, merging by doctor ID (Firestore wins).
   static Future<Map<String, dynamic>> fetchDoctors({
     int page = 1,
     int limit = 20,
     String? search,
     String? speciality,
   }) async {
+    final normSearch = search?.trim() ?? '';
+    final normSpec = (speciality != null && speciality.trim().isNotEmpty && speciality != 'All')
+        ? speciality.trim()
+        : null;
+    final queryKey = '${normSpec ?? ""}|$normSearch|$limit';
+
+    try {
+      Query<Map<String, dynamic>> query = _db.collection('doctors');
+
+      if (normSpec != null) {
+        query = query.where('specialities', arrayContains: normSpec);
+      }
+
+      if (normSearch.isNotEmpty && normSpec == null) {
+        final prefixes = DoctorSearchIndex.queryPrefixes(normSearch);
+        if (prefixes.isNotEmpty) {
+          query = query.where('searchPrefixes', arrayContainsAny: prefixes.take(10).toList());
+        }
+      }
+
+      if (normSearch.isEmpty) {
+        query = query.orderBy('name_lower', descending: false);
+      }
+
+      if (page > 1) {
+        final cursors = _fetchCursors[queryKey];
+        if (cursors != null && cursors.length >= page - 1) {
+          query = query.startAfterDocument(cursors[page - 2]);
+        }
+      }
+
+      query = query.limit(limit);
+      final snapshot = await query.get();
+
+      if (snapshot.docs.isNotEmpty) {
+        _fetchCursors.putIfAbsent(queryKey, () => []);
+        final cursors = _fetchCursors[queryKey]!;
+        if (cursors.length < page) {
+          cursors.add(snapshot.docs.last);
+        } else {
+          cursors[page - 1] = snapshot.docs.last;
+        }
+
+        final firestoreDoctors = snapshot.docs.map((docSnap) {
+          final data = Map<String, dynamic>.from(docSnap.data());
+          data['_id'] = docSnap.id;
+          data['id'] = docSnap.id;
+          return Doctor.fromJson(data);
+        }).toList();
+
+        List<Doctor> resultDocs = firestoreDoctors;
+        if (normSearch.isNotEmpty && normSpec != null) {
+          final rawMaps = firestoreDoctors.map((d) => d.toJson()).toList();
+          final ranked = DoctorSearchIndex.rank(rawMaps, normSearch);
+          resultDocs = ranked.map(Doctor.fromJson).toList();
+        }
+
+        if (page == 1 && normSearch.isEmpty && normSpec == null) {
+          _cacheDiscoveryDoctorsLocally(resultDocs);
+        }
+
+        final hasMore = snapshot.docs.length >= limit;
+        return {
+          'doctors': resultDocs,
+          'total': hasMore ? (page * limit) + limit : ((page - 1) * limit) + resultDocs.length,
+          'totalPages': hasMore ? page + 1 : page,
+          'isOffline': false,
+        };
+      } else if (page > 1) {
+        return {
+          'doctors': <Doctor>[],
+          'total': (page - 1) * limit,
+          'totalPages': page - 1,
+          'isOffline': false,
+        };
+      }
+      // If page == 1 and Firestore returns 0 docs (e.g. initial state before bundled upload),
+      // seamlessly fall through to fallback so discovery remains populated.
+    } catch (e) {
+      debugPrint('Firestore fetchDoctors online failed, falling back to cache/bundled: $e');
+    }
+
+    return _fetchDoctorsFallback(
+      page: page,
+      limit: limit,
+      search: search,
+      speciality: speciality,
+    );
+  }
+
+  static Future<void> _cacheDiscoveryDoctorsLocally(List<Doctor> docs) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = docs.map((d) => d.toJson()).toList();
+      await prefs.setString('cached_discovery_doctors', jsonEncode(list));
+    } catch (_) {}
+  }
+
+  static Future<List<Doctor>> _getLocalCachedDoctors() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final str = prefs.getString('cached_discovery_doctors');
+      if (str != null && str.isNotEmpty) {
+        final List decoded = jsonDecode(str);
+        return decoded.map((j) => Doctor.fromJson(Map<String, dynamic>.from(j as Map))).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<Map<String, dynamic>> _fetchDoctorsFallback({
+    int page = 1,
+    int limit = 20,
+    String? search,
+    String? speciality,
+  }) async {
+    final cachedDocs = await _getLocalCachedDoctors();
     final allMaps = await _getIndexedBundledMaps();
-    List<Map<String, dynamic>> records = List<Map<String, dynamic>>.from(allMaps);
+    final Map<String, Map<String, dynamic>> byId = {};
+
+    for (final m in allMaps) {
+      final id = (m['_id'] ?? m['id'] ?? '').toString();
+      byId[id] = Map<String, dynamic>.from(m);
+    }
+
+    // Cached Firestore docs merge with bundled, Firestore wins
+    for (final cd in cachedDocs) {
+      final cJson = cd.toJson();
+      if (byId.containsKey(cd.id)) {
+        byId[cd.id]!.addAll(cJson);
+      } else {
+        byId[cd.id] = cJson;
+      }
+    }
+
+    List<Map<String, dynamic>> records = byId.values.toList();
 
     if (speciality != null &&
         speciality.trim().isNotEmpty &&
@@ -110,7 +250,7 @@ class FirestoreService {
       'doctors': doctors,
       'total': totalCount,
       'totalPages': totalPages,
-      'isOffline': false,
+      'isOffline': true,
     };
   }
 
@@ -224,9 +364,13 @@ class FirestoreService {
       'experienceYears': experienceYears,
       'education': education,
       'bmdcRegNumber': normalizedBmdc,
+      'bmdcNumber': normalizedBmdc,
       'isBmdcVerified': isClaimed && normalizedBmdc.isNotEmpty,
+      'verificationStatus': isClaimed && normalizedBmdc.isNotEmpty ? 'verified' : 'unverified',
       'isClaimed': isClaimed,
+      'claimStatus': isClaimed ? 'claimed' : 'unclaimed',
       if (isClaimed) 'claimedByUid': applicantUid.trim(),
+      'status': 'active',
       'ratingAverage': 0.0,
       'ratingCount': 0,
       'reviewCount': 0,
@@ -1501,10 +1645,14 @@ class FirestoreService {
           'designation': 'Consultant',
           'education': const <String>[],
           'bmdcRegNumber': bmdcNumber,
+          'bmdcNumber': bmdcNumber,
           'isClaimed': true,
+          'claimStatus': 'claimed',
           'claimedByUid': uid,
           // Approval records an application review, not automatic BMDC verification.
           'isBmdcVerified': false,
+          'verificationStatus': 'pending',
+          'status': 'active',
           'phone': application['phone']?.toString() ??
               user['phone']?.toString() ??
               '',
@@ -2288,5 +2436,82 @@ class FirestoreService {
         ],
       },
     ];
+  }
+
+  /// Uploads bundled doctors to Firestore in batches of 500.
+  /// Uses stable IDs from bundled JSON, is idempotent (set with merge: true),
+  /// and is resumable via SharedPreferences cursor.
+  static Future<void> uploadBundledDoctorsToFirestore({
+    required Function(int processed, int total, String status) onProgress,
+    bool restartFromBeginning = false,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    const cursorKey = 'admin_bundled_doctors_upload_cursor';
+    int startIndex = restartFromBeginning ? 0 : (prefs.getInt(cursorKey) ?? 0);
+
+    final jsonStr = await rootBundle.loadString('assets/data/bundled_doctors.json');
+    final List decoded = jsonDecode(jsonStr);
+    final total = decoded.length;
+
+    if (startIndex >= total) {
+      startIndex = 0;
+    }
+
+    const batchSize = 500;
+    for (int i = startIndex; i < total; i += batchSize) {
+      final end = (i + batchSize < total) ? (i + batchSize) : total;
+      final chunk = decoded.sublist(i, end);
+
+      final batch = _db.batch();
+      for (int cIdx = 0; cIdx < chunk.length; cIdx++) {
+        final item = Map<String, dynamic>.from(chunk[cIdx] as Map);
+        final stableId = (item['_id'] ?? item['id'] ?? 'doc_${i + cIdx}').toString();
+        final docRef = _db.collection('doctors').doc(stableId);
+
+        final name = (item['name'] ?? '').toString();
+        final specs = List<String>.from(item['specialities'] ?? []);
+        final bmdc = (item['bmdcNumber'] ?? item['bmdcRegNumber'] ?? '').toString();
+        final isVer = item['isBmdcVerified'] == true;
+        final claimed = item['isClaimed'] == true || item['claimedByUid'] != null;
+
+        final data = <String, dynamic>{
+          'name': name,
+          'name_lower': name.toLowerCase(),
+          'specialities': specs,
+          'designation': (item['designation'] ?? 'Consultant').toString(),
+          'experienceYears': (item['experienceYears'] as num?)?.toDouble() ?? 5.0,
+          'education': List<String>.from(item['education'] ?? ['MBBS']),
+          'bmdcNumber': bmdc,
+          'bmdcRegNumber': bmdc,
+          'isBmdcVerified': isVer,
+          'verificationStatus': isVer ? 'verified' : 'unverified',
+          'isClaimed': claimed,
+          'claimStatus': claimed ? 'claimed' : 'unclaimed',
+          if (item['claimedByUid'] != null) 'claimedByUid': item['claimedByUid'].toString(),
+          'ratingAverage': (item['ratingAverage'] as num?)?.toDouble() ?? 0.0,
+          'ratingCount': (item['ratingCount'] as num?)?.toInt() ?? 0,
+          'chambers': item['chambers'] ?? [],
+          'status': 'active',
+          'updatedAt': FieldValue.serverTimestamp(),
+          ...DoctorSearchIndex.fieldsFor({
+            'name': name,
+            'designation': item['designation'] ?? 'Consultant',
+            'specialities': specs,
+            'education': item['education'] ?? ['MBBS'],
+            'chambers': item['chambers'] ?? [],
+          }),
+        };
+
+        batch.set(docRef, data, SetOptions(merge: true));
+      }
+
+      onProgress(i, total, 'Writing batch ${(i ~/ batchSize) + 1} of ${(total / batchSize).ceil()}...');
+      await batch.commit();
+
+      await prefs.setInt(cursorKey, end);
+      onProgress(end, total, 'Uploaded $end / $total doctors');
+    }
+
+    onProgress(total, total, 'Upload complete! All $total doctors are live in Firestore.');
   }
 }
