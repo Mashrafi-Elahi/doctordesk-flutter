@@ -1963,6 +1963,150 @@ class FirestoreService {
     await batch.commit();
   }
 
+  /// Stream or fetch claim requests for admin console
+  static Stream<List<Map<String, dynamic>>> streamClaimRequests({String? statusFilter}) {
+    Query<Map<String, dynamic>> query = _db.collection('claim_requests');
+    if (statusFilter != null && statusFilter != 'all') {
+      query = query.where('status', isEqualTo: statusFilter);
+    }
+    return query.snapshots().map(
+      (snap) {
+        final list = snap.docs.map((d) {
+          final data = Map<String, dynamic>.from(d.data());
+          data['id'] = d.id;
+          return data;
+        }).toList();
+        list.sort((a, b) {
+          final aTime = a['submittedAt'] as Timestamp?;
+          final bTime = b['submittedAt'] as Timestamp?;
+          if (aTime == null || bTime == null) return 0;
+          return bTime.compareTo(aTime);
+        });
+        return list;
+      },
+    );
+  }
+
+  /// Admin approves a doctor claim request
+  static Future<void> approveClaimRequest({
+    required String requestId,
+    required String doctorId,
+    required String applicantUid,
+    required String bmdcNumber,
+    required String adminUid,
+  }) async {
+    final batch = _db.batch();
+    final claimRef = _db.collection('claim_requests').doc(requestId);
+    batch.update(claimRef, {
+      'status': 'approved',
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': adminUid,
+    });
+
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    batch.set(doctorRef, {
+      'claimedByUid': applicantUid,
+      'isClaimed': true,
+      'claimStatus': 'claimed',
+      'bmdcNumber': bmdcNumber,
+      'bmdcRegNumber': bmdcNumber,
+      'isBmdcVerified': true,
+      'verificationStatus': 'verified',
+      'verifiedAt': FieldValue.serverTimestamp(),
+      'verifiedBy': adminUid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    final userRef = _db.collection('users').doc(applicantUid);
+    batch.set(userRef, {
+      'roles': {
+        'isDoctor': true,
+      },
+      'doctorProfileId': doctorId,
+      'bmdcRegNumber': bmdcNumber,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    try {
+      await NotificationService.createNotification(
+        userId: applicantUid,
+        title: 'Doctor Profile Claim Approved! 🎉',
+        body: 'Your claim request has been verified and approved by the admin.',
+        type: 'claim_approved',
+        relatedId: doctorId,
+      );
+    } catch (_) {}
+  }
+
+  /// Admin rejects a doctor claim request
+  static Future<void> rejectClaimRequest({
+    required String requestId,
+    required String doctorId,
+    required String applicantUid,
+    required String reason,
+    required String adminUid,
+  }) async {
+    final batch = _db.batch();
+    final claimRef = _db.collection('claim_requests').doc(requestId);
+    batch.update(claimRef, {
+      'status': 'rejected',
+      'rejectionReason': reason,
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': adminUid,
+    });
+
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    batch.set(doctorRef, {
+      'claimStatus': 'unclaimed',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    try {
+      await NotificationService.createNotification(
+        userId: applicantUid,
+        title: 'Doctor Profile Claim Rejected',
+        body: 'Reason: ',
+        type: 'claim_rejected',
+        relatedId: doctorId,
+      );
+    } catch (_) {}
+  }
+
+  /// Admin updates doctor verification status directly
+  static Future<void> updateDoctorVerificationStatus({
+    required String doctorId,
+    required String status,
+    required String adminUid,
+  }) async {
+    await _db.collection('doctors').doc(doctorId).set({
+      'verificationStatus': status,
+      'isBmdcVerified': status == 'verified',
+      'verifiedBy': adminUid,
+      'verifiedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Fetches doctors from Firestore for verification review
+  static Future<List<Map<String, dynamic>>> fetchDoctorsForVerification({
+    String? statusFilter,
+  }) async {
+    Query<Map<String, dynamic>> query = _db.collection('doctors');
+    if (statusFilter != null && statusFilter != 'all') {
+      query = query.where('verificationStatus', isEqualTo: statusFilter);
+    }
+    final snap = await query.limit(100).get();
+    return snap.docs.map((d) {
+      final data = Map<String, dynamic>.from(d.data());
+      data['id'] = d.id;
+      return data;
+    }).toList();
+  }
+
   static List<Doctor>? _cachedBundledDoctors;
 
   /// Loads the full 6,000+ doctors bundled in local APK assets (0 Firestore reads)
