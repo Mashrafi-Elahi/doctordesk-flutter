@@ -596,14 +596,14 @@ class FirestoreService {
           }
         }
 
-        if (chLat != null && chLng != null) {
+        if (chLat != null && chLng != null && (chLat != 0.0 || chLng != 0.0)) {
           final dist = GeofireUtils.distanceBetweenKm([lat, lng], [chLat, chLng]);
           if ((dist <= radiusKm || isAreaMatch) && (bestDist == null || dist < bestDist)) {
             bestDist = dist;
             bestChamber = ch;
           }
         } else if (isAreaMatch) {
-          bestDist = 0.5;
+          bestDist = null;
           bestChamber = ch;
         }
       }

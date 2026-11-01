@@ -375,12 +375,9 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
     });
   }
 
-  String _formatDistance(double? distanceMeters) {
-    if (distanceMeters == null) return '';
-    if (distanceMeters < 1000) {
-      return '${distanceMeters.toInt()} m away';
-    }
-    return '${(distanceMeters / 1000).toStringAsFixed(1)} km away';
+  String? _formatDistance(double? km) {
+    if (km == null) return null; // no coords -> hide the label
+    return '${km.toStringAsFixed(1)} km away'; // always km, so "0.0 km" at the same spot
   }
 
   Future<void> _showLocationPicker() async {
@@ -690,7 +687,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
           distance: (doctor.chamber?.lat != null && doctor.chamber?.lng != null) ||
                   doctor.chambers.any((chamber) => chamber.lat != null && chamber.lng != null)
               ? _formatDistance(doctor.distance)
-              : '',
+              : null,
           onTap: () {
             Navigator.push(
               context,
@@ -707,7 +704,7 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
 
 class _NearbyDoctorCard extends StatelessWidget {
   final Doctor doctor;
-  final String distance;
+  final String? distance;
   final VoidCallback onTap;
 
   const _NearbyDoctorCard({
@@ -759,7 +756,7 @@ class _NearbyDoctorCard extends StatelessWidget {
                           : 'General',
                       style: TextStyle(color: Colors.grey[600], fontSize: 13),
                     ),
-                    if (distance.isNotEmpty) ...[
+                    if (distance != null && distance!.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Row(
                         children: [
@@ -767,7 +764,7 @@ class _NearbyDoctorCard extends StatelessWidget {
                               size: 14, color: colorScheme.primary),
                           const SizedBox(width: 4),
                           Text(
-                            distance,
+                            distance!,
                             style: TextStyle(
                               color: colorScheme.primary,
                               fontSize: 12,

@@ -12,6 +12,7 @@ const db = admin.firestore();
 
 const isApply = process.argv.includes('--apply');
 const isDryRun = !isApply || process.argv.includes('--dry-run');
+const isAll = process.argv.includes('--all');
 
 function parseStructuredHours(text) {
   if (!text || typeof text !== 'string') {
@@ -42,11 +43,11 @@ function parseStructuredHours(text) {
 
   if (match) {
     let startH = parseInt(match[1], 10);
-    let startM = match[2] ? parseInt(match[2], 10) : 0;
+    const startM = match[2] ? parseInt(match[2], 10) : 0;
     const startP = match[3] ? match[3].toLowerCase() : null;
 
     let endH = parseInt(match[4], 10);
-    let endM = match[5] ? parseInt(match[5], 10) : 0;
+    const endM = match[5] ? parseInt(match[5], 10) : 0;
     const endP = match[6] ? match[6].toLowerCase() : null;
 
     if (startP === 'pm' && startH < 12) startH += 12;
@@ -78,6 +79,7 @@ async function runMigration() {
   console.log(`====================================================`);
   console.log(`CANONICAL CHAMBER MIGRATION`);
   console.log(`Mode: ${isDryRun ? 'DRY RUN (Read-only, NO changes will be written)' : 'APPLY (Writing changes to Firestore)'}`);
+  console.log(`Scope: ${isAll ? 'ALL (Target chambers + 301 legacy chambers)' : 'TARGET ONLY (Canonical Bup & Alias: 2 writes, 301 legacy skipped)'}`);
   console.log(`====================================================\n`);
 
   // Target Canonical Chambers definition
@@ -162,47 +164,53 @@ async function runMigration() {
     reason: 'Alias document keeping chamber-bup-1 ID and mapping to canonical Bup',
   });
 
-  // 3. Update existing top-level chambers to conform to canonical schema
+  // 3. Check existing top-level chambers
   const existingChambersSnap = await db.collection('chambers').get();
   console.log(`Scanned ${existingChambersSnap.size} existing chambers in chambers collection.`);
   
-  for (const cDoc of existingChambersSnap.docs) {
-    if (cDoc.id === bupCanonicalId || cDoc.id === 'chamber-bup-1') continue;
+  if (isAll) {
+    console.log(`[SCOPE: ALL] Upgrading remaining ${existingChambersSnap.size - 2} legacy chambers non-destructively...`);
+    for (const cDoc of existingChambersSnap.docs) {
+      if (cDoc.id === bupCanonicalId || cDoc.id === 'chamber-bup-1') continue;
 
-    const d = cDoc.data();
-    // Only update if missing doctorIds or visitingHours
-    const docId = d.doctorId || null;
-    const existingHours = d.visitingHours || d.hours || null;
-    const structuredHours = typeof existingHours === 'object' && existingHours?.days
-      ? existingHours
-      : parseStructuredHours(typeof existingHours === 'string' ? existingHours : null);
+      const d = cDoc.data();
+      const docId = d.doctorId || null;
+      const existingHours = d.visitingHours || d.hours || null;
+      const structuredHours = typeof existingHours === 'object' && existingHours?.days
+        ? existingHours
+        : parseStructuredHours(typeof existingHours === 'string' ? existingHours : null);
 
-    const docIds = d.doctorIds || (docId ? [docId] : []);
-    const members = d.members || (docId ? { [docId]: 'owner' } : {});
-    const aliases = [...new Set([cDoc.id, d.name, d.hospitalName, d.chamberName, ...(d.aliases || [])].filter(Boolean))];
+      const docIds = d.doctorIds || (docId ? [docId] : []);
+      const members = d.members || (docId ? { [docId]: 'owner' } : {});
+      const aliases = [...new Set([cDoc.id, d.name, d.hospitalName, d.chamberName, ...(d.aliases || [])].filter(Boolean))];
 
-    plannedWrites.push({
-      collection: 'chambers',
-      docId: cDoc.id,
-      data: {
-        id: cDoc.id,
-        name: d.name || d.hospitalName || 'Chamber',
-        address: d.location || d.address || '',
-        area: d.area || '',
-        visitingHours: structuredHours,
-        visitingHoursDisplay: structuredHours.display,
-        slotMinutes: d.slotMinutes || 10,
-        ownerDoctorId: d.ownerDoctorId || docId || null,
-        doctorIds: docIds,
-        members: members,
-        isAccessible: d.isAccessible ?? false,
-        fee: d.fee ?? 500,
-        aliases: aliases,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      action: 'SET (merge)',
-      reason: `Upgrade existing chamber ${cDoc.id} to canonical model`,
-    });
+      plannedWrites.push({
+        collection: 'chambers',
+        docId: cDoc.id,
+        data: {
+          id: cDoc.id,
+          name: d.name || d.hospitalName || 'Chamber',
+          address: d.location || d.address || '',
+          area: d.area || '',
+          visitingHours: structuredHours,
+          visitingHoursDisplay: structuredHours.display,
+          slotMinutes: d.slotMinutes || 10,
+          ownerDoctorId: d.ownerDoctorId || docId || null,
+          doctorIds: docIds,
+          members: members,
+          isAccessible: d.isAccessible ?? false,
+          fee: d.fee ?? 500,
+          aliases: aliases,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        action: 'SET (merge)',
+        reason: `Upgrade existing chamber ${cDoc.id} to canonical model`,
+      });
+    }
+  } else {
+    const skippedCount = existingChambersSnap.size - 2;
+    console.log(`[SCOPE: TARGET ONLY] Processing canonical Bup & alias (2 writes).`);
+    console.log(`[SKIPPED] ${skippedCount} existing legacy chamber documents are left untouched (no-op).`);
   }
 
   // Print Summary of Planned Writes
@@ -212,7 +220,11 @@ async function runMigration() {
   console.log(JSON.stringify(bupDoc, null, 2));
   console.log(`\nSample Alias Chamber (chamber-bup-1):`);
   console.log(JSON.stringify(bupAliasDoc, null, 2));
-  console.log(`\nOther Chambers to upgrade: ${plannedWrites.length - 2} documents.`);
+  if (isAll) {
+    console.log(`\nLegacy Chambers to upgrade: ${plannedWrites.length - 2} documents.`);
+  } else {
+    console.log(`\nLegacy Chambers skipped: ${existingChambersSnap.size - 2} documents.`);
+  }
 
   if (isDryRun) {
     console.log(`\n[DRY RUN COMPLETE] No documents were written or modified. Use --apply to execute after confirmation.`);
@@ -223,16 +235,22 @@ async function runMigration() {
   console.log(`\nApplying ${plannedWrites.length} writes to Firestore...`);
   const batchSize = 400;
   for (let i = 0; i < plannedWrites.length; i += batchSize) {
-    const chunk = plannedWrites.slice(i, i + batchSize);
     const batch = db.batch();
-    for (const item of chunk) {
-      const ref = db.collection(item.collection).doc(item.docId);
-      batch.set(ref, item.data, { merge: true });
+    const chunk = plannedWrites.slice(i, i + batchSize);
+    for (const write of chunk) {
+      const ref = db.collection(write.collection).doc(write.docId);
+      batch.set(ref, write.data, { merge: true });
     }
     await batch.commit();
-    console.log(`Committed chunk ${i + 1} - ${Math.min(i + batchSize, plannedWrites.length)}`);
+    console.log(`Committed writes ${i + 1} to ${Math.min(i + batchSize, plannedWrites.length)}`);
   }
-  console.log(`\n[SUCCESS] Canonical chamber migration completed successfully!`);
+
+  console.log(`\n[APPLY COMPLETE] Successfully migrated ${plannedWrites.length} chambers in Firestore!`);
 }
 
-runMigration().catch(console.error).finally(() => process.exit(0));
+runMigration()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error('Migration failed:', err);
+    process.exit(1);
+  });

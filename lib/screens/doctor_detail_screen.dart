@@ -697,21 +697,41 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                           ),
                         ],
                         const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const Icon(Icons.star, size: 16, color: AppColors.star),
-                            const SizedBox(width: 4),
-                            Text(
-                              doctor.ratingCount > 0
-                                  ? '${doctor.ratingAverage?.toStringAsFixed(1) ?? "-"} (${doctor.ratingCount} Reviews)'
-                                  : 'N/A',
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                          ],
+                        StreamBuilder<List<Map<String, dynamic>>>(
+                          stream: FirestoreService.reviewsStream(doctor.id),
+                          builder: (context, revSnap) {
+                            final realReviews = revSnap.data ?? _reviews;
+                            final realCount = realReviews.length;
+                            final realAvg = realCount > 0
+                                ? realReviews.map((r) => (r['rating'] as num?)?.toDouble() ?? 0.0).reduce((a, b) => a + b) / realCount
+                                : null;
+
+                            if (realCount == 0) {
+                              return Text(
+                                'No reviews yet',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.textSecondary,
+                                ),
+                              );
+                            }
+
+                            return Row(
+                              children: [
+                                const Icon(Icons.star, size: 16, color: AppColors.star),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${realAvg!.toStringAsFixed(1)} ($realCount ${realCount == 1 ? "Review" : "Reviews"})',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
                         if (doctor.chambers.isNotEmpty || doctor.chamber != null) ...[
                           const SizedBox(height: 8),
@@ -762,23 +782,30 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
             // ── 2. Stat chips row (equal width, outlined, no invented numbers) ────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
-              child: Row(
-                children: [
-                  if (doctor.experienceYears > 0)
-                    _buildStatChip(
-                      icon: Icons.work_outline,
-                      value: '${doctor.experienceYears.toInt()} Years',
-                      label: 'Experience',
-                    ),
-                  if (doctor.experienceYears > 0 && doctor.ratingCount > 0)
-                    const SizedBox(width: 10),
-                  if (doctor.ratingCount > 0)
-                    _buildStatChip(
-                      icon: Icons.rate_review_outlined,
-                      value: '${doctor.ratingCount}',
-                      label: 'Reviews',
-                    ),
-                ],
+              child: StreamBuilder<List<Map<String, dynamic>>>(
+                stream: FirestoreService.reviewsStream(doctor.id),
+                builder: (context, revSnap) {
+                  final realReviews = revSnap.data ?? _reviews;
+                  final realCount = realReviews.length;
+                  return Row(
+                    children: [
+                      if (doctor.experienceYears > 0)
+                        _buildStatChip(
+                          icon: Icons.work_outline,
+                          value: '${doctor.experienceYears.toInt()} Years',
+                          label: 'Experience',
+                        ),
+                      if (doctor.experienceYears > 0 && realCount > 0)
+                        const SizedBox(width: 10),
+                      if (realCount > 0)
+                        _buildStatChip(
+                          icon: Icons.rate_review_outlined,
+                          value: '$realCount',
+                          label: realCount == 1 ? 'Review' : 'Reviews',
+                        ),
+                    ],
+                  );
+                },
               ),
             ),
             const SizedBox(height: AppConstants.sectionGap),
