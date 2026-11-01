@@ -105,6 +105,7 @@ class MainShellState extends State<MainShell> {
   }
 
   void setRole(UserRole role) {
+    if (!AuthService.isRoleGranted(role)) return;
     setState(() {
       _currentRole = role;
       _userRoles = AuthService.userRoles;

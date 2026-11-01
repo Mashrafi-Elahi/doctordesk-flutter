@@ -63,23 +63,32 @@ class AuthService {
   static UserRole _activeRole = UserRole.patient;
   static UserRole get activeRole => _activeRole;
 
+  static bool isRoleGranted(UserRole role) {
+    return switch (role) {
+      UserRole.patient => true,
+      UserRole.doctor => _currentUserRoles.isDoctor,
+      UserRole.operator => _currentUserRoles.isOperator,
+      UserRole.admin => _currentUserRoles.isAdmin,
+    };
+  }
+
   static Future<UserRole> getSavedRole() async {
     final prefs = await SharedPreferences.getInstance();
     final isGuest = prefs.getBool('is_guest_mode') ?? false;
-    if (isGuest) {
+    if (isGuest || currentUser == null) {
       _activeRole = UserRole.patient;
       return UserRole.patient;
     }
     final roleStr = prefs.getString('user_role');
-    if (roleStr == 'admin') {
+    if (roleStr == 'admin' && _currentUserRoles.isAdmin) {
       _activeRole = UserRole.admin;
       return UserRole.admin;
     }
-    if (roleStr == 'doctor') {
+    if (roleStr == 'doctor' && _currentUserRoles.isDoctor) {
       _activeRole = UserRole.doctor;
       return UserRole.doctor;
     }
-    if (roleStr == 'operator') {
+    if (roleStr == 'operator' && _currentUserRoles.isOperator) {
       _activeRole = UserRole.operator;
       return UserRole.operator;
     }
@@ -88,9 +97,11 @@ class AuthService {
   }
 
   static Future<void> saveRole(UserRole role) async {
-    _activeRole = role;
+    // Disallow switching to a role that has not been granted
+    final effectiveRole = isRoleGranted(role) ? role : UserRole.patient;
+    _activeRole = effectiveRole;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('user_role', role.name);
+    await prefs.setString('user_role', effectiveRole.name);
   }
 
   /// Refreshes and returns the additive roles from database

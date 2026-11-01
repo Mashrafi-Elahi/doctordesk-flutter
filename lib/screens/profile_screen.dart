@@ -693,6 +693,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       roles: _userRoles,
                       current: widget.role,
                       onSwitch: (newRole) async {
+                        if (!AuthService.isRoleGranted(newRole)) return;
                         await AuthService.saveRole(newRole);
                         widget.onRoleChanged?.call(newRole);
                         if (mounted) setState(() {});
