@@ -56,6 +56,9 @@ serviceAccountKey.json
 build/
 *.apk
 .env
+key.properties
+*.jks
+firestore-debug.log
 tools/serviceAccount.json
 CODEBASE_REPORT.md
 
