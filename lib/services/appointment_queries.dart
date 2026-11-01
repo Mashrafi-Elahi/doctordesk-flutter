@@ -6,6 +6,18 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class AppointmentQueries {
   static final _db = FirebaseFirestore.instance;
 
+  /// Pending requests for an operator assigned to a specific chamber and doctor.
+  static Query<Map<String, dynamic>> pendingRequestsForChamberAndDoctor(
+      String chamberId, String doctorId) {
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('doctorId', isEqualTo: doctorId)
+        .where('handledBy', isEqualTo: 'operator')
+        .where('status', isEqualTo: 'requested')
+        .orderBy('createdAt', descending: false);
+  }
+
   /// Pending requests for an operator: chamberId in assigned chambers + handledBy == 'operator' + status == 'requested'.
   static Query<Map<String, dynamic>> pendingRequestsForOperator(
       List<String> chamberIds) {
@@ -25,7 +37,10 @@ class AppointmentQueries {
 
   /// Pending requests for a single chamber for an operator.
   static Query<Map<String, dynamic>> pendingRequestsForChamber(
-      String chamberId) {
+      String chamberId, {String? doctorId}) {
+    if (doctorId != null && doctorId.isNotEmpty) {
+      return pendingRequestsForChamberAndDoctor(chamberId, doctorId);
+    }
     return _db
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)
@@ -45,9 +60,29 @@ class AppointmentQueries {
         .orderBy('createdAt', descending: false);
   }
 
-  /// Today's active queue for an operator chamber:
+  /// Today's active queue for an operator chamber and doctor:
   /// status in [confirmed, in_progress] + scheduledTime within today.
-  static Query<Map<String, dynamic>> todayQueueForChamber(String chamberId) {
+  static Query<Map<String, dynamic>> todayQueueForChamberAndDoctor(
+      String chamberId, String doctorId) {
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('doctorId', isEqualTo: doctorId)
+        .where('status', whereIn: ['confirmed', 'in_progress'])
+        .where('scheduledTime',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
+        .orderBy('scheduledTime');
+  }
+
+  /// Today's active queue for an operator chamber.
+  static Query<Map<String, dynamic>> todayQueueForChamber(String chamberId, {String? doctorId}) {
+    if (doctorId != null && doctorId.isNotEmpty) {
+      return todayQueueForChamberAndDoctor(chamberId, doctorId);
+    }
     final now = DateTime.now();
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
@@ -77,8 +112,22 @@ class AppointmentQueries {
         .orderBy('scheduledTime');
   }
 
+  /// Completed appointments for one chamber and doctor.
+  static Query<Map<String, dynamic>> completedForChamberAndDoctor(
+      String chamberId, String doctorId) {
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('doctorId', isEqualTo: doctorId)
+        .where('status', isEqualTo: 'done')
+        .orderBy('scheduledTime', descending: true);
+  }
+
   /// Completed appointments for one chamber, most recently scheduled first.
-  static Query<Map<String, dynamic>> completedForChamber(String chamberId) {
+  static Query<Map<String, dynamic>> completedForChamber(String chamberId, {String? doctorId}) {
+    if (doctorId != null && doctorId.isNotEmpty) {
+      return completedForChamberAndDoctor(chamberId, doctorId);
+    }
     return _db
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)

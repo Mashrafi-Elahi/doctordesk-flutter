@@ -105,7 +105,6 @@ class SchedulingService {
       'friday': DateTime.friday,
     };
 
-    // 1. Check for a day range: e.g. 'Sat-Thu', 'Sat–Thu', 'Sat—Thu', 'Sat to Thu', 'Sun-Thu', 'Mon-Fri'
     final rangeRegex = RegExp(
       r'\b(sat|saturday|sun|sunday|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday)\b'
       r'\s*(?:–|—|-|\bto\b)\s*'
@@ -144,7 +143,6 @@ class SchedulingService {
       }
     }
 
-    // 2. Check for discrete day lists: e.g. 'Sat, Sun, Mon', 'Sat, Tue, Thu', 'Fri, Sat'
     final tokenRegex = RegExp(
       r'\b(sat|saturday|sun|sunday|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday)\b',
       caseSensitive: false,
@@ -162,7 +160,6 @@ class SchedulingService {
       }
     }
 
-    // Default: Saturday to Thursday (Bangladesh/clinic standard: Friday closed)
     return [
       DateTime.saturday,
       DateTime.sunday,
@@ -173,13 +170,35 @@ class SchedulingService {
     ];
   }
 
-  static ParsedSchedule? parseVisitingHours(String? text) {
-    if (text == null || text.trim().isEmpty) return null;
-    final clean = text.trim();
+  static ParsedSchedule? parseVisitingHours(dynamic input) {
+    if (input == null) return null;
+
+    if (input is Map) {
+      final startStr = (input['start'] ?? '17:00').toString();
+      final endStr = (input['end'] ?? '21:00').toString();
+      final rawDays = input['days'];
+      List<int> days = const [1, 2, 3, 4, 6, 7];
+      if (rawDays is List && rawDays.isNotEmpty) {
+        days = rawDays.map((e) => (e as num).toInt()).toList();
+      }
+      final sParts = startStr.split(':');
+      final eParts = endStr.split(':');
+      final start = TimeOfDay(
+        hour: int.tryParse(sParts[0]) ?? 17,
+        minute: sParts.length > 1 ? (int.tryParse(sParts[1]) ?? 0) : 0,
+      );
+      final end = TimeOfDay(
+        hour: int.tryParse(eParts[0]) ?? 21,
+        minute: eParts.length > 1 ? (int.tryParse(eParts[1]) ?? 0) : 0,
+      );
+      return ParsedSchedule(start: start, end: end, visitingDays: days);
+    }
+
+    final clean = input.toString().trim();
+    if (clean.isEmpty) return null;
 
     final days = _parseVisitingDays(clean);
 
-    // Match times: e.g. '5:00 PM – 9:00 PM', '5:00 PM — 9:00 PM', '5:00 PM - 9:00 PM', '5:00 PM to 9:00 PM', '17:00 - 21:00'
     final regex = RegExp(
       r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:–|—|-|\bto\b)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?',
       caseSensitive: false,
@@ -199,14 +218,12 @@ class SchedulingService {
       if (endPeriod == 'pm' && endH < 12) endH += 12;
       if (endPeriod == 'am' && endH == 12) endH = 0;
 
-      // Handle cases where start period was omitted but end is PM (e.g. 5:00 - 9:00 PM)
       if (startPeriod == null && endPeriod == 'pm') {
         if (startH < 12 && startH >= 1 && endH >= 12) {
           startH += 12;
         }
       }
 
-      // Handle 12h without AM/PM in clinic contexts (e.g. '5:00 - 9:00' -> 17:00 - 21:00)
       if (startPeriod == null && endPeriod == null) {
         if (startH >= 1 && startH <= 7 && endH <= 11 && endH > startH) {
           startH += 12;
@@ -248,8 +265,7 @@ class SchedulingService {
       doctorId: doctorId,
     );
 
-    final hoursString = chamber?.visitingHours;
-    final schedule = parseVisitingHours(hoursString);
+    final schedule = parseVisitingHours(chamber?.visitingHoursStructured ?? chamber?.visitingHours);
 
     final overrideData = await getDayOverride(chamberId, date);
     final overrideStatus = (overrideData?['status'] ?? '').toString().toLowerCase();
@@ -319,7 +335,7 @@ class SchedulingService {
     if (overrideStatus == 'full') {
       return FreeSlotsResult(
         slots: const [],
-        emptyReason: 'Fully booked',
+        emptyReason: totalCap > 0 ? 'Fully booked' : 'Visiting hours not set',
         totalCapacity: totalCap,
         confirmedCount: totalCap,
         overrideData: overrideData,
@@ -329,7 +345,6 @@ class SchedulingService {
     final allSlots = generateSlots(date, start, end, slotMinutes);
     final dKey = dateKey(date);
 
-    // Retrieve reserved doctor slots across ALL chambers for this doctor on date
     final reservedDocSlots = await _db
         .collection('doctor_slots')
         .where('doctorId', isEqualTo: doctorId)
@@ -355,7 +370,9 @@ class SchedulingService {
 
     final confirmedCount = takenTimeKeys.length;
     final emptyReason = free.isEmpty
-        ? (totalCap > 0 && confirmedCount >= totalCap ? 'Fully booked' : (totalCap == 0 ? 'Visiting hours not set' : 'No available slots today'))
+        ? (totalCap == 0
+            ? 'Visiting hours not set'
+            : (confirmedCount >= totalCap ? 'Fully booked' : 'No available slots today'))
         : null;
 
     return FreeSlotsResult(
@@ -392,8 +409,11 @@ class SchedulingService {
     final targetDateKey = dateKey(slot);
 
     String resolvedPatientUid = '';
+    String resolvedPatientName = 'Patient';
     String resolvedDoctorName = 'Doctor';
     String resolvedChamberName = 'Chamber';
+    String doctorId = '';
+    String chamberId = 'chamber';
     int assignedQueue = 1;
 
     await _db.runTransaction((tx) async {
@@ -401,9 +421,10 @@ class SchedulingService {
       if (!apptSnap.exists) throw StateError('Appointment not found.');
       final appt = apptSnap.data()!;
 
-      final doctorId = (appt['doctorId'] ?? '').toString();
-      final chamberId = (appt['chamberId'] ?? 'chamber').toString();
+      doctorId = (appt['doctorId'] ?? '').toString();
+      chamberId = (appt['chamberId'] ?? 'chamber').toString();
       resolvedPatientUid = (appt['userId'] ?? '').toString();
+      resolvedPatientName = (appt['patientName'] ?? 'Patient').toString();
       resolvedDoctorName = (appt['doctorName'] ?? 'Doctor').toString();
 
       final targetSlotDocId = slotId(doctorId, slot);
@@ -429,7 +450,6 @@ class SchedulingService {
       final lastPos = (counter.exists ? (counter.data()?['lastQueuePosition'] as num? ?? 0).toInt() : 0);
       assignedQueue = (appt['queuePosition'] as num?)?.toInt() ?? (lastPos + 1);
 
-      // Release previous slot when rescheduling or switching slots
       final oldSlot = appt['slotId']?.toString();
       if (oldSlot != null && oldSlot.isNotEmpty && oldSlot != targetSlotDocId) {
         tx.delete(_db.collection('doctor_slots').doc(oldSlot));
@@ -459,12 +479,119 @@ class SchedulingService {
         'lastQueuePosition': appt['queuePosition'] == null ? assignedQueue : lastPos,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      // Resolve Doctor's Auth UID from doctor document
+      String doctorAuthUid = '';
+      if (doctorId.isNotEmpty) {
+        final docRef = _db.collection('doctors').doc(doctorId);
+        final docSnap = await tx.get(docRef);
+        if (docSnap.exists) {
+          doctorAuthUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
+        }
+      }
+
+      // Check if actor is operator
+      final isActorOperator = actorUid.isNotEmpty && actorUid != doctorAuthUid;
+      final operatorUid = isActorOperator ? actorUid : (appt['operatorUid']?.toString() ?? '');
+      final operatorName = isActorOperator ? (appt['operatorName'] ?? 'Clinic Desk Operator').toString() : 'Clinic Desk Operator';
+
+      final chatExpiry = Timestamp.fromDate(slot.add(const Duration(days: 7)));
+      final dateStr = '${slot.day}/${slot.month}/${slot.year}';
+      final timeStr = '${slot.hour > 12 ? slot.hour - 12 : (slot.hour == 0 ? 12 : slot.hour)}:${slot.minute.toString().padLeft(2, '0')} ${slot.hour >= 12 ? 'PM' : 'AM'}';
+
+      // 1. Patient with Doctor conversation
+      if (resolvedPatientUid.isNotEmpty && doctorAuthUid.isNotEmpty) {
+        final chatPatientDoctorRef = _db.collection('chats').doc('chat_${appointmentId}_patient_doctor');
+        tx.set(chatPatientDoctorRef, {
+          'participants': [resolvedPatientUid, doctorAuthUid],
+          'participantRoles': {
+            resolvedPatientUid: 'Patient',
+            doctorAuthUid: 'Doctor',
+          },
+          'participantNames': {
+            resolvedPatientUid: resolvedPatientName,
+            doctorAuthUid: resolvedDoctorName,
+          },
+          'patientUid': resolvedPatientUid,
+          'doctorUid': doctorAuthUid,
+          'doctorId': doctorId,
+          'chamberId': chamberId,
+          'appointmentId': appointmentId,
+          'status': 'active',
+          'expiresAt': chatExpiry,
+          'messageLimit': 20,
+          'messageCount': 0,
+          'unlockedBy': actorUid,
+          'lastMessage': 'Appointment confirmed for $dateStr at $timeStr. Doctor consultation unlocked.',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      // 2. Patient with Handling Operator conversation (if operator handled)
+      if (resolvedPatientUid.isNotEmpty && operatorUid.isNotEmpty && operatorUid != doctorAuthUid) {
+        final chatPatientOpRef = _db.collection('chats').doc('chat_${appointmentId}_patient_operator');
+        tx.set(chatPatientOpRef, {
+          'participants': [resolvedPatientUid, operatorUid],
+          'participantRoles': {
+            resolvedPatientUid: 'Patient',
+            operatorUid: 'Clinic Desk Operator',
+          },
+          'participantNames': {
+            resolvedPatientUid: resolvedPatientName,
+            operatorUid: operatorName,
+          },
+          'patientUid': resolvedPatientUid,
+          'doctorUid': doctorAuthUid,
+          'operatorUid': operatorUid,
+          'doctorId': doctorId,
+          'chamberId': chamberId,
+          'appointmentId': appointmentId,
+          'status': 'active',
+          'expiresAt': chatExpiry,
+          'messageLimit': 20,
+          'messageCount': 0,
+          'unlockedBy': actorUid,
+          'lastMessage': 'Appointment confirmed for $dateStr at $timeStr. Clinic desk chat unlocked.',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      // 3. Operator with Doctor conversation (if operator handled)
+      if (operatorUid.isNotEmpty && doctorAuthUid.isNotEmpty && operatorUid != doctorAuthUid) {
+        final chatOpDoctorRef = _db.collection('chats').doc('chat_${appointmentId}_operator_doctor');
+        tx.set(chatOpDoctorRef, {
+          'participants': [operatorUid, doctorAuthUid],
+          'participantRoles': {
+            operatorUid: 'Clinic Desk Operator',
+            doctorAuthUid: 'Doctor',
+          },
+          'participantNames': {
+            operatorUid: operatorName,
+            doctorAuthUid: resolvedDoctorName,
+          },
+          'patientUid': resolvedPatientUid,
+          'doctorUid': doctorAuthUid,
+          'operatorUid': operatorUid,
+          'doctorId': doctorId,
+          'chamberId': chamberId,
+          'appointmentId': appointmentId,
+          'status': 'active',
+          'expiresAt': chatExpiry,
+          'messageLimit': 50,
+          'messageCount': 0,
+          'unlockedBy': actorUid,
+          'lastMessage': 'Queue #$assignedQueue confirmed for $resolvedPatientName ($dateStr at $timeStr).',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
     });
 
     resolvedChamberName = await ChamberResolver.resolveChamberName(
-      chamberId: null,
-      storedName: null,
-      doctorId: null,
+      chamberId: chamberId,
+      doctorId: doctorId,
     );
 
     if (resolvedPatientUid.isNotEmpty) {
@@ -546,6 +673,15 @@ class SchedulingService {
         'updatedBy': actorUid,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      final newChatExpiry = Timestamp.fromDate(newSlot.add(const Duration(days: 7)));
+      for (final suffix in ['patient_doctor', 'patient_operator', 'operator_doctor']) {
+        final cRef = _db.collection('chats').doc('chat_${appointmentId}_$suffix');
+        tx.set(cRef, {
+          'expiresAt': newChatExpiry,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
     });
 
     if (resolvedPatientUid.isNotEmpty) {
@@ -573,7 +709,6 @@ class SchedulingService {
       if (!apptSnap.exists) return;
       final data = apptSnap.data() ?? {};
 
-      // 1. Release doctor slot
       final slotId = data['slotId']?.toString();
       if (slotId != null && slotId.isNotEmpty) {
         try {
@@ -581,7 +716,6 @@ class SchedulingService {
         } catch (_) {}
       }
 
-      // 2. Release active booking lock
       final activeKey = data['activeBookingKey']?.toString();
       if (activeKey != null && activeKey.isNotEmpty) {
         try {
@@ -677,7 +811,6 @@ class SchedulingService {
     final date = specificDate ?? DateTime.now();
     final dKey = dateKey(date);
 
-    // 1. Check override status for closed/full
     final overrideDocId = '${chamberId}_$dKey';
     final overrideSnap = await _db.collection('chamber_day_overrides').doc(overrideDocId).get();
     if (overrideSnap.exists) {
@@ -687,7 +820,6 @@ class SchedulingService {
       }
     }
 
-    // 2. Resolve chamber name and doctor name
     final chamberRec = await ChamberResolver.resolveChamberRecord(
       chamberId: chamberId,
       doctorId: doctorId,
@@ -702,7 +834,6 @@ class SchedulingService {
       }
     } catch (_) {}
 
-    // 3. Resolve scheduled slot
     DateTime scheduledSlot;
     bool reserveSlotLock = false;
 

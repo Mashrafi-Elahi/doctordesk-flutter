@@ -9,8 +9,7 @@ class ChatService {
     return uid1.compareTo(uid2) < 0 ? '${uid1}_$uid2' : '${uid2}_$uid1';
   }
 
-  /// Unlocks a chat session for a patient and doctor following care or paid consultation.
-  /// Enforces that only Doctor, Admin, or authorized desk operator can trigger this.
+  /// Unlocks follow-up chat session for a patient and doctor following care.
   static Future<String> unlockChatForCare({
     required String doctorUid,
     required String patientUid,
@@ -27,6 +26,14 @@ class ChatService {
 
     await chatRef.set({
       'participants': [patientUid, doctorUid],
+      'participantRoles': {
+        patientUid: 'Patient',
+        doctorUid: 'Doctor',
+      },
+      'participantNames': {
+        patientUid: patientName,
+        doctorUid: doctorName,
+      },
       'doctorUid': doctorUid,
       'patientUid': patientUid,
       'doctorName': doctorName,
@@ -55,7 +62,7 @@ class ChatService {
     return chatId;
   }
 
-  /// Backward-compatible alias for unlocking chat on approved consultation
+  /// Backward-compatible alias
   static Future<String> getOrCreateChat({
     required String doctorUid,
     required String patientUid,
@@ -78,7 +85,6 @@ class ChatService {
     );
   }
 
-  /// Checks if an active, non-expired consultation chat exists for this doctor & patient.
   static Future<ChatSession?> getUnlockedChatForDoctorAndPatient({
     required String doctorUid,
     required String patientUid,
@@ -93,7 +99,7 @@ class ChatService {
     return null;
   }
 
-  /// Closes an active chat early (Doctor or Admin only).
+  /// Closes an active chat early (Doctor or Operator only).
   static Future<void> closeChat(String chatId) async {
     await _db.collection('chats').doc(chatId).update({
       'status': 'closed',
@@ -136,9 +142,10 @@ class ChatService {
     required String otherUid,
     required String text,
     required String senderName,
+    Map<String, dynamic>? attachment,
   }) async {
     final cleanText = text.trim();
-    if (cleanText.isEmpty) return;
+    if (cleanText.isEmpty && attachment == null) return;
 
     final chatRef = _db.collection('chats').doc(chatId);
     final chatSnap = await chatRef.get();
@@ -158,14 +165,21 @@ class ChatService {
     final msgRef = chatRef.collection('messages').doc();
     final batch = _db.batch();
 
-    batch.set(msgRef, {
+    final msgData = <String, dynamic>{
       'senderUid': senderUid,
-      'text': cleanText,
+      'text': cleanText.isNotEmpty ? cleanText : (attachment != null ? '📎 Shared a file' : ''),
       'createdAt': FieldValue.serverTimestamp(),
-    });
+      if (attachment != null) 'attachment': attachment,
+    };
+
+    batch.set(msgRef, msgData);
+
+    final displayLastMessage = cleanText.isNotEmpty
+        ? cleanText
+        : (attachment != null ? '📎 ${attachment['title'] ?? 'Shared a file'}' : '');
 
     batch.update(chatRef, {
-      'lastMessage': cleanText,
+      'lastMessage': displayLastMessage,
       'messageCount': FieldValue.increment(1),
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -176,10 +190,32 @@ class ChatService {
       await NotificationService.createNotification(
         userId: otherUid,
         title: 'New message from $senderName',
-        body: cleanText,
+        body: displayLastMessage,
         type: 'chat_message',
         relatedId: chatId,
       );
     } catch (_) {}
+  }
+
+  /// Patient revokes a shared file attachment
+  static Future<void> revokeAttachment({
+    required String chatId,
+    required String messageId,
+  }) async {
+    final msgRef = _db.collection('chats').doc(chatId).collection('messages').doc(messageId);
+    final msgSnap = await msgRef.get();
+    if (!msgSnap.exists) return;
+
+    final attachment = msgSnap.data()?['attachment'] as Map<String, dynamic>?;
+    if (attachment != null) {
+      final updatedAttachment = Map<String, dynamic>.from(attachment);
+      updatedAttachment['isRevoked'] = true;
+      updatedAttachment['revokedAt'] = FieldValue.serverTimestamp();
+
+      await msgRef.update({
+        'attachment': updatedAttachment,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
 }

@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/notification_service.dart';
 import '../services/auth_service.dart';
 import 'appointment_screen.dart';
+import 'chat_screen.dart';
 import 'feed_screen.dart';
 import 'operator_desk_screen.dart';
 import '../theme/app_constants.dart';
@@ -34,27 +35,32 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Clear all'),
+            child: const Text('Clear All'),
           ),
         ],
       ),
     );
-    if (confirmed != true) return;
-    await NotificationService.clearAll(_userId);
-    if (mounted) setState(() {});
+
+    if (confirmed == true && mounted) {
+      await NotificationService.clearAll(_userId);
+      setState(() {});
+    }
   }
 
   IconData _iconForType(String type) => switch (type) {
         'comment' => Icons.chat_bubble_outline_rounded,
-        'appointment' => Icons.calendar_today_rounded,
+        'chat_message' || 'chat_unlock' => Icons.mail_outline_rounded,
+        'appointment' || 'appointment_confirmed' || 'appointment_requested' => Icons.calendar_today_rounded,
         'review' => Icons.star_outline_rounded,
         _ => Icons.notifications_outlined,
       };
 
   Color _colorForType(String type) => switch (type) {
         'comment' => const Color(0xFF0288D1),
-        'appointment' => AppColors.primary,
+        'chat_message' || 'chat_unlock' => AppColors.primary,
+        'appointment' || 'appointment_confirmed' || 'appointment_requested' => AppColors.primary,
         'review' => AppColors.star,
         _ => Colors.blueGrey,
       };
@@ -72,7 +78,21 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     await NotificationService.markAsRead(notification.id, _userId);
     if (!mounted) return;
     final type = notification.type;
-    if (type.contains('appointment') || type.contains('queue')) {
+    if (type.contains('chat') && notification.relatedId != null && notification.relatedId!.isNotEmpty) {
+      final title = notification.title.replaceAll('New message from ', '');
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            chatId: notification.relatedId!,
+            otherUserName: title.isNotEmpty ? title : 'Chat',
+            otherUserUid: '',
+            isDoctor: AuthService.userRoles.isDoctor,
+            isOperator: AuthService.userRoles.isOperator,
+          ),
+        ),
+      );
+    } else if (type.contains('appointment') || type.contains('queue')) {
       final roles = AuthService.userRoles;
       await Navigator.push(
         context,
@@ -102,9 +122,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
         ),
         actions: [
-          TextButton(
+          IconButton(
+            tooltip: 'Clear all',
+            icon: const Icon(Icons.delete_sweep_outlined),
             onPressed: _confirmClearAll,
-            child: const Text('Clear all'),
           ),
         ],
       ),
@@ -119,106 +140,88 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
           if (notifications.isEmpty) {
             return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: const BoxDecoration(
-                        color: AppColors.primaryTint,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.notifications_off_outlined,
-                        size: 48,
-                        color: AppColors.primary,
-                      ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.notifications_off_outlined,
+                    size: 64,
+                    color: Colors.grey.shade400,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No notifications yet',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade600,
                     ),
-                    const SizedBox(height: 20),
-                    Text(
-                      'No Notifications Yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Confirmations, review updates, and replies appear here.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'You will see notifications when you book appointments, receive replies to your comments, or get clinic updates.',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        color: AppColors.textSecondary,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
           }
 
           return ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             itemCount: notifications.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
+            separatorBuilder: (_, __) => Divider(
+              height: 1,
+              color: Colors.grey.shade200,
+            ),
             itemBuilder: (context, index) {
               final n = notifications[index];
+              final color = _colorForType(n.type);
+              final icon = _iconForType(n.type);
+
               return Dismissible(
                 key: ValueKey(n.id),
                 direction: DismissDirection.endToStart,
                 background: Container(
                   alignment: Alignment.centerRight,
                   padding: const EdgeInsets.only(right: 20),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.error,
-                    borderRadius: BorderRadius.circular(AppConstants.radiusCard),
-                  ),
+                  color: AppColors.error,
                   child: const Icon(Icons.delete_outline, color: Colors.white),
                 ),
-                onDismissed: (_) => NotificationService.deleteNotification(n.id, _userId),
-                child: Container(
-                decoration: BoxDecoration(
-                  color: n.isRead ? AppColors.surface : AppColors.primaryTint.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(AppConstants.radiusCard),
-                  border: Border.all(
-                    color: n.isRead ? AppColors.borderSubtle : AppColors.primary.withValues(alpha: 0.2),
-                  ),
-                  boxShadow: AppConstants.softShadow,
-                ),
+                onDismissed: (_) {
+                  NotificationService.deleteNotification(n.id, _userId);
+                },
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
                   leading: CircleAvatar(
-                    backgroundColor: _colorForType(n.type).withValues(alpha: 0.15),
-                    child: Icon(
-                      _iconForType(n.type),
-                      color: _colorForType(n.type),
-                      size: 20,
-                    ),
+                    backgroundColor: color.withValues(alpha: 0.12),
+                    child: Icon(icon, color: color, size: 20),
                   ),
                   title: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Expanded(
                         child: Text(
                           n.title,
                           style: GoogleFonts.poppins(
-                            fontWeight: n.isRead ? FontWeight.w500 : FontWeight.w700,
                             fontSize: 14,
-                            color: AppColors.textPrimary,
+                            fontWeight: n.isRead
+                                ? FontWeight.w500
+                                : FontWeight.w700,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       Text(
                         _formatTime(n.timestamp),
                         style: GoogleFonts.poppins(
                           fontSize: 11,
-                          color: AppColors.textTertiary,
+                          color: Colors.grey.shade500,
                         ),
                       ),
                     ],
@@ -228,9 +231,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     child: Text(
                       n.body,
                       style: GoogleFonts.poppins(
-                        fontSize: 12.5,
-                        color: AppColors.textSecondary,
-                        height: 1.3,
+                        fontSize: 13,
+                        color: n.isRead
+                            ? Colors.grey.shade600
+                            : Colors.grey.shade800,
                       ),
                     ),
                   ),
@@ -245,7 +249,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         )
                       : null,
                   onTap: () => _openNotification(n),
-                ),
                 ),
               );
             },

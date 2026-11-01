@@ -40,6 +40,13 @@ service cloud.firestore {
       );
     }
 
+    function isAssignedOperatorFor(chamberId, doctorId) {
+      return isAuthenticated() &&
+        chamberId != null &&
+        doctorId != null &&
+        exists(/databases/$(database)/documents/chamber_operators/$(chamberId + '_' + doctorId + '_' + request.auth.uid));
+    }
+
     function isDoctorManagingOperator() {
       return isDoctor() &&
         getUserData().doctorProfileId != null &&
@@ -72,7 +79,6 @@ service cloud.firestore {
 
     // 2. Doctors Collection
     // Public read; full create/delete admin only.
-    // Allow lightweight create/update for rating aggregates on bundled or un-migrated doctors.
     match /doctors/{docId} {
       allow read: if true;
       allow create: if isAdmin() || (
@@ -98,19 +104,45 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // 3. Chambers Collection
-    // Public read; write by admin or owning doctor.
+    // 3. Chambers Collection (Canonical Chamber Model)
+    // Public read; create and update by admin or owner doctor only.
+    // Visiting doctor CANNOT edit chamber hours, details, or other doctors.
+    // Patient cannot write chambers.
     match /chambers/{chamberId} {
       allow read: if true;
-      allow write: if isAdmin() || (
-        isAuthenticated() && (
-          (resource != null && resource.data.doctorId != null &&
-           exists(/databases/$(database)/documents/doctors/$(resource.data.doctorId)) &&
-           get(/databases/$(database)/documents/doctors/$(resource.data.doctorId)).data.claimedByUid == request.auth.uid) ||
-          (request.resource.data.doctorId != null &&
-           exists(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)) &&
-           get(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)).data.claimedByUid == request.auth.uid)
-        )
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        request.resource.data.ownerDoctorId != null &&
+        getUserData().doctorProfileId == request.resource.data.ownerDoctorId
+      );
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        resource.data.ownerDoctorId != null &&
+        getUserData().doctorProfileId == resource.data.ownerDoctorId
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 3b. Chamber Operators Collection
+    // Mapping: chamber_operators/{chamberId}_{doctorId}_{operatorUid}
+    // Doctors (both owner and visiting) can assign/remove operators for their own doctor profile.
+    // Patients cannot write assignments.
+    match /chamber_operators/{assignmentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        request.resource.data.doctorId != null &&
+        getUserData().doctorProfileId == request.resource.data.doctorId &&
+        assignmentId == request.resource.data.chamberId + '_' + request.resource.data.doctorId + '_' + request.resource.data.operatorUid
+      );
+      allow update, delete: if isAdmin() || (
+        isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        resource.data.doctorId != null &&
+        getUserData().doctorProfileId == resource.data.doctorId
       );
     }
 
@@ -127,17 +159,15 @@ service cloud.firestore {
         (resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == resource.data.doctorId) ||
-        (resource.data.chamberId != null &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().operatorAssignments != null &&
-         resource.data.chamberId in getUserData().operatorAssignments)
+        isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId)
       );
     }
 
     // 4. Appointments Collection
-    // Patient may only create as 'requested' (no confirmed status or queuePosition).
-    // Patient may only update to cancel own appointment (status == 'cancelled').
-    // Doctor, assigned operator, and admin have full lifecycle management (confirm, reschedule, reject, walk-ins).
+    // Patient may only create as 'requested'.
+    // Doctor reads/manages own requests.
+    // Operator reads/manages ONLY requests for the (chamber, doctor) they are assigned to.
+    // Operator of Doctor A CANNOT read Doctor B's requests.
     match /appointments/{apptId} {
       allow create: if isAuthenticated() && (
         (request.resource.data.userId == request.auth.uid &&
@@ -148,11 +178,15 @@ service cloud.firestore {
           (!('doctorProfileId' in getUserData()) ||
            getUserData().doctorProfileId != request.resource.data.doctorId) &&
           (!('operatorAssignments' in getUserData()) ||
-           !(request.resource.data.chamberId in getUserData().operatorAssignments))) ||
+           getUserData().operatorAssignments == null ||
+           !(request.resource.data.chamberId in getUserData().operatorAssignments)) &&
+          !isAssignedOperatorFor(request.resource.data.chamberId, request.resource.data.doctorId)) ||
         isAdmin() ||
         (request.resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == request.resource.data.doctorId &&
+         request.resource.data.status != 'requested') ||
+        (isAssignedOperatorFor(request.resource.data.chamberId, request.resource.data.doctorId) &&
          request.resource.data.status != 'requested') ||
         (request.resource.data.chamberId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
@@ -166,20 +200,14 @@ service cloud.firestore {
         (resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == resource.data.doctorId) ||
-        (resource.data.chamberId != null &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().operatorAssignments != null &&
-         resource.data.chamberId in getUserData().operatorAssignments)
+        isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId)
       );
       allow update: if isAuthenticated() && (
         isAdmin() ||
         (resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == resource.data.doctorId) ||
-        (resource.data.chamberId != null &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().operatorAssignments != null &&
-         resource.data.chamberId in getUserData().operatorAssignments) ||
+        isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId) ||
         (resource.data.userId == request.auth.uid &&
          request.resource.data.status == 'cancelled' &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']))
@@ -190,16 +218,11 @@ service cloud.firestore {
         (resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == resource.data.doctorId) ||
-        (resource.data.chamberId != null &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().operatorAssignments != null &&
-         resource.data.chamberId in getUserData().operatorAssignments)
+        isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId)
       );
     }
 
     // 4c. Doctor Slots (Global reservation locks: doctor_slots/{doctorId}_{yyyyMMdd}_{HHmm})
-    // Public read for authenticated users to check slot availability.
-    // Create/Delete by doctor, assigned operator for the chamber, or admin. Update prohibited.
     match /doctor_slots/{slotId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && (
@@ -207,6 +230,7 @@ service cloud.firestore {
         (request.resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == request.resource.data.doctorId) ||
+        isAssignedOperatorFor(request.resource.data.chamberId, request.resource.data.doctorId) ||
         (request.resource.data.chamberId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().operatorAssignments != null &&
@@ -217,6 +241,7 @@ service cloud.firestore {
         (resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == resource.data.doctorId) ||
+        isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId) ||
         (resource.data.chamberId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().operatorAssignments != null &&
@@ -226,8 +251,6 @@ service cloud.firestore {
     }
 
     // 4d. Chamber Day Overrides (chamber_day_overrides/{chamberId}_{yyyyMMdd})
-    // Signed-in users can read to discover hours and closed/full days.
-    // Create/Update only by the chamber's doctor, assigned operator, or admin; patients never.
     match /chamber_day_overrides/{overrideId} {
       allow read: if isAuthenticated();
       allow create, update: if isAuthenticated() && (
@@ -235,6 +258,7 @@ service cloud.firestore {
         (request.resource.data.doctorId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().doctorProfileId == request.resource.data.doctorId) ||
+        isAssignedOperatorFor(request.resource.data.chamberId, request.resource.data.doctorId) ||
         (request.resource.data.chamberId != null &&
          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          getUserData().operatorAssignments != null &&
@@ -244,7 +268,7 @@ service cloud.firestore {
         resource.data.doctorId != null &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         getUserData().doctorProfileId == resource.data.doctorId
-      ) || (
+      ) || isAssignedOperatorFor(resource.data.chamberId, resource.data.doctorId) || (
         resource.data.chamberId != null &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         getUserData().operatorAssignments != null &&
@@ -252,8 +276,7 @@ service cloud.firestore {
       );
     }
 
-    // 4b. Queue Counter Documents (for transactional queue numbers: queues/{chamberId}_{yyyyMMdd})
-    // Restricted to assigned operator for this chamber, doctor, or admin. Patients must not write queue counters.
+    // 4b. Queue Counter Documents (queues/{chamberId}_{yyyyMMdd})
     match /queues/{queueId} {
       allow read, write: if isAuthenticated() && (
         isAdmin() ||
@@ -267,7 +290,6 @@ service cloud.firestore {
     }
 
     // 5. Notifications Collection
-    // Any signed-in user can create; recipient or admin can read/update/delete.
     match /notifications/{notifId} {
       allow create: if isAuthenticated();
       allow read, update, delete: if isAuthenticated() && (
@@ -278,7 +300,6 @@ service cloud.firestore {
     }
 
     // 6. Reviews Collection
-    // Public read; create/update/delete only your own review (or admin delete).
     match /reviews/{reviewId} {
       allow read: if true;
       allow create: if isAuthenticated() &&
@@ -299,8 +320,6 @@ service cloud.firestore {
     }
 
     // 7. Posts and Comments Collection
-    // Create as yourself; delete by owner, admin, or moderator.
-    // Allow signed-in users to increment/decrement commentsCount and likesCount.
     match /posts/{postId} {
       allow read: if true;
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
@@ -361,14 +380,12 @@ service cloud.firestore {
     }
 
     // 11. Admins Collection
-    // Client read own doc only, no client write.
     match /admins/{uid} {
       allow read: if isAuthenticated() && request.auth.uid == uid;
       allow write: if false;
     }
 
     // 12. App Configuration and Metadata
-    // Public read, no client write.
     match /app_config/{docId} {
       allow read: if true;
       allow write: if false;
@@ -394,29 +411,29 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
   
-    // 14. Real-time Patient-Doctor Chats (Unlocked Only After Care or Paid Consultation)
-    // A patient can NEVER create or activate a chat; only doctor or admin can.
+    // 14. Real-time Messaging (Unlocked on Appointment Confirmation)
+    // Patient can NEVER create a chat session directly (server/confirm-transaction only).
+    // Participants: patient with handling operator, patient with doctor, operator with doctor.
+    // Expiry: 7 days after appointment. Message limit enforced.
+    // Doctor or operator can close it.
     match /chats/{chatId} {
       allow read: if isAuthenticated() && (
         isAdmin() ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
         resource.data.patientUid == request.auth.uid ||
-        resource.data.doctorUid == request.auth.uid ||
-        (resource.data.participants != null && request.auth.uid in resource.data.participants)
+        resource.data.doctorUid == request.auth.uid
       );
       allow create: if isAuthenticated() && (
         isAdmin() ||
-        (isDoctor() && request.auth.uid == request.resource.data.doctorUid) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().roles.isOperator == true &&
-         getUserData().operatorAssignments != null)
+        isDoctor() ||
+        (hasRolesMap() && getUserData().roles.isOperator == true)
       );
       allow update: if isAuthenticated() && (
         isAdmin() ||
-        (isDoctor() && resource.data.doctorUid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         getUserData().roles.isOperator == true &&
-         getUserData().operatorAssignments != null) ||
-        (resource.data.patientUid == request.auth.uid &&
+        ((isDoctor() || (hasRolesMap() && getUserData().roles.isOperator == true)) &&
+         (request.auth.uid in resource.data.participants || resource.data.doctorUid == request.auth.uid) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'lastMessage', 'messageCount'])) ||
+        (request.auth.uid in resource.data.participants &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['messageCount', 'lastMessage', 'updatedAt']) &&
          request.resource.data.messageCount == resource.data.messageCount + 1)
       );
@@ -425,29 +442,26 @@ service cloud.firestore {
       match /messages/{msgId} {
         allow read: if isAuthenticated() && (
           isAdmin() ||
-          get(/databases/$(database)/documents/chats/$(chatId)).data.patientUid == request.auth.uid ||
-          get(/databases/$(database)/documents/chats/$(chatId)).data.doctorUid == request.auth.uid ||
           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
         );
-        // Message create requires chat to be active, within expiry window, within message limit, and sender is auth.uid.
         allow create: if isAuthenticated() && (
           isAdmin() ||
           (
             request.resource.data.senderUid == request.auth.uid &&
+            request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
             get(/databases/$(database)/documents/chats/$(chatId)).data.status == 'active' &&
             (!('expiresAt' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
               request.time < get(/databases/$(database)/documents/chats/$(chatId)).data.expiresAt) &&
             (!('messageLimit' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
-              get(/databases/$(database)/documents/chats/$(chatId)).data.messageCount < get(/databases/$(database)/documents/chats/$(chatId)).data.messageLimit) &&
-            (
-              request.auth.uid == get(/databases/$(database)/documents/chats/$(chatId)).data.patientUid ||
-              request.auth.uid == get(/databases/$(database)/documents/chats/$(chatId)).data.doctorUid
-            )
+              get(/databases/$(database)/documents/chats/$(chatId)).data.messageCount < get(/databases/$(database)/documents/chats/$(chatId)).data.messageLimit)
           )
         );
-        allow update, delete: if isAdmin() || (
-          isAuthenticated() && resource.data.senderUid == request.auth.uid
+        allow update: if isAuthenticated() && (
+          isAdmin() ||
+          (resource.data.senderUid == request.auth.uid &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attachment', 'updatedAt']))
         );
+        allow delete: if isAdmin();
       }
     }
 

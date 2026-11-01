@@ -38,6 +38,11 @@ async function seed() {
         roles: { isOperator: true },
         operatorAssignments: ['chamber-a'],
       }),
+      setDoc(doc(db, 'chamber_operators/chamber-a_doctor-profile_operator'), {
+        chamberId: 'chamber-a',
+        doctorId: 'doctor-profile',
+        operatorUid: 'operator',
+      }),
       setDoc(doc(db, 'users/stranger'), { roles: {} }),
       setDoc(doc(db, 'admins/admin'), { uid: 'admin' }),
       setDoc(doc(db, 'doctors/doctor-profile'), {
@@ -540,5 +545,141 @@ describe('scheduling algorithm and atomic reservation rules', () => {
 
     // 3. Patient CANNOT create a walk-in appointment
     await assertFails(setDoc(doc(patientDb, 'appointments/walkin-by-patient'), walkInChamberA));
+  });
+
+  describe('canonical chamber permissions & operator routing', () => {
+    const setupChamberAndOperators = async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await Promise.all([
+          // Doctor Mashrafi (Owner)
+          setDoc(doc(db, 'users/user-mashrafi'), {
+            roles: { isDoctor: true },
+            doctorProfileId: 'doc-mashrafi-prof',
+          }),
+          setDoc(doc(db, 'doctors/doc-mashrafi-prof'), {
+            name: 'Dr Mashrafi Elahi',
+            claimedByUid: 'user-mashrafi',
+          }),
+          // Doctor Nuzhat (Visiting)
+          setDoc(doc(db, 'users/user-nuzhat'), {
+            roles: { isDoctor: true },
+            doctorProfileId: 'doc-nuzhat-prof',
+          }),
+          setDoc(doc(db, 'doctors/doc-nuzhat-prof'), {
+            name: 'Dr Nuzhat Saima',
+            claimedByUid: 'user-nuzhat',
+          }),
+          // Operators
+          setDoc(doc(db, 'users/op-mashrafi'), {
+            roles: { isOperator: true },
+            operatorAssignments: ['chamber-bup'],
+          }),
+          setDoc(doc(db, 'users/op-nuzhat'), {
+            roles: { isOperator: true },
+            operatorAssignments: ['chamber-bup'],
+          }),
+          // Canonical Chamber Bup
+          setDoc(doc(db, 'chambers/chamber-bup'), {
+            name: 'Bup',
+            ownerDoctorId: 'doc-mashrafi-prof',
+            doctorIds: ['doc-mashrafi-prof', 'doc-nuzhat-prof'],
+            visitingHours: '5:00 PM – 9:00 PM (Sat–Thu)',
+            slotMinutes: 10,
+          }),
+          // Operator assignment for Nuzhat
+          setDoc(doc(db, 'chamber_operators/chamber-bup_doc-nuzhat-prof_op-nuzhat'), {
+            chamberId: 'chamber-bup',
+            doctorId: 'doc-nuzhat-prof',
+            operatorUid: 'op-nuzhat',
+          }),
+          // Operator assignment for Mashrafi
+          setDoc(doc(db, 'chamber_operators/chamber-bup_doc-mashrafi-prof_op-mashrafi'), {
+            chamberId: 'chamber-bup',
+            doctorId: 'doc-mashrafi-prof',
+            operatorUid: 'op-mashrafi',
+          }),
+        ]);
+      });
+    };
+
+    it('visiting doctor cannot edit chamber hours, but owner doctor can', async () => {
+      await setupChamberAndOperators();
+      const nuzhatDb = testEnv.authenticatedContext('user-nuzhat').firestore();
+      const mashrafiDb = testEnv.authenticatedContext('user-mashrafi').firestore();
+
+      // Visiting doctor fails to edit chamber hours
+      await assertFails(updateDoc(doc(nuzhatDb, 'chambers/chamber-bup'), {
+        visitingHours: '6:00 PM – 10:00 PM (Sun–Thu)',
+      }));
+
+      // Owner doctor succeeds in editing chamber hours
+      await assertSucceeds(updateDoc(doc(mashrafiDb, 'chambers/chamber-bup'), {
+        visitingHours: '6:00 PM – 10:00 PM (Sun–Thu)',
+      }));
+    });
+
+    it('visiting doctor can assign their own operator, but not another doctor\'s operator', async () => {
+      await setupChamberAndOperators();
+      const nuzhatDb = testEnv.authenticatedContext('user-nuzhat').firestore();
+
+      // Visiting doctor assigns an operator for their own profile
+      await assertSucceeds(setDoc(doc(nuzhatDb, 'chamber_operators/chamber-bup_doc-nuzhat-prof_new-op'), {
+        chamberId: 'chamber-bup',
+        doctorId: 'doc-nuzhat-prof',
+        operatorUid: 'new-op',
+      }));
+
+      // Visiting doctor CANNOT assign an operator for Mashrafi
+      await assertFails(setDoc(doc(nuzhatDb, 'chamber_operators/chamber-bup_doc-mashrafi-prof_new-op'), {
+        chamberId: 'chamber-bup',
+        doctorId: 'doc-mashrafi-prof',
+        operatorUid: 'new-op',
+      }));
+    });
+
+    it('operator of Nuzhat cannot read Mashrafi\'s requests', async () => {
+      await setupChamberAndOperators();
+      // Seed an appointment for Mashrafi
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'appointments/mashrafi-request'), requestedAppointment({
+          doctorId: 'doc-mashrafi-prof',
+          chamberId: 'chamber-bup',
+          handledBy: 'operator',
+          status: 'requested',
+        }));
+      });
+
+      const opMashrafiDb = testEnv.authenticatedContext('op-mashrafi').firestore();
+      const opNuzhatDb = testEnv.authenticatedContext('op-nuzhat').firestore();
+
+      // Mashrafi's operator CAN read the request
+      await assertSucceeds(getDoc(doc(opMashrafiDb, 'appointments/mashrafi-request')));
+
+      // Nuzhat's operator CANNOT read Mashrafi's request
+      await assertFails(getDoc(doc(opNuzhatDb, 'appointments/mashrafi-request')));
+    });
+
+    it('patient cannot write chambers or assignments', async () => {
+      await setupChamberAndOperators();
+      const patientDb = testEnv.authenticatedContext('patient').firestore();
+
+      // Patient cannot create or update chambers
+      await assertFails(setDoc(doc(patientDb, 'chambers/patient-chamber'), {
+        name: 'Patient Chamber',
+        ownerDoctorId: 'patient',
+      }));
+      await assertFails(updateDoc(doc(patientDb, 'chambers/chamber-bup'), {
+        visitingHours: '1:00 PM – 2:00 PM',
+      }));
+
+      // Patient cannot create or update assignments
+      await assertFails(setDoc(doc(patientDb, 'chamber_operators/chamber-bup_doc-nuzhat-prof_patient'), {
+        chamberId: 'chamber-bup',
+        doctorId: 'doc-nuzhat-prof',
+        operatorUid: 'patient',
+      }));
+    });
   });
 });

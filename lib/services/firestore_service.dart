@@ -1,4 +1,5 @@
 import 'scheduling_service.dart';
+import 'chamber_resolver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:math';
@@ -1113,23 +1114,41 @@ class FirestoreService {
       }
     }
 
-    // 2. Save top-level chambers document
-    await _db.collection('chambers').doc(chamberId).set({
+    // 2. Batch write: save top-level chambers doc, chamber_operators mapping, and user doc
+    final batch = _db.batch();
+
+    final chamberRef = _db.collection('chambers').doc(chamberId);
+    batch.set(chamberRef, {
       'id': chamberId,
       'chamberId': chamberId,
       'name': chamberName,
       'chamberName': chamberName,
       'doctorId': doctorId,
       'doctorName': docName,
+      'hasOperator': true,
       'operatorUid': operatorUid,
       'operatorName': operatorName,
       'operatorEmail': operatorEmail,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 3. Update user document with operator role, operatorAssignments, and structured assignedChambers
+    final mappingId = '${chamberId}_${doctorId}_$operatorUid';
+    final mappingRef = _db.collection('chamber_operators').doc(mappingId);
+    batch.set(mappingRef, {
+      'chamberId': chamberId,
+      'doctorId': doctorId,
+      'doctorName': docName,
+      'chamberName': chamberName,
+      'operatorUid': operatorUid,
+      'operatorName': operatorName,
+      'operatorEmail': operatorEmail,
+      'assignedByDoctorUid': _auth.currentUser?.uid,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
     final userRef = _db.collection('users').doc(operatorUid);
-    await userRef.set({
+    batch.set(userRef, {
       'roles': {
         'isOperator': true,
       },
@@ -1144,6 +1163,8 @@ class FirestoreService {
       ]),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    await batch.commit();
 
     // 4. Update the doctor document's chambers list
     if (docSnap.exists) {
@@ -1163,7 +1184,29 @@ class FirestoreService {
       await docRef.update({'chambers': updatedChambers});
     }
 
-    // 5. Send in-app notification
+    // 5. Re-route pending requests for this doctor at this chamber to operator
+    try {
+      final pendingAppts = await _db
+          .collection('appointments')
+          .where('chamberId', isEqualTo: chamberId)
+          .where('doctorId', isEqualTo: doctorId)
+          .where('status', isEqualTo: 'requested')
+          .get();
+
+      if (pendingAppts.docs.isNotEmpty) {
+        final apptBatch = _db.batch();
+        for (final apptDoc in pendingAppts.docs) {
+          apptBatch.update(apptDoc.reference, {
+            'handledBy': 'operator',
+            'operatorUid': operatorUid,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        await apptBatch.commit();
+      }
+    } catch (_) {}
+
+    // 6. Send in-app notification
     try {
       await NotificationService.createNotification(
         userId: operatorUid,
@@ -1180,14 +1223,21 @@ class FirestoreService {
     required String chamberId,
     required String operatorUid,
   }) async {
-    // 1. Update user
+    final batch = _db.batch();
+
+    // 1. Delete mapping from chamber_operators
+    final mappingId = '${chamberId}_${doctorId}_$operatorUid';
+    final mappingRef = _db.collection('chamber_operators').doc(mappingId);
+    batch.delete(mappingRef);
+
+    // 2. Update user assignments and roles in same batch
     if (operatorUid.isNotEmpty) {
       final userRef = _db.collection('users').doc(operatorUid);
       final userSnap = await userRef.get();
       if (userSnap.exists) {
         final currentAssignments = List<String>.from((userSnap.data()?['operatorAssignments'] as List?) ?? []);
         currentAssignments.remove(chamberId);
-        await userRef.set({
+        batch.set(userRef, {
           'operatorAssignments': currentAssignments,
           'updatedAt': FieldValue.serverTimestamp(),
           if (currentAssignments.isEmpty)
@@ -1198,7 +1248,9 @@ class FirestoreService {
       }
     }
 
-    // 2. Update doctor chambers
+    await batch.commit();
+
+    // 3. Update doctor chambers
     final docRef = _db.collection('doctors').doc(doctorId);
     final docSnap = await docRef.get();
     if (docSnap.exists) {
@@ -1217,6 +1269,37 @@ class FirestoreService {
       }).toList();
       await docRef.update({'chambers': updatedChambers});
     }
+
+    // 4. Re-route pending requests for this doctor back to doctor if no other operator assigned
+    try {
+      final otherOps = await _db
+          .collection('chamber_operators')
+          .where('chamberId', isEqualTo: chamberId)
+          .where('doctorId', isEqualTo: doctorId)
+          .limit(1)
+          .get();
+
+      if (otherOps.docs.isEmpty) {
+        final pendingAppts = await _db
+            .collection('appointments')
+            .where('chamberId', isEqualTo: chamberId)
+            .where('doctorId', isEqualTo: doctorId)
+            .where('status', isEqualTo: 'requested')
+            .get();
+
+        if (pendingAppts.docs.isNotEmpty) {
+          final apptBatch = _db.batch();
+          for (final apptDoc in pendingAppts.docs) {
+            apptBatch.update(apptDoc.reference, {
+              'handledBy': 'doctor',
+              'operatorUid': FieldValue.delete(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          }
+          await apptBatch.commit();
+        }
+      }
+    } catch (_) {}
   }
 
   static Future<Map<String, dynamic>?> syncUser({
@@ -2077,9 +2160,35 @@ class FirestoreService {
     String? chamberName,
   }) async {
     try {
-      final snap = await _db.collection('doctors').limit(100).get();
+      final rec = await ChamberResolver.resolveChamberRecord(
+        chamberId: chamberId,
+        storedName: chamberName,
+      );
+
       final List<Map<String, dynamic>> result = [];
       final Set<String> seenIds = {};
+
+      if (rec != null && rec.doctorIds.isNotEmpty) {
+        for (final docId in rec.doctorIds) {
+          if (!seenIds.add(docId)) continue;
+          final docSnap = await _db.collection('doctors').doc(docId).get();
+          if (docSnap.exists) {
+            final d = docSnap.data()!;
+            final specialities = (d['specialities'] as List?) ?? [];
+            result.add({
+              'doctorId': docId,
+              'name': (d['name'] ?? 'Doctor').toString(),
+              'speciality': specialities.isNotEmpty ? specialities.first.toString() : 'Specialist',
+              'hours': rec.visitingHours ?? '',
+              'degree': (d['degree'] ?? '').toString(),
+              'chamber': rec.raw,
+            });
+          }
+        }
+        if (result.isNotEmpty) return result;
+      }
+
+      final snap = await _db.collection('doctors').limit(100).get();
 
       for (final doc in snap.docs) {
         final d = doc.data();
@@ -2178,51 +2287,32 @@ class FirestoreService {
     final isPatient = !isDoctorQueueEntry && !isAssignedOperator && roles['isAdmin'] != true;
     final apptStatus = isPatient ? 'requested' : status;
 
-    // 1. Look up desk operators for the chamber (users whose operatorAssignments contains chamberId)
-    List<String> operatorUids = [];
     String resolvedChamberName = (chamberName ?? '').trim();
-    if (resolvedChamberId.isNotEmpty) {
-      try {
-        final opUsersSnap = await _db
-            .collection('users')
-            .where('operatorAssignments', arrayContains: resolvedChamberId)
-            .get();
-        operatorUids = opUsersSnap.docs
-            .map((d) => d.id)
-            .where((id) => id.isNotEmpty && id != uid)
-            .toList();
 
-        // Check doctor document's chambers list for fallback operator mapping and chamber name
-        if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
-          final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
-          if (docSnap.exists) {
-            final rawChambers = (docSnap.data()?['chambers'] as List?) ?? [];
-            for (final c in rawChambers) {
-              final cMap = Map<String, dynamic>.from(c as Map);
-              final cId = (cMap['id'] ?? '').toString();
-              final cHospital = (cMap['hospitalName'] ?? cMap['name'] ?? '').toString();
-              if (cId == resolvedChamberId || cHospital == resolvedChamberId) {
-                if (resolvedChamberName.isEmpty && cHospital.isNotEmpty) {
-                  resolvedChamberName = cHospital;
-                }
-                final directOpUid = (cMap['operatorUid'] ?? '').toString();
-                if (directOpUid.isNotEmpty && directOpUid != uid && !operatorUids.contains(directOpUid)) {
-                  operatorUids.add(directOpUid);
-                }
-                final altId = cId == resolvedChamberId ? cHospital : cId;
-                if (altId.isNotEmpty && altId != resolvedChamberId) {
-                  final altSnap = await _db
-                      .collection('users')
-                      .where('operatorAssignments', arrayContains: altId)
-                      .get();
-                  for (final d in altSnap.docs) {
-                    if (d.id.isNotEmpty && d.id != uid && !operatorUids.contains(d.id)) {
-                      operatorUids.add(d.id);
-                    }
-                  }
-                }
-              }
-            }
+    // Look up canonical chamber record
+    final chamberRec = await ChamberResolver.resolveChamberRecord(
+      chamberId: resolvedChamberId,
+      doctorId: resolvedDoctorId,
+      storedName: chamberName,
+    );
+    final canonicalChamberId = chamberRec?.id ?? resolvedChamberId;
+    if (resolvedChamberName.isEmpty) {
+      resolvedChamberName = chamberRec?.name ?? 'Chamber';
+    }
+
+    // Routing uses chamber_operators for that doctor first, else the doctor
+    final List<String> operatorUids = [];
+    if (canonicalChamberId.isNotEmpty && resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
+      try {
+        final opDoc = await _db
+            .collection('chamber_operators')
+            .where('chamberId', isEqualTo: canonicalChamberId)
+            .where('doctorId', isEqualTo: resolvedDoctorId)
+            .get();
+        for (final doc in opDoc.docs) {
+          final opUid = (doc.data()['operatorUid'] ?? '').toString().trim();
+          if (opUid.isNotEmpty && !operatorUids.contains(opUid)) {
+            operatorUids.add(opUid);
           }
         }
       } catch (_) {}

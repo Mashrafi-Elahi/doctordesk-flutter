@@ -30,5 +30,21 @@ service firebase.storage {
       allow read: if true;
       allow write: if isAuthenticated();
     }
+
+    // 5. Chat attachments: Read and write strictly for verified chat participants, max 10MB, pdf/jpg/png only
+    match /chat_files/{chatId}/{fileName} {
+      function isChatParticipant() {
+        return isAuthenticated() &&
+          request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.participants;
+      }
+
+      allow read: if isChatParticipant();
+      allow write: if isChatParticipant() &&
+        request.resource.size <= 10 * 1024 * 1024 &&
+        (request.resource.contentType.matches('image/jpeg') ||
+         request.resource.contentType.matches('image/png') ||
+         request.resource.contentType.matches('application/pdf'));
+      allow delete: if isChatParticipant();
+    }
   }
 }

@@ -1,222 +1,398 @@
-// document_service.dart
-//
-// Manages patient health documents locally (SharedPreferences JSON store)
-// and allows optional upload to Firebase Storage when sharing with a doctor.
-// No Firestore reads are needed — only Storage PUT on explicit user action.
-
 import 'dart:convert';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'chat_service.dart';
 
-/// Metadata for one uploaded document stored locally.
-class HealthDocument {
-  final String localId;        // UUID-like: uid_timestamp
-  final String fileName;
-  final String localPath;      // Absolute path on device
-  final DateTime savedAt;
-  final String type;           // 'prescription', 'lab_report', 'xray', 'other'
-  String? sharedUrl;           // Set when uploaded to Firebase Storage
-  DateTime? sharedAt;
+class HealthFolder {
+  final String id;
+  final String name;
+  final String category; // 'Prescriptions', 'Lab reports', 'Scans', 'Bills', 'Other'
+  final DateTime createdAt;
 
-  HealthDocument({
-    required this.localId,
-    required this.fileName,
-    required this.localPath,
-    required this.savedAt,
-    required this.type,
-    this.sharedUrl,
-    this.sharedAt,
+  HealthFolder({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.createdAt,
   });
 
-  factory HealthDocument.fromJson(Map<String, dynamic> json) => HealthDocument(
-    localId: json['localId'] as String,
-    fileName: json['fileName'] as String,
-    localPath: json['localPath'] as String,
-    savedAt: DateTime.parse(json['savedAt'] as String),
-    type: (json['type'] as String?) ?? 'other',
-    sharedUrl: json['sharedUrl'] as String?,
-    sharedAt: json['sharedAt'] != null
-        ? DateTime.tryParse(json['sharedAt'] as String)
-        : null,
+  factory HealthFolder.fromJson(Map<String, dynamic> json) => HealthFolder(
+    id: json['id'] as String,
+    name: json['name'] as String,
+    category: json['category'] as String? ?? 'Other',
+    createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime.now(),
   );
 
   Map<String, dynamic> toJson() => {
-    'localId': localId,
-    'fileName': fileName,
+    'id': id,
+    'name': name,
+    'category': category,
+    'createdAt': createdAt.toIso8601String(),
+  };
+}
+
+class HealthDocument {
+  final String id;
+  final String? folderId;
+  final String title;
+  final String category; // 'Prescriptions', 'Lab reports', 'Scans', 'Bills', 'Other'
+  final DateTime date;
+  final String localPath;
+  final String mimeType;
+  final int sizeBytes;
+
+  HealthDocument({
+    required this.id,
+    this.folderId,
+    required this.title,
+    required this.category,
+    required this.date,
+    required this.localPath,
+    this.mimeType = 'image/jpeg',
+    this.sizeBytes = 0,
+  });
+
+  factory HealthDocument.fromJson(Map<String, dynamic> json) => HealthDocument(
+    id: json['id'] as String,
+    folderId: json['folderId'] as String?,
+    title: json['title'] as String,
+    category: json['category'] as String? ?? 'Other',
+    date: DateTime.tryParse(json['date'] as String? ?? '') ?? DateTime.now(),
+    localPath: json['localPath'] as String,
+    mimeType: json['mimeType'] as String? ?? 'image/jpeg',
+    sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    if (folderId != null) 'folderId': folderId,
+    'title': title,
+    'category': category,
+    'date': date.toIso8601String(),
     'localPath': localPath,
-    'savedAt': savedAt.toIso8601String(),
-    'type': type,
-    'sharedUrl': sharedUrl,
-    'sharedAt': sharedAt?.toIso8601String(),
+    'mimeType': mimeType,
+    'sizeBytes': sizeBytes,
   };
 }
 
 class DocumentService {
-  static String get _prefsKey {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty) return 'health_documents_guest';
+  static const List<String> categories = [
+    'Prescriptions',
+    'Lab reports',
+    'Scans',
+    'Bills',
+    'Other',
+  ];
+
+  static String get _foldersKey {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'guest';
+    return 'health_folders_$uid';
+  }
+
+  static String get _docsKey {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'guest';
     return 'health_documents_$uid';
   }
 
   static final ImagePicker _picker = ImagePicker();
 
-  // ── Local Storage ────────────────────────────────────────────────────────
+  static Future<Directory> _getLocalDocsDirectory() async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final docsDir = Directory('${appDir.path}/health_documents');
+    if (!docsDir.existsSync()) {
+      docsDir.createSync(recursive: true);
+    }
+    return docsDir;
+  }
 
-  /// Loads all locally stored documents for the current signed in user.
+  // ── Folders Management ─────────────────────────────────────────────────────
+
+  static Future<List<HealthFolder>> loadFolders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_foldersKey);
+      if (raw == null || raw.isEmpty) return [];
+      final List<dynamic> list = jsonDecode(raw);
+      return list
+          .map((e) => HealthFolder.fromJson(e as Map<String, dynamic>))
+          .toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+    } catch (e) {
+      debugPrint('[DocumentService] Error loading folders: $e');
+      return [];
+    }
+  }
+
+  static Future<void> _saveFolders(List<HealthFolder> folders) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _foldersKey,
+      jsonEncode(folders.map((f) => f.toJson()).toList()),
+    );
+  }
+
+  static Future<HealthFolder> createFolder({
+    required String name,
+    required String category,
+  }) async {
+    final id = 'folder_${DateTime.now().millisecondsSinceEpoch}';
+    final folder = HealthFolder(
+      id: id,
+      name: name.trim(),
+      category: categories.contains(category) ? category : 'Other',
+      createdAt: DateTime.now(),
+    );
+    final list = await loadFolders();
+    list.add(folder);
+    await _saveFolders(list);
+    return folder;
+  }
+
+  static Future<void> renameFolder({
+    required String folderId,
+    required String newName,
+  }) async {
+    final list = await loadFolders();
+    final idx = list.indexWhere((f) => f.id == folderId);
+    if (idx != -1) {
+      final f = list[idx];
+      list[idx] = HealthFolder(
+        id: f.id,
+        name: newName.trim(),
+        category: f.category,
+        createdAt: f.createdAt,
+      );
+      await _saveFolders(list);
+    }
+  }
+
+  static Future<void> deleteFolder({required String folderId}) async {
+    // Delete folder and move its files to root (folderId: null)
+    final folders = await loadFolders();
+    folders.removeWhere((f) => f.id == folderId);
+    await _saveFolders(folders);
+
+    final docs = await loadLocalDocuments();
+    bool changed = false;
+    for (int i = 0; i < docs.length; i++) {
+      if (docs[i].folderId == folderId) {
+        docs[i] = HealthDocument(
+          id: docs[i].id,
+          folderId: null,
+          title: docs[i].title,
+          category: docs[i].category,
+          date: docs[i].date,
+          localPath: docs[i].localPath,
+          mimeType: docs[i].mimeType,
+          sizeBytes: docs[i].sizeBytes,
+        );
+        changed = true;
+      }
+    }
+    if (changed) {
+      await _saveDocuments(docs);
+    }
+  }
+
+  // ── Documents Management ───────────────────────────────────────────────────
+
   static Future<List<HealthDocument>> loadLocalDocuments() async {
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return [];
-
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_prefsKey);
+      final raw = prefs.getString(_docsKey);
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> list = jsonDecode(raw);
       return list
           .map((e) => HealthDocument.fromJson(e as Map<String, dynamic>))
           .toList()
-        ..sort((a, b) => b.savedAt.compareTo(a.savedAt));
+        ..sort((a, b) => b.date.compareTo(a.date));
     } catch (e) {
-      debugPrint('DocumentService.loadLocalDocuments error: $e');
+      debugPrint('[DocumentService] Error loading local documents: $e');
       return [];
     }
   }
 
-  /// Saves the full documents list back to SharedPreferences for this user.
-  static Future<void> _saveList(List<HealthDocument> docs) async {
+  static Future<void> _saveDocuments(List<HealthDocument> docs) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-      _prefsKey,
+      _docsKey,
       jsonEncode(docs.map((d) => d.toJson()).toList()),
     );
   }
 
-  /// Picks an image from gallery or camera and stores metadata locally.
-  static Future<HealthDocument?> pickAndSaveDocument({
-    required String type,
+  /// Saves a picked file into local app documents directory
+  static Future<HealthDocument> saveLocalDocument({
+    required String title,
+    required String category,
+    required DateTime date,
+    required String sourcePath,
+    String? folderId,
+  }) async {
+    final sourceFile = File(sourcePath);
+    if (!sourceFile.existsSync()) {
+      throw StateError('Source file does not exist.');
+    }
+
+    final id = 'doc_${DateTime.now().millisecondsSinceEpoch}';
+    final ext = sourcePath.contains('.') ? sourcePath.split('.').last.toLowerCase() : 'jpg';
+    final mimeType = ext == 'pdf'
+        ? 'application/pdf'
+        : (ext == 'png' ? 'image/png' : 'image/jpeg');
+
+    final docsDir = await _getLocalDocsDirectory();
+    final localFilePath = '${docsDir.path}/$id.$ext';
+    await sourceFile.copy(localFilePath);
+    final sizeBytes = await sourceFile.length();
+
+    final doc = HealthDocument(
+      id: id,
+      folderId: folderId,
+      title: title.trim(),
+      category: categories.contains(category) ? category : 'Other',
+      date: date,
+      localPath: localFilePath,
+      mimeType: mimeType,
+      sizeBytes: sizeBytes,
+    );
+
+    final list = await loadLocalDocuments();
+    list.insert(0, doc);
+    await _saveDocuments(list);
+    return doc;
+  }
+
+  static Future<HealthDocument?> pickAndSaveImage({
+    required String title,
+    required String category,
+    required DateTime date,
     bool fromCamera = false,
+    String? folderId,
   }) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      throw StateError('Please sign in to upload and store health documents.');
-    }
-    try {
-      final XFile? file = fromCamera
-          ? await _picker.pickImage(
-              source: ImageSource.camera,
-              maxWidth: 1024,
-              maxHeight: 1024,
-              imageQuality: 70,
-            )
-          : await _picker.pickImage(
-              source: ImageSource.gallery,
-              maxWidth: 1024,
-              maxHeight: 1024,
-              imageQuality: 70,
-            );
+    final XFile? file = fromCamera
+        ? await _picker.pickImage(source: ImageSource.camera, maxWidth: 1600, maxHeight: 1600, imageQuality: 85)
+        : await _picker.pickImage(source: ImageSource.gallery, maxWidth: 1600, maxHeight: 1600, imageQuality: 85);
 
-      if (file == null) return null;
-
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? 'guest';
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final localId = '${uid}_$ts';
-      final fileName = file.name.isEmpty ? 'doc_$ts.jpg' : file.name;
-
-      final doc = HealthDocument(
-        localId: localId,
-        fileName: fileName,
-        localPath: file.path,
-        savedAt: DateTime.now(),
-        type: type,
-      );
-
-      final docs = await loadLocalDocuments();
-      docs.insert(0, doc);
-      await _saveList(docs);
-      return doc;
-    } catch (e) {
-      debugPrint('DocumentService.pickAndSaveDocument error: $e');
-      return null;
-    }
+    if (file == null) return null;
+    return saveLocalDocument(
+      title: title.isEmpty ? file.name : title,
+      category: category,
+      date: date,
+      sourcePath: file.path,
+      folderId: folderId,
+    );
   }
 
-  /// Removes a document from local storage (does not delete from Firebase).
-  static Future<void> deleteLocalDocument(String localId) async {
+  static Future<void> moveDocument({
+    required String documentId,
+    required String? newFolderId,
+  }) async {
     final docs = await loadLocalDocuments();
-    docs.removeWhere((d) => d.localId == localId);
-    await _saveList(docs);
+    final idx = docs.indexWhere((d) => d.id == documentId);
+    if (idx != -1) {
+      final d = docs[idx];
+      docs[idx] = HealthDocument(
+        id: d.id,
+        folderId: newFolderId,
+        title: d.title,
+        category: d.category,
+        date: d.date,
+        localPath: d.localPath,
+        mimeType: d.mimeType,
+        sizeBytes: d.sizeBytes,
+      );
+      await _saveDocuments(docs);
+    }
   }
 
-  // ── Firebase Storage Upload (on-demand share) ─────────────────────────────
+  static Future<void> deleteLocalDocument(String documentId) async {
+    final docs = await loadLocalDocuments();
+    final idx = docs.indexWhere((d) => d.id == documentId);
+    if (idx != -1) {
+      final doc = docs[idx];
+      try {
+        final f = File(doc.localPath);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+      docs.removeAt(idx);
+      await _saveDocuments(docs);
+    }
+  }
 
-  /// Uploads document to Firebase Storage under `patient_docs/{uid}/{localId}/`.
-  /// Returns the public download URL.
-  /// Only called when user explicitly taps "Share with Doctor".
-  static Future<String> uploadToFirebase(
-    HealthDocument doc, {
-    void Function(double progress)? onProgress,
+  // ── Chat File Sharing ──────────────────────────────────────────────────────
+
+  /// Explicit user attachment to a chat.
+  /// Uploads to Firebase Storage under `chat_files/{chatId}/...`.
+  /// Max 10 MB, allowed types: pdf, jpg, png. Expiry: 30 days.
+  static Future<void> attachFileToChat({
+    required String chatId,
+    required String senderUid,
+    required String senderName,
+    required String otherUid,
+    required HealthDocument doc,
   }) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) throw StateError('Must be signed in to share documents.');
-
     final file = File(doc.localPath);
     if (!file.existsSync()) {
-      throw StateError('Document file not found on device.');
+      throw StateError('File not found on device.');
     }
 
-    final storageRef = FirebaseStorage.instance
-        .ref()
-        .child('patient_docs')
-        .child(uid)
-        .child(doc.localId)
-        .child(doc.fileName);
+    final fileSize = await file.length();
+    if (fileSize > 10 * 1024 * 1024) {
+      throw StateError('File size exceeds the 10 MB limit.');
+    }
+
+    final ext = doc.localPath.split('.').last.toLowerCase();
+    if (ext != 'pdf' && ext != 'jpg' && ext != 'jpeg' && ext != 'png') {
+      throw StateError('Only PDF, JPG, and PNG files are allowed.');
+    }
+
+    final sanitizedTitle = doc.title.replaceAll(RegExp(r'[^a-zA-Z0-9_\-\.]'), '_');
+    final storagePath = 'chat_files/$chatId/${doc.id}_$sanitizedTitle.$ext';
+    final storageRef = FirebaseStorage.instance.ref().child(storagePath);
 
     final uploadTask = storageRef.putFile(
       file,
       SettableMetadata(
-        contentType: 'image/jpeg',
+        contentType: doc.mimeType,
         customMetadata: {
-          'uploadedBy': uid,
-          'documentType': doc.type,
-          'originalName': doc.fileName,
+          'chatId': chatId,
+          'uploadedBy': senderUid,
+          'documentTitle': doc.title,
+          'documentCategory': doc.category,
         },
       ),
     );
 
-    if (onProgress != null) {
-      uploadTask.snapshotEvents.listen((snapshot) {
-        if (snapshot.totalBytes > 0) {
-          onProgress(snapshot.bytesTransferred / snapshot.totalBytes);
-        }
-      });
-    }
-
     final snapshot = await uploadTask;
-    final url = await snapshot.ref.getDownloadURL();
+    final downloadUrl = await snapshot.ref.getDownloadURL();
 
-    // Persist the shared URL locally so the user sees it in the document list
-    final docs = await loadLocalDocuments();
-    final idx = docs.indexWhere((d) => d.localId == doc.localId);
-    if (idx >= 0) {
-      docs[idx].sharedUrl = url;
-      docs[idx].sharedAt = DateTime.now();
-      await _saveList(docs);
-    }
+    final attachmentData = <String, dynamic>{
+      'fileUrl': downloadUrl,
+      'storagePath': storagePath,
+      'title': doc.title,
+      'fileName': doc.title,
+      'category': doc.category,
+      'fileCategory': doc.category,
+      'mimeType': doc.mimeType,
+      'sizeBytes': fileSize,
+      'sharedAt': FieldValue.serverTimestamp(),
+      'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 30))),
+      'isRevoked': false,
+      'sharedByUid': senderUid,
+    };
 
-    return url;
-  }
-
-  /// Returns a shareable link for a document that has already been uploaded.
-  /// For production, generate a signed URL with expiry here.
-  static Future<String> getShareableLink(HealthDocument doc) async {
-    if (doc.sharedUrl == null) {
-      throw StateError('Document has not been uploaded yet. Upload first.');
-    }
-    // Firebase Storage download URLs are already accessible for the file path.
-    return doc.sharedUrl!;
+    await ChatService.sendMessage(
+      chatId: chatId,
+      senderUid: senderUid,
+      otherUid: otherUid,
+      text: '📎 Shared ${doc.category}: ${doc.title}',
+      senderName: senderName,
+      attachment: attachmentData,
+    );
   }
 }
