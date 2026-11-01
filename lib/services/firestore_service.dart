@@ -2159,22 +2159,11 @@ class FirestoreService {
     final apptRef = _db.collection('appointments').doc();
 
     if (isPatient) {
-      // Reject if this patient already has an active appointment with same doctor and chamber on same date
-      final startOfDay = DateTime(scheduledTime.year, scheduledTime.month, scheduledTime.day);
-      final endOfDay = startOfDay.add(const Duration(days: 1));
-
-      final existingSnap = await _db
-          .collection('appointments')
-          .where('userId', isEqualTo: uid)
-          .where('doctorId', isEqualTo: resolvedDoctorId)
-          .where('chamberId', isEqualTo: resolvedChamberId)
-          .where('status', whereIn: ['requested', 'confirmed', 'in_progress'])
-          .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-          .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
-          .limit(1)
-          .get();
-
-      if (existingSnap.docs.isNotEmpty) {
+      // Reject if this patient already has an active appointment with same doctor and chamber on same date.
+      // The active_bookings lock doc uniquely identifies (userId_doctorId_chamberId_dateKey),
+      // making a fast direct get() sufficient without needing a composite index on appointments.
+      final activeCheck = await activeBookingRef.get();
+      if (activeCheck.exists) {
         throw StateError('You already have a request for this doctor on this date.');
       }
 
