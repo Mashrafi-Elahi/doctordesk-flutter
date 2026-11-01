@@ -80,7 +80,12 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly(['ratingAverage', 'ratingCount', 'updatedAt'])
       );
       allow update: if isAdmin() ||
-        (isAuthenticated() && resource.data.claimedByUid == request.auth.uid) ||
+        (isAuthenticated() && resource.data.claimedByUid == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+           'verificationStatus', 'isBmdcVerified', 'verifiedAt', 'verifiedBy',
+           'checkedAt', 'checkedBy', 'bmdcVerificationOutcome', 'method', 'sourceUrl',
+           'claimStatus', 'claimedByUid'
+         ])) ||
         (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratingAverage', 'ratingCount', 'updatedAt']));
       allow delete: if isAdmin();
     }
@@ -106,6 +111,26 @@ service cloud.firestore {
            exists(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)) &&
            get(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)).data.claimedByUid == request.auth.uid)
         )
+      );
+    }
+
+    // Active bookings collection: prevents double or multiple active bookings
+    match /active_bookings/{bookingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        !exists(/databases/$(database)/documents/active_bookings/$(bookingId));
+      allow update: if false;
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments)
       );
     }
 
@@ -200,10 +225,12 @@ service cloud.firestore {
     // Public read; create/update/delete only your own review (or admin delete).
     match /reviews/{reviewId} {
       allow read: if true;
-      allow create: if isAuthenticated() && (
-        (request.resource.data.userId != null && request.resource.data.userId == request.auth.uid) ||
-        (request.resource.data.patientUid != null && request.resource.data.patientUid == request.auth.uid)
-      );
+      allow create: if isAuthenticated() &&
+        (('userId' in request.resource.data && request.resource.data.userId == request.auth.uid) ||
+         ('patientUid' in request.resource.data && request.resource.data.patientUid == request.auth.uid)) &&
+        (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+         !('doctorProfileId' in getUserData()) ||
+         getUserData().doctorProfileId != request.resource.data.doctorId);
       allow update: if isAuthenticated() && (
         (resource.data.userId != null && resource.data.userId == request.auth.uid) ||
         (resource.data.patientUid != null && resource.data.patientUid == request.auth.uid)

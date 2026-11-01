@@ -129,13 +129,19 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                 final patient =
                                     data['patientName'] ?? 'Patient';
                                 final status = data['status'] ?? 'waiting';
+                                final isRequested = status == 'requested';
+                                final isConfirmed = status == 'confirmed';
                                 final pos = data['queuePosition'];
                                 final ts = data['scheduledTime'];
                                 String dateStr = 'Scheduled';
                                 if (ts is Timestamp) {
                                   final dt = ts.toDate();
-                                  dateStr =
-                                      '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                  if (isRequested) {
+                                    dateStr = '${dt.day}/${dt.month}/${dt.year}';
+                                  } else {
+                                    dateStr =
+                                        '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                  }
                                 }
 
                                 return Card(
@@ -234,7 +240,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                         fontSize: 13)),
                                               ],
                                             ),
-                                            if (pos != null)
+                                            if (isConfirmed && pos != null)
                                               Text(
                                                 'Queue #$pos',
                                                 style: TextStyle(

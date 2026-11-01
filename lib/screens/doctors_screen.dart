@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../models/doctor.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
 import 'doctor_detail_screen.dart';
 import '../widgets/chamber_accessibility.dart';
 
@@ -320,7 +321,9 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
               }
 
               final doctor = displayDoctors[index];
-              return _DoctorListCard(doctor: doctor);
+              final ownId = AuthService.userRoles.doctorProfileId;
+              final isPinnedOwn = ownId != null && ownId.isNotEmpty && ownId == doctor.id;
+              return _DoctorListCard(doctor: doctor, isPinnedOwn: isPinnedOwn);
             },
           ),
         ),
@@ -331,8 +334,9 @@ class _DoctorsScreenState extends State<DoctorsScreen> {
 
 class _DoctorListCard extends StatelessWidget {
   final Doctor doctor;
+  final bool isPinnedOwn;
 
-  const _DoctorListCard({required this.doctor});
+  const _DoctorListCard({required this.doctor, this.isPinnedOwn = false});
 
   @override
   Widget build(BuildContext context) {
@@ -341,6 +345,13 @@ class _DoctorListCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       clipBehavior: Clip.antiAlias,
+      color: isPinnedOwn ? colorScheme.primary.withValues(alpha: 0.10) : null,
+      shape: isPinnedOwn
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4), width: 1.5),
+            )
+          : null,
       child: InkWell(
         onTap: () {
           Navigator.push(
@@ -377,12 +388,73 @@ class _DoctorListCard extends StatelessWidget {
                           child: Text(
                             doctor.name,
                             style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Color(0xFF0F172A)),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (doctor.verificationStatus == 'verified')
+                        if (isPinnedOwn) ...[
+                          Container(
+                            margin: const EdgeInsets.only(left: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: colorScheme.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Your profile',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check_circle, size: 12, color: Colors.blue),
+                              SizedBox(width: 2),
+                              Text(
+                                'Claimed',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF0F172A),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ] else if (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check, size: 10, color: Colors.blue),
+                                SizedBox(width: 2),
+                                Text(
+                                  'Claimed',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified')
                           const Padding(
                             padding: EdgeInsets.only(left: 4.0),
                             child: Icon(Icons.verified,
@@ -450,55 +522,6 @@ class _DoctorListCard extends StatelessWidget {
                           ),
                         ),
                         const Spacer(),
-                        if (doctor.claimedByUid == null || doctor.claimedByUid!.isEmpty)
-                          InkWell(
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => DoctorDetailScreen(doctorId: doctor.id)),
-                              );
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.shade50,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.blue.shade200),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.verified_user_outlined, size: 12, color: Colors.blue),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    'Claim this profile',
-                                    style: TextStyle(fontSize: 11, color: Colors.blue, fontWeight: FontWeight.w600),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        else if (doctor.claimStatus == 'pending')
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade50,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.amber.shade300),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.hourglass_empty, size: 12, color: Color(0xFF78350F)),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Claim Pending',
-                                  style: TextStyle(fontSize: 11, color: Color(0xFF78350F), fontWeight: FontWeight.w600),
-                                ),
-                              ],
-                            ),
-                          ),
                       ],
                     ),
                   ],

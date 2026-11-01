@@ -1,9 +1,12 @@
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
 import 'bmdc_verification_screen.dart';
+import 'doctor_manager_screen.dart';
+import '../models/user_role.dart';
 import 'chat_screen.dart';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -252,7 +255,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
 
     String selectedChamberId = chamberOptions.first.id;
     DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
-    TimeOfDay selectedTime = const TimeOfDay(hour: 10, minute: 0);
+    // Preferred date only; time and queue number are assigned upon acceptance.
     final patientNameCtrl = TextEditingController(
       text: AuthService.currentUser?.displayName?.isNotEmpty == true
           ? AuthService.currentUser!.displayName!
@@ -321,44 +324,22 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       },
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.calendar_today, size: 16),
-                            label: Text(
-                                '${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
-                            onPressed: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: selectedDate,
-                                firstDate: DateTime.now(),
-                                lastDate: DateTime.now()
-                                    .add(const Duration(days: 90)),
-                              );
-                              if (picked != null) {
-                                setSheetState(() => selectedDate = picked);
-                              }
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.access_time, size: 16),
-                            label: Text(selectedTime.format(context)),
-                            onPressed: () async {
-                              final picked = await showTimePicker(
-                                context: context,
-                                initialTime: selectedTime,
-                              );
-                              if (picked != null) {
-                                setSheetState(() => selectedTime = picked);
-                              }
-                            },
-                          ),
-                        ),
-                      ],
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.calendar_today, size: 16),
+                      label: Text(
+                          'Preferred Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
+                      onPressed: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: selectedDate,
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime.now()
+                              .add(const Duration(days: 90)),
+                        );
+                        if (picked != null) {
+                          setSheetState(() => selectedDate = picked);
+                        }
+                      },
                     ),
                     const SizedBox(height: 16),
                     FilledButton(
@@ -378,8 +359,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   selectedDate.year,
                                   selectedDate.month,
                                   selectedDate.day,
-                                  selectedTime.hour,
-                                  selectedTime.minute,
                                 );
                                 await FirestoreService.createAppointment(
                                   patientName:
@@ -405,9 +384,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               } catch (e) {
                                 setSheetState(() => isSubmitting = false);
                                 if (mounted) {
+                                  final msg = e.toString().contains('already have a request')
+                                      ? 'You already have a request for this doctor on this date.'
+                                      : 'Booking error: $e';
                                   messenger.showSnackBar(
-                                    SnackBar(
-                                        content: Text('Booking error: $e')),
+                                    SnackBar(content: Text(msg)),
                                   );
                                 }
                               }
@@ -562,6 +543,58 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check_circle, size: 12, color: AppColors.primary),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Claimed',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified') ...[
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.green.shade300),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.verified, size: 12, color: Colors.green),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _bmdcCheckedLabel(doctor),
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.green.shade900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         if (doctor.specialities.isNotEmpty) ...[
                           const SizedBox(height: 2),
                           Text(
@@ -688,8 +721,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       _buildBulletItem('Qualified: ${doctor.education.join(", ")}'),
                     if (doctor.concentrations.isNotEmpty)
                       _buildBulletItem('Clinical Focus: ${doctor.concentrations.join(", ")}'),
-                    if (doctor.verificationStatus == 'verified')
-                      _buildBulletItem('BMDC & NID Verified Specialist'),
+                    if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified')
+                      _buildBulletItem(_bmdcCheckedLabel(doctor)),
                     if (doctor.experienceYears <= 0 && doctor.education.isEmpty)
                       _buildBulletItem('Specialist medical practitioner with registered credentials'),
                   ],
@@ -859,6 +892,36 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           padding: const EdgeInsets.all(AppConstants.screenPadding),
           child: Builder(
             builder: (context) {
+              final isOwnProfile = AuthService.userRoles.doctorProfileId != null &&
+                  AuthService.userRoles.doctorProfileId!.isNotEmpty &&
+                  AuthService.userRoles.doctorProfileId == doctor.id;
+              final isPatientPortal = AuthService.activeRole == UserRole.patient || AuthService.isGuest;
+
+              if (isOwnProfile) {
+                return FilledButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DoctorManagerScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Manage profile'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                    ),
+                  ),
+                );
+              }
+
+              if (!isPatientPortal) {
+                return const SizedBox.shrink();
+              }
+
               final hasUnlockedChat = _unlockedChatSession != null && _unlockedChatSession!.canSendMessage;
 
               if (hasUnlockedChat) {
@@ -980,21 +1043,36 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     );
   }
 
+  String _bmdcCheckedLabel(Doctor doctor) {
+    DateTime? dt;
+    final v = doctor.verifiedAt;
+    if (v is Timestamp) {
+      dt = v.toDate();
+    } else if (v is DateTime) {
+      dt = v;
+    } else if (v is String) {
+      dt = DateTime.tryParse(v);
+    }
+    if (dt != null) {
+      final dateStr = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+      return 'Registration checked on $dateStr';
+    }
+    return 'Registration checked';
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Reviews content widget
   // ──────────────────────────────────────────────────────────────────────────
 
   Widget _buildReviewsContent() {
     final isSignedIn = AuthService.isSignedIn && !AuthService.isGuest;
-    final isDoctor = AuthService.userRoles.isDoctor;
-    final isOperator = AuthService.userRoles.isOperator;
+    final isOwnProfile = AuthService.userRoles.doctorProfileId != null &&
+        AuthService.userRoles.doctorProfileId!.isNotEmpty &&
+        AuthService.userRoles.doctorProfileId == widget.doctorId;
+    final isPatientPortal = AuthService.activeRole == UserRole.patient || AuthService.isGuest;
+    final canWriteReview = isPatientPortal && !isOwnProfile;
 
-    String buttonLabel = 'Write a review';
-    if (isDoctor) {
-      buttonLabel = 'Rate as Doctor Specialist (Peer review)';
-    } else if (isOperator) {
-      buttonLabel = 'Rate as Chamber Operator';
-    }
+    const buttonLabel = 'Write a review';
 
     return StreamBuilder<List<Map<String, dynamic>>>(
       stream: FirestoreService.reviewsStream(widget.doctorId),
@@ -1069,11 +1147,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                   ],
                 ),
               ),
-            ] else ...[
+            ] else if (canWriteReview) ...[
               TextButton.icon(
                 onPressed: _openReviewSheet,
                 icon: const Icon(Icons.edit_outlined, size: 18),
-                label: Text(buttonLabel),
+                label: const Text(buttonLabel),
               ),
             ],
           ],

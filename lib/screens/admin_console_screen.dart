@@ -22,6 +22,52 @@ class AdminConsoleScreen extends StatefulWidget {
 }
 
 class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
+  Future<void> _loadTestAppointments() async {
+    setState(() => _loadingTestAppointments = true);
+    try {
+      final list = await DataService.fetchTestAppointments();
+      if (mounted) setState(() => _testAppointments = list);
+    } catch (_) {} finally {
+      if (mounted) setState(() => _loadingTestAppointments = false);
+    }
+  }
+
+  Future<void> _confirmDeleteTestAppointment(String apptId, String patientName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Test Appointment?'),
+        content: Text('Permanently delete test appointment for $patientName (ID: $apptId)?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        await DataService.deleteAppointment(apptId);
+        _loadTestAppointments();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Test appointment deleted.')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting test appointment: $e')),
+          );
+        }
+      }
+    }
+  }
+
+
   bool _loading = false;
   String _serverStatus = 'Checking...';
   int? _latencyMs;
@@ -42,6 +88,8 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
   String _claimStatusFilter = 'all';
   List<Map<String, dynamic>> _verificationDoctors = [];
   bool _loadingVerificationDoctors = false;
+  List<Map<String, dynamic>> _testAppointments = [];
+  bool _loadingTestAppointments = false;
 
   @override
   void initState() {
@@ -51,6 +99,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     _loadModerators();
     _loadVerificationDoctors();
     _loadBundledUploadStatus();
+    if (kDebugMode) _loadTestAppointments();
   }
 
   @override
@@ -1847,6 +1896,62 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
             const SizedBox(height: 20),
             const SizedBox(height: 12),
             if (kDebugMode) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Test Appointments Cleanup (Manual)',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.refresh, size: 20),
+                            tooltip: 'Refresh test appointments',
+                            onPressed: _loadingTestAppointments ? null : _loadTestAppointments,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Individually delete test appointments with missing or legacy status (e.g. waiting, pending). No automatic deletion.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const Divider(height: 16),
+                      if (_loadingTestAppointments)
+                        const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
+                      else if (_testAppointments.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text('No legacy or test appointments found.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                        )
+                      else
+                        ..._testAppointments.map((appt) {
+                          final id = (appt['id'] ?? '').toString();
+                          final patName = (appt['patientName'] ?? 'Unknown').toString();
+                          final docName = (appt['doctorName'] ?? 'Specialist').toString();
+                          final status = (appt['status'] ?? 'missing').toString();
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('$patName • Dr. $docName', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                            subtitle: Text('Status: $status • ID: $id', style: const TextStyle(fontSize: 11)),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                              tooltip: 'Delete this appointment',
+                              onPressed: () => _confirmDeleteTestAppointment(id, patName),
+                            ),
+                          );
+                        }),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               Card(
                 child: Column(
                   children: [

@@ -6,7 +6,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore';
 
 const projectId = 'doctordesk-rules-test';
 const rules = readFileSync(new URL('../../firestore.rules', import.meta.url), 'utf8');
@@ -40,6 +40,12 @@ async function seed() {
       }),
       setDoc(doc(db, 'users/stranger'), { roles: {} }),
       setDoc(doc(db, 'admins/admin'), { uid: 'admin' }),
+      setDoc(doc(db, 'doctors/doctor-profile'), {
+        name: 'Dr One',
+        claimedByUid: 'doctor',
+        verificationStatus: 'unverified',
+        isBmdcVerified: false,
+      }),
     ]);
   });
 }
@@ -124,5 +130,85 @@ describe('appointment authorization', () => {
     ));
     assert.equal(snapshot.docs.length, 1);
     assert.equal(snapshot.docs[0].data().status, 'requested');
+  });
+
+  it('prevents a second active booking for the same patient, doctor, and date', async () => {
+    const bookingKey = 'patient_doctor-profile_chamber-a_2030-01-01';
+    const activeBooking = {
+      userId: 'patient',
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      dateKey: '2030-01-01',
+      appointmentId: 'appt-1',
+      createdAt: new Date('2030-01-01T09:00:00Z'),
+    };
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+
+    // First active booking creation succeeds
+    await assertSucceeds(setDoc(doc(patientDb, `active_bookings/${bookingKey}`), activeBooking));
+
+    // Second active booking with same key fails
+    await assertFails(setDoc(doc(patientDb, `active_bookings/${bookingKey}`), {
+      ...activeBooking,
+      appointmentId: 'appt-2',
+    }));
+  });
+
+  it('rejects non-admin updating doctor verification fields', async () => {
+    const doctorDb = testEnv.authenticatedContext('doctor').firestore();
+    // Non-admin can update general profile info (e.g. bio, name)
+    await assertSucceeds(updateDoc(doc(doctorDb, 'doctors/doctor-profile'), {
+      bio: 'Updated bio by doctor',
+    }));
+    // Non-admin cannot update verificationStatus
+    await assertFails(updateDoc(doc(doctorDb, 'doctors/doctor-profile'), {
+      verificationStatus: 'checked_found',
+    }));
+    // Non-admin cannot update isBmdcVerified
+    await assertFails(updateDoc(doc(doctorDb, 'doctors/doctor-profile'), {
+      isBmdcVerified: true,
+    }));
+  });
+
+  it('allows admin to update doctor verification fields', async () => {
+    const adminDb = testEnv.authenticatedContext('admin').firestore();
+    await assertSucceeds(updateDoc(doc(adminDb, 'doctors/doctor-profile'), {
+      verificationStatus: 'checked_found',
+      isBmdcVerified: true,
+      verifiedBy: 'admin',
+    }));
+  });
+
+  it('rejects a review with spoofed userId', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(setDoc(doc(patientDb, 'reviews/spoofed-review'), {
+      userId: 'stranger',
+      doctorId: 'doctor-profile',
+      rating: 5,
+      comment: 'Spoofed',
+      createdAt: new Date('2030-01-01T09:00:00Z'),
+    }));
+  });
+
+  it('rejects a doctor reviewing their own doctorProfileId', async () => {
+    const doctorDb = testEnv.authenticatedContext('doctor').firestore();
+    await assertFails(setDoc(doc(doctorDb, 'reviews/doctor-self-review'), {
+      userId: 'doctor',
+      doctorId: 'doctor-profile',
+      rating: 5,
+      comment: 'Reviewing myself',
+      createdAt: new Date('2030-01-01T09:00:00Z'),
+    }));
+  });
+
+  it('allows a patient to review a doctor', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertSucceeds(setDoc(doc(patientDb, 'reviews/patient-valid-review'), {
+      userId: 'patient',
+      doctorId: 'doctor-profile',
+      rating: 5,
+      comment: 'Great service!',
+      createdAt: new Date('2030-01-01T09:00:00Z'),
+    }));
   });
 });

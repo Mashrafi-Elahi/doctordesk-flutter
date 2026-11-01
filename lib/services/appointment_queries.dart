@@ -6,8 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class AppointmentQueries {
   static final _db = FirebaseFirestore.instance;
 
-  /// Pending requests for an operator: chamberId in assigned chambers + status == 'requested'.
-  /// No scheduledTime filter — requested appointments may have null or future time.
+  /// Pending requests for an operator: chamberId in assigned chambers + handledBy == 'operator' + status == 'requested'.
   static Query<Map<String, dynamic>> pendingRequestsForOperator(
       List<String> chamberIds) {
     if (chamberIds.isEmpty) {
@@ -19,17 +18,29 @@ class AppointmentQueries {
     return _db
         .collection('appointments')
         .where('chamberId', whereIn: chamberIds)
+        .where('handledBy', isEqualTo: 'operator')
         .where('status', isEqualTo: 'requested')
         .orderBy('createdAt', descending: false);
   }
 
-  /// Pending requests for a doctor: doctorId matches + status == 'requested'.
-  /// No scheduledTime filter.
+  /// Pending requests for a single chamber for an operator.
+  static Query<Map<String, dynamic>> pendingRequestsForChamber(
+      String chamberId) {
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('handledBy', isEqualTo: 'operator')
+        .where('status', isEqualTo: 'requested')
+        .orderBy('createdAt', descending: false);
+  }
+
+  /// Pending requests for a doctor: doctorId matches + handledBy == 'doctor' + status == 'requested'.
   static Query<Map<String, dynamic>> pendingRequestsForDoctor(
       String doctorProfileId) {
     return _db
         .collection('appointments')
         .where('doctorId', isEqualTo: doctorProfileId)
+        .where('handledBy', isEqualTo: 'doctor')
         .where('status', isEqualTo: 'requested')
         .orderBy('createdAt', descending: false);
   }
@@ -71,6 +82,15 @@ class AppointmentQueries {
     return _db
         .collection('appointments')
         .where('chamberId', isEqualTo: chamberId)
+        .where('status', isEqualTo: 'done')
+        .orderBy('scheduledTime', descending: true);
+  }
+
+  /// Completed appointments for a doctor across all chambers.
+  static Query<Map<String, dynamic>> completedForDoctor(String doctorProfileId) {
+    return _db
+        .collection('appointments')
+        .where('doctorId', isEqualTo: doctorProfileId)
         .where('status', isEqualTo: 'done')
         .orderBy('scheduledTime', descending: true);
   }

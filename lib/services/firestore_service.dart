@@ -2135,82 +2135,148 @@ class FirestoreService {
     final isPatient = !isDoctorQueueEntry && !isAssignedOperator && roles['isAdmin'] != true;
     final apptStatus = isPatient ? 'requested' : status;
 
-    int? queuePos;
-    if (!isPatient) {
+    // 1. Look up desk operators for the chamber (users whose operatorAssignments contains chamberId)
+    List<String> operatorUids = [];
+    if (resolvedChamberId.isNotEmpty) {
+      try {
+        final opUsersSnap = await _db
+            .collection('users')
+            .where('operatorAssignments', arrayContains: resolvedChamberId)
+            .get();
+        operatorUids = opUsersSnap.docs
+            .map((d) => d.id)
+            .where((id) => id.isNotEmpty && id != uid)
+            .toList();
+      } catch (_) {}
+    }
+
+    final bool hasOperator = operatorUids.isNotEmpty;
+    final String handledBy = hasOperator ? 'operator' : 'doctor';
+
+    final dateKey = '${scheduledTime.year}-${scheduledTime.month.toString().padLeft(2, "0")}-${scheduledTime.day.toString().padLeft(2, "0")}';
+    final activeBookingKey = '${uid}_${resolvedDoctorId ?? "doc"}_${resolvedChamberId}_$dateKey';
+    final activeBookingRef = _db.collection('active_bookings').doc(activeBookingKey);
+    final apptRef = _db.collection('appointments').doc();
+
+    if (isPatient) {
+      // Reject if this patient already has an active appointment with same doctor and chamber on same date
+      final startOfDay = DateTime(scheduledTime.year, scheduledTime.month, scheduledTime.day);
+      final endOfDay = startOfDay.add(const Duration(days: 1));
+
+      final existingSnap = await _db
+          .collection('appointments')
+          .where('userId', isEqualTo: uid)
+          .where('doctorId', isEqualTo: resolvedDoctorId)
+          .where('chamberId', isEqualTo: resolvedChamberId)
+          .where('status', whereIn: ['requested', 'confirmed', 'in_progress'])
+          .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('scheduledTime', isLessThan: Timestamp.fromDate(endOfDay))
+          .limit(1)
+          .get();
+
+      if (existingSnap.docs.isNotEmpty) {
+        throw StateError('You already have a request for this doctor on this date.');
+      }
+
+      await _db.runTransaction((tx) async {
+        final activeSnap = await tx.get(activeBookingRef);
+        if (activeSnap.exists) {
+          throw StateError('You already have a request for this doctor on this date.');
+        }
+
+        final data = <String, dynamic>{
+          'patientName': patientName,
+          'doctorName': doctorName ?? 'Specialist Doctor',
+          'scheduledTime': Timestamp.fromDate(scheduledTime),
+          'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+          'doctorId': resolvedDoctorId,
+          'operatorNote': operatorNote ?? '',
+          'status': apptStatus,
+          'handledBy': handledBy,
+          'activeBookingKey': activeBookingKey,
+          'userId': uid,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+
+        tx.set(apptRef, data);
+        tx.set(activeBookingRef, {
+          'appointmentId': apptRef.id,
+          'userId': uid,
+          'doctorId': resolvedDoctorId,
+          'chamberId': resolvedChamberId,
+          'date': dateKey,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      });
+    } else {
       final countSnap = await _db
           .collection('appointments')
           .where('chamberId', isEqualTo: resolvedChamberId)
           .count()
           .get();
-      queuePos = (countSnap.count ?? 0) + 1;
+      final queuePos = (countSnap.count ?? 0) + 1;
+
+      final data = <String, dynamic>{
+        'patientName': patientName,
+        'doctorName': doctorName ?? 'Specialist Doctor',
+        'scheduledTime': Timestamp.fromDate(scheduledTime),
+        'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+        'doctorId': resolvedDoctorId,
+        'operatorNote': operatorNote ?? '',
+        'status': apptStatus,
+        'handledBy': handledBy,
+        'queuePosition': queuePos,
+        'userId': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      await apptRef.set(data);
     }
-
-    final data = <String, dynamic>{
-      'patientName': patientName,
-      'doctorName': doctorName ?? 'Specialist Doctor',
-      'scheduledTime': Timestamp.fromDate(scheduledTime),
-      'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
-      'doctorId': resolvedDoctorId,
-      'operatorNote': operatorNote ?? '',
-      'status': apptStatus,
-      if (queuePos != null) 'queuePosition': queuePos,
-      'userId': uid,
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    };
-
-    final docRef = await _db.collection('appointments').add(data);
 
     try {
       final docLabel = doctorName ?? 'your doctor';
-      // 1. Patient: "Appointment Requested" (NOT "Confirmed")
-      await NotificationService.createNotification(
-        userId: uid,
-        title: 'Appointment Requested',
-        body: 'Your request with $docLabel for ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year} has been submitted and is awaiting confirmation.',
-        type: 'appointment_requested',
-        relatedId: docRef.id,
-      );
-      // 2. Notify doctor (via claimedByUid on the doctor doc)
-      if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
-        try {
-          final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
-          final claimedByUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
-          final patName = (data['patientName'] ?? 'A patient').toString();
-          if (claimedByUid.isNotEmpty && claimedByUid != uid) {
-            await NotificationService.createNotification(
-              userId: claimedByUid,
-              title: 'New Appointment Request',
-              body: '$patName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
-              type: 'new_appointment_request',
-              relatedId: docRef.id,
-            );
-          }
-          // 3. Notify chamber operator
-          final chamberIdForNotify = resolvedChamberId;
-          if (chamberIdForNotify.isNotEmpty) {
-            try {
-              final chamberSnap = await _db.collection('chambers').doc(chamberIdForNotify).get();
-              final operatorUid = (chamberSnap.data()?['operatorUid'] ?? '').toString();
-              if (operatorUid.isNotEmpty && operatorUid != uid && operatorUid != claimedByUid) {
-                await NotificationService.createNotification(
-                  userId: operatorUid,
-                  title: 'New Appointment Request',
-                  body: '$patName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
-                  type: 'new_appointment_request',
-                  relatedId: docRef.id,
-                );
-              }
-            } catch (_) {}
-          }
-        } catch (_) {}
+      // 1. Patient: "Appointment Requested"
+      if (isPatient) {
+        await NotificationService.createNotification(
+          userId: uid,
+          title: 'Appointment Requested',
+          body: 'Your request with $docLabel for ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year} has been submitted and is awaiting confirmation.',
+          type: 'appointment_requested',
+          relatedId: apptRef.id,
+        );
+      }
+
+      // 2. Exclusive notification: if operators exist, notify ONLY operators; if none, notify ONLY doctor. Never both. Never admin.
+      if (hasOperator) {
+        for (final opUid in operatorUids) {
+          await NotificationService.createNotification(
+            userId: opUid,
+            title: 'New Appointment Request',
+            body: '$patientName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
+            type: 'new_appointment_request',
+            relatedId: apptRef.id,
+          );
+        }
+      } else if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
+        final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
+        final claimedByUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
+        if (claimedByUid.isNotEmpty && claimedByUid != uid) {
+          await NotificationService.createNotification(
+            userId: claimedByUid,
+            title: 'New Appointment Request',
+            body: '$patientName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
+            type: 'new_appointment_request',
+            relatedId: apptRef.id,
+          );
+        }
       }
     } catch (_) {}
 
     return {
-      '_id': docRef.id,
-      'id': docRef.id,
-      ...data,
+      '_id': apptRef.id,
+      'id': apptRef.id,
+      'status': apptStatus,
       'scheduledTime': scheduledTime.toIso8601String(),
     };
   }
@@ -2299,13 +2365,9 @@ class FirestoreService {
     batch.set(doctorRef, {
       'claimedByUid': applicantUid,
       'isClaimed': true,
-      'claimStatus': 'claimed',
+      'claimStatus': 'approved',
       'bmdcNumber': bmdcNumber,
       'bmdcRegNumber': bmdcNumber,
-      'isBmdcVerified': true,
-      'verificationStatus': 'verified',
-      'verifiedAt': FieldValue.serverTimestamp(),
-      'verifiedBy': adminUid,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
@@ -2387,35 +2449,49 @@ class FirestoreService {
     final doctorRef = _db.collection('doctors').doc(doctorId);
     final historyRef = _db.collection('doctor_verification_history').doc();
     final isFound = outcome == 'found';
-    final legacyStatus = isFound ? 'verified' : outcome == 'mismatch' ? 'mismatch' : 'rejected';
+    final verificationStatus = outcome == 'found'
+        ? 'checked_found'
+        : (outcome == 'mismatch' ? 'checked_mismatch' : 'checked_not_found');
+
     final batch = _db.batch();
     batch.set(doctorRef, {
-      'bmdcVerificationOutcome': outcome,
-      'verificationStatus': legacyStatus,
+      'bmdcNumber': registrationNumber.trim(),
+      'bmdcRegNumber': registrationNumber.trim(),
+      'verificationStatus': verificationStatus,
       'isBmdcVerified': isFound,
-      'verifiedBy': adminUid,
-      'verifiedAt': FieldValue.serverTimestamp(),
+      'checkedAt': FieldValue.serverTimestamp(),
+      'checkedBy': adminUid,
+      'sourceUrl': 'https://verify.bmdc.org.bd/',
+      'method': 'manual',
+      'note': note?.trim() ?? '',
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
     batch.set(historyRef, {
       'doctorId': doctorId,
       'bmdcNumber': registrationNumber.trim(),
       'outcome': outcome,
       'provider': 'manual',
+      'method': 'manual',
+      'sourceUrl': 'https://verify.bmdc.org.bd/',
       'note': note?.trim() ?? '',
       'verifiedByUid': adminUid,
+      'checkedBy': adminUid,
+      'checkedAt': FieldValue.serverTimestamp(),
       'verifiedAt': FieldValue.serverTimestamp(),
     });
-    await batch.commit();
 
     final doctor = await doctorRef.get();
     final claimedUid = doctor.data()?['claimedByUid']?.toString();
     if (claimedUid != null && claimedUid.isNotEmpty) {
-      await _db.collection('users').doc(claimedUid).set({
+      final userRef = _db.collection('users').doc(claimedUid);
+      batch.set(userRef, {
         'isBmdcVerified': isFound,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
+
+    await batch.commit();
   }
 
   /// Fetches doctors from Firestore for verification review
@@ -2748,6 +2824,105 @@ class FirestoreService {
     };
   }
 
+  /// If an operator is assigned or removed later, requests still 'requested' are re-routed:
+  /// recompute handledBy from the current operators.
+  static Future<void> reroutePendingRequests({
+    List<String>? chamberIds,
+    String? doctorId,
+  }) async {
+    try {
+      Query<Map<String, dynamic>> query = _db
+          .collection('appointments')
+          .where('status', isEqualTo: 'requested');
+
+      if (chamberIds != null && chamberIds.isNotEmpty) {
+        query = query.where('chamberId', whereIn: chamberIds);
+      } else if (doctorId != null && doctorId.isNotEmpty) {
+        query = query.where('doctorId', isEqualTo: doctorId);
+      }
+
+      final snap = await query.get();
+      if (snap.docs.isEmpty) return;
+
+      final batch = _db.batch();
+      bool hasUpdates = false;
+      final Map<String, bool> chamberHasOperators = {};
+
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final chId = (data['chamberId'] ?? '').toString();
+        if (chId.isEmpty) continue;
+
+        if (!chamberHasOperators.containsKey(chId)) {
+          final opUsers = await _db
+              .collection('users')
+              .where('operatorAssignments', arrayContains: chId)
+              .limit(1)
+              .get();
+          chamberHasOperators[chId] = opUsers.docs.isNotEmpty;
+        }
+
+        final expectedHandledBy = chamberHasOperators[chId] == true ? 'operator' : 'doctor';
+        if (data['handledBy'] != expectedHandledBy) {
+          batch.update(doc.reference, {
+            'handledBy': expectedHandledBy,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          hasUpdates = true;
+        }
+      }
+
+      if (hasUpdates) {
+        await batch.commit();
+      }
+    } catch (_) {}
+  }
+
+  /// Returns available free time slots for a doctor on a given date across ALL chambers.
+  static Future<List<DateTime>> getFreeSlotsForDoctor({
+    required String doctorId,
+    required DateTime date,
+    int slotMinutes = 15,
+  }) async {
+    final startOfDay = DateTime(date.year, date.month, date.day, 0, 0, 0);
+    final endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
+
+    final snap = await _db
+        .collection('appointments')
+        .where('doctorId', isEqualTo: doctorId)
+        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+        .get();
+
+    final busySlots = <({DateTime start, DateTime end})>[];
+    for (final doc in snap.docs) {
+      final st = (doc.data()['status'] ?? '').toString();
+      if (st == 'confirmed' || st == 'in_progress') {
+        final t = doc.data()['scheduledTime'];
+        if (t is Timestamp) {
+          final s = t.toDate();
+          busySlots.add((start: s, end: s.add(Duration(minutes: slotMinutes))));
+        }
+      }
+    }
+
+    final freeSlots = <DateTime>[];
+    // Default visiting hours 9:00 AM to 9:00 PM
+    var currentSlot = DateTime(date.year, date.month, date.day, 9, 0);
+    final endTime = DateTime(date.year, date.month, date.day, 21, 0);
+
+    while (currentSlot.isBefore(endTime)) {
+      final slotEnd = currentSlot.add(Duration(minutes: slotMinutes));
+      final isOverlapping = busySlots.any((b) => currentSlot.isBefore(b.end) && slotEnd.isAfter(b.start));
+      if (!isOverlapping) {
+        freeSlots.add(currentSlot);
+      }
+      currentSlot = slotEnd;
+    }
+
+    return freeSlots;
+  }
+
   /// Checks whether an appointment time has conflicts:
   /// 1. Within chamber working hours (default 08:00 to 22:00).
   /// 2. No overlap for the same doctor across all chambers (slot length default 15m).
@@ -2798,7 +2973,8 @@ class FirestoreService {
     }
   }
 
-  /// Confirms an appointment, assigns time and queue number via transaction on counter doc `queues/{chamberId}_{yyyyMMdd}`.
+  /// Confirms an appointment, assigns time and queue number in a transaction.
+  /// Rejects any slot that overlaps another confirmed appointment of the same doctor across ALL chambers.
   static Future<void> confirmAppointment({
     required String appointmentId,
     required DateTime confirmedTime,
@@ -2813,6 +2989,7 @@ class FirestoreService {
     final patientUid = (apptData['userId'] ?? '').toString();
     final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
 
+    // Check doctor overlap conflict across ALL chambers
     await checkAppointmentConflict(
       doctorId: doctorId,
       chamberId: chamberId,
@@ -2859,7 +3036,7 @@ class FirestoreService {
     }
   }
 
-  /// Reschedules an appointment to a new time and notifies the patient with old and new times.
+  /// Reschedules an appointment to a new time in a transaction and notifies the patient with old and new times.
   static Future<void> rescheduleAppointment({
     required String appointmentId,
     required DateTime newTime,
@@ -2920,12 +3097,19 @@ class FirestoreService {
     final apptData = apptSnap.data()!;
     final patientUid = (apptData['userId'] ?? '').toString();
     final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
+    final activeKey = apptData['activeBookingKey']?.toString();
 
     await apptRef.update({
       'status': 'rejected',
       'rejectionReason': reason.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    if (activeKey != null && activeKey.isNotEmpty) {
+      try {
+        await _db.collection('active_bookings').doc(activeKey).delete();
+      } catch (_) {}
+    }
 
     if (patientUid.isNotEmpty) {
       try {
@@ -2942,10 +3126,40 @@ class FirestoreService {
 
   /// Patient cancels their own appointment.
   static Future<void> cancelAppointmentByPatient(String appointmentId) async {
-    await _db.collection('appointments').doc(appointmentId).update({
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    final activeKey = apptSnap.data()?['activeBookingKey']?.toString();
+
+    await apptRef.update({
       'status': 'cancelled',
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    if (activeKey != null && activeKey.isNotEmpty) {
+      try {
+        await _db.collection('active_bookings').doc(activeKey).delete();
+      } catch (_) {}
+    }
+  }
+
+  /// Fetches test appointments (missing or legacy status like 'waiting', empty status, etc.)
+  static Future<List<Map<String, dynamic>>> fetchTestAppointments() async {
+    final snap = await _db.collection('appointments').limit(100).get();
+    const validStatuses = {'requested', 'confirmed', 'in_progress', 'done', 'cancelled', 'rejected'};
+    final results = <Map<String, dynamic>>[];
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final status = (data['status'] ?? '').toString();
+      if (!validStatuses.contains(status)) {
+        results.add({'id': doc.id, ...data});
+      }
+    }
+    return results;
+  }
+
+  /// Individually deletes a single test appointment document.
+  static Future<void> deleteTestAppointment(String appointmentId) async {
+    await _db.collection('appointments').doc(appointmentId).delete();
   }
 
   static Future<void> softHideDoctor({

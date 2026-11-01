@@ -11,9 +11,15 @@ import '../widgets/profile_avatar_button.dart';
 /// Operator Desk starts with assigned chambers. Selecting one opens a focused
 /// request / queue / completed workspace without exposing document IDs.
 class OperatorDeskScreen extends StatefulWidget {
-  const OperatorDeskScreen({super.key, this.chamberId, this.showAppBar = true});
+  const OperatorDeskScreen({
+    super.key,
+    this.chamberId,
+    this.doctorId,
+    this.showAppBar = true,
+  });
 
   final String? chamberId;
+  final String? doctorId;
   final bool showAppBar;
 
   @override
@@ -28,6 +34,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   String? _error;
 
   bool get _isDetail => widget.chamberId != null && widget.chamberId!.isNotEmpty;
+  bool get _isDoctorDesk => widget.doctorId != null && widget.doctorId!.isNotEmpty;
 
   @override
   void initState() {
@@ -37,6 +44,47 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
 
   Future<void> _loadAssignments() async {
     try {
+      if (_isDoctorDesk) {
+        // Query chambers for this doctor across all chambers
+        final chSnap = await FirebaseFirestore.instance
+            .collection('chambers')
+            .where('doctorId', isEqualTo: widget.doctorId)
+            .get();
+        final docChambers = <String>[];
+        for (final doc in chSnap.docs) {
+          docChambers.add(doc.id);
+          final d = doc.data();
+          final name = (d['name'] ?? d['chamberName'] ?? d['hospitalName'] ?? '').toString().trim();
+          if (name.isNotEmpty) _chamberNames[doc.id] = name;
+        }
+
+        if (docChambers.isEmpty) {
+          final docSnap = await FirebaseFirestore.instance.collection('doctors').doc(widget.doctorId).get();
+          final chList = (docSnap.data()?['chambers'] as List?) ?? [];
+          for (final c in chList) {
+            if (c is Map) {
+              final id = (c['id'] ?? '').toString().trim();
+              final name = (c['hospitalName'] ?? c['name'] ?? '').toString().trim();
+              if (id.isNotEmpty) {
+                docChambers.add(id);
+                if (name.isNotEmpty) _chamberNames[id] = name;
+              }
+            }
+          }
+        }
+
+        // Re-route any pending requests on load
+        await DataService.reroutePendingRequests(doctorId: widget.doctorId);
+
+        if (!mounted) return;
+        setState(() {
+          _assignedChambers = docChambers;
+          _loading = false;
+          _error = null;
+        });
+        return;
+      }
+
       final uid = AuthService.currentUser?.uid;
       final profile = uid == null ? null : await DataService.fetchUserProfile(uid);
       final assigned = (profile?['operatorAssignments'] as List?)
@@ -59,6 +107,10 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         final name = (data?['name'] ?? data?['chamberName'] ?? data?['hospitalName'] ?? '').toString().trim();
         if (name.isNotEmpty) _chamberNames[chamberId] = name;
       }
+
+      // Recompute handledBy on load
+      await DataService.reroutePendingRequests(chamberIds: assigned);
+
       if (!mounted) return;
       setState(() {
         _assignedChambers = assigned;
@@ -85,18 +137,36 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
         ? const Center(child: CircularProgressIndicator())
         : _error != null
             ? _ErrorState(message: _error!, onRetry: _loadAssignments)
-            : _isDetail
-                ? _ChamberDeskDetail(chamberId: widget.chamberId!, chamberName: _chamberName(widget.chamberId!))
-                : _ChamberOverview(
-                    chamberIds: _assignedChambers,
-                    chamberName: _chamberName,
-                    doctorsFor: _doctorsFor,
-                  );
+            : _assignedChambers.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Text(
+                        _isDoctorDesk
+                            ? 'Add a chamber in the Chambers tab'
+                            : 'No chamber assignments are available for this operator.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 14, color: Colors.grey),
+                      ),
+                    ),
+                  )
+                : _isDetail
+                    ? _ChamberDeskDetail(
+                        chamberId: widget.chamberId!,
+                        chamberName: _chamberName(widget.chamberId!),
+                        doctorId: widget.doctorId,
+                      )
+                    : _ChamberOverview(
+                        chamberIds: _assignedChambers,
+                        chamberName: _chamberName,
+                        doctorsFor: _doctorsFor,
+                        doctorId: widget.doctorId,
+                      );
     if (!widget.showAppBar) return body;
     return Scaffold(
       appBar: AppBar(
         title: Text(_isDetail ? _chamberName(widget.chamberId!) : 'Desk status'),
-        actions: const [ProfileAvatarButton(role: UserRole.operator)],
+        actions: [ProfileAvatarButton(role: _isDoctorDesk ? UserRole.doctor : UserRole.operator)],
       ),
       body: body,
     );
@@ -108,24 +178,35 @@ class _ChamberOverview extends StatelessWidget {
     required this.chamberIds,
     required this.chamberName,
     required this.doctorsFor,
+    this.doctorId,
   });
 
   final List<String> chamberIds;
   final String Function(String) chamberName;
   final Future<List<String>> Function(String) doctorsFor;
+  final String? doctorId;
 
   @override
   Widget build(BuildContext context) {
     if (chamberIds.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Text('No chamber assignments are available for this operator.'),
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            doctorId != null
+                ? 'Add a chamber in the Chambers tab'
+                : 'No chamber assignments are available for this operator.',
+          ),
         ),
       );
     }
+
+    final query = doctorId != null
+        ? AppointmentQueries.pendingRequestsForDoctor(doctorId!)
+        : AppointmentQueries.pendingRequestsForOperator(chamberIds);
+
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: AppointmentQueries.pendingRequestsForOperator(chamberIds).snapshots(),
+      stream: query.snapshots(),
       builder: (context, requestSnapshot) {
         final requests = requestSnapshot.data?.docs ?? const [];
         return ListView(
@@ -143,6 +224,7 @@ class _ChamberOverview extends StatelessWidget {
                   name: chamberName(chamberId),
                   requestCount: requests.where((doc) => doc.data()['chamberId'] == chamberId).length,
                   doctors: doctorsFor(chamberId),
+                  doctorId: doctorId,
                 ),
               ),
           ],
@@ -158,12 +240,14 @@ class _ChamberCard extends StatelessWidget {
     required this.name,
     required this.requestCount,
     required this.doctors,
+    this.doctorId,
   });
 
   final String chamberId;
   final String name;
   final int requestCount;
   final Future<List<String>> doctors;
+  final String? doctorId;
 
   @override
   Widget build(BuildContext context) {
@@ -199,7 +283,12 @@ class _ChamberCard extends StatelessWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => OperatorDeskScreen(chamberId: chamberId)),
+              MaterialPageRoute(
+                builder: (_) => OperatorDeskScreen(
+                  chamberId: chamberId,
+                  doctorId: doctorId,
+                ),
+              ),
             ),
           ),
         );
@@ -209,13 +298,22 @@ class _ChamberCard extends StatelessWidget {
 }
 
 class _ChamberDeskDetail extends StatelessWidget {
-  const _ChamberDeskDetail({required this.chamberId, required this.chamberName});
+  const _ChamberDeskDetail({
+    required this.chamberId,
+    required this.chamberName,
+    this.doctorId,
+  });
 
   final String chamberId;
   final String chamberName;
+  final String? doctorId;
 
   @override
   Widget build(BuildContext context) {
+    final requestsQuery = doctorId != null
+        ? AppointmentQueries.pendingRequestsForDoctor(doctorId!)
+        : AppointmentQueries.pendingRequestsForChamber(chamberId);
+
     return DefaultTabController(
       length: 3,
       child: Column(
@@ -231,7 +329,7 @@ class _ChamberDeskDetail extends StatelessWidget {
           Expanded(
             child: TabBarView(
               children: [
-                _AppointmentList(query: AppointmentQueries.pendingRequestsForOperator([chamberId]), view: _DeskView.requests),
+                _AppointmentList(query: requestsQuery, view: _DeskView.requests),
                 _AppointmentList(query: AppointmentQueries.todayQueueForChamber(chamberId), view: _DeskView.queue),
                 _AppointmentList(query: AppointmentQueries.completedForChamber(chamberId), view: _DeskView.done),
               ],
@@ -313,17 +411,85 @@ class _AppointmentRow extends StatelessWidget {
     return TimeOfDay.fromDateTime(time).format(context);
   }
 
-  Future<void> _confirm(BuildContext context) async {
-    final initial = _scheduledTime ?? DateTime.now();
-    final picked = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initial));
-    if (picked == null || !context.mounted) return;
+  String _dateOnlyLabel() {
+    final time = _scheduledTime;
+    if (time == null) return 'Date not specified';
+    return '${time.day}/${time.month}/${time.year}';
+  }
+
+  Future<void> _accept(BuildContext context) async {
+    final doctorId = (data['doctorId'] ?? '').toString();
     final date = _scheduledTime ?? DateTime.now();
-    final confirmed = DateTime(date.year, date.month, date.day, picked.hour, picked.minute);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    List<DateTime> freeSlots = [];
     try {
-      await DataService.confirmAppointment(appointmentId: reference.id, confirmedTime: confirmed);
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment confirmed.')));
+      freeSlots = await DataService.getFreeSlotsForDoctor(
+        doctorId: doctorId,
+        date: date,
+      );
+    } catch (_) {}
+
+    if (context.mounted) Navigator.pop(context);
+
+    if (!context.mounted) return;
+
+    if (freeSlots.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No free slots available for this doctor on this date.')),
+      );
+      return;
+    }
+
+    final selected = await showDialog<DateTime>(
+      context: context,
+      builder: (dlgCtx) => AlertDialog(
+        title: Text('Accept Request — Select Slot (${date.day}/${date.month})'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: freeSlots.map((slot) {
+                final timeStr = TimeOfDay.fromDateTime(slot).format(dlgCtx);
+                return ActionChip(
+                  label: Text(timeStr),
+                  onPressed: () => Navigator.pop(dlgCtx, slot),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
+        ],
+      ),
+    );
+
+    if (selected == null || !context.mounted) return;
+
+    try {
+      await DataService.confirmAppointment(
+        appointmentId: reference.id,
+        confirmedTime: selected,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Appointment accepted and confirmed.')),
+        );
+      }
     } catch (error) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not confirm: $error')));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not accept: $error')),
+        );
+      }
     }
   }
 
@@ -388,6 +554,8 @@ class _AppointmentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final queuePosition = (data['queuePosition'] as num?)?.toInt();
+    final isRequest = view == _DeskView.requests;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -396,19 +564,26 @@ class _AppointmentRow extends StatelessWidget {
           children: [
             Row(
               children: [
-                CircleAvatar(child: Text(queuePosition == null ? '–' : '#$queuePosition')),
+                CircleAvatar(
+                  child: isRequest
+                      ? const Icon(Icons.hourglass_empty, size: 16)
+                      : Text(queuePosition == null ? '–' : '#$queuePosition'),
+                ),
                 const SizedBox(width: 12),
                 Expanded(child: Text(_patientName, style: const TextStyle(fontWeight: FontWeight.w700))),
-                Text(_timeLabel(context), style: Theme.of(context).textTheme.labelMedium),
+                Text(
+                  isRequest ? _dateOnlyLabel() : _timeLabel(context),
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
               ],
             ),
             const SizedBox(height: 7),
             Text(_doctorName, style: Theme.of(context).textTheme.bodySmall),
-            if (view == _DeskView.requests) ...[
+            if (isRequest) ...[
               const SizedBox(height: 12),
               Row(
                 children: [
-                  Expanded(child: FilledButton(onPressed: () => _confirm(context), child: const Text('Confirm'))),
+                  Expanded(child: FilledButton(onPressed: () => _accept(context), child: const Text('Accept'))),
                   const SizedBox(width: 8),
                   Expanded(child: OutlinedButton(onPressed: () => _reschedule(context), child: const Text('Reschedule'))),
                   IconButton(onPressed: () => _reject(context), tooltip: 'Reject', icon: const Icon(Icons.close, color: Colors.red)),
