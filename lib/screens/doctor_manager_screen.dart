@@ -221,6 +221,9 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
     final areaCtrl = TextEditingController(text: existing?['area'] ?? '');
     final hoursCtrl = TextEditingController(
         text: existing?['visitingHours'] ?? '5:00 PM – 9:00 PM (Sat–Thu)');
+    final slotCtrl = TextEditingController(
+        text: (existing?['slotMinutes']?.toString() ?? '10'));
+
     final feeCtrl =
         TextEditingController(text: existing?['fee']?.toString() ?? '800');
 
@@ -281,6 +284,21 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     controller: hoursCtrl,
                     decoration: InputDecoration(
                       labelText: 'Visiting Hours',
+                      fillColor: Colors.white,
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusInput),
+                        borderSide: const BorderSide(color: AppColors.borderSubtle),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: slotCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Slot Duration (minutes)',
+                      hintText: 'Default 10 min (allowed 5–15)',
                       fillColor: Colors.white,
                       filled: true,
                       border: OutlineInputBorder(
@@ -426,6 +444,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                     'hospitalName': name,
                     'area': area.isEmpty ? 'Dhaka' : area,
                     'visitingHours': hoursCtrl.text.trim(),
+                    'slotMinutes': (int.tryParse(slotCtrl.text.trim()) ?? 10).clamp(5, 15),
                     'fee': int.tryParse(feeCtrl.text.trim()) ?? 800,
                     'hasOperator': existing?['hasOperator'] ?? false,
                     'operatorUid': existing?['operatorUid'],

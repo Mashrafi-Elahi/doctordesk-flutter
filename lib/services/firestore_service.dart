@@ -1,3 +1,4 @@
+import 'scheduling_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:math';
@@ -2198,6 +2199,16 @@ class FirestoreService {
       // Reject if this patient already has an active appointment with same doctor and chamber on same date.
       // The active_bookings lock doc uniquely identifies (userId_doctorId_chamberId_dateKey),
       // making a fast direct get() sufficient without needing a composite index on appointments.
+      final overrideDocId = '${resolvedChamberId}_${SchedulingService.dateKey(scheduledTime)}';
+      final overrideCheck = await _db.collection('chamber_day_overrides').doc(overrideDocId).get();
+      if (overrideCheck.exists) {
+        final st = (overrideCheck.data()?['status'] ?? '').toString().toLowerCase();
+        if (st == 'closed') {
+          throw StateError('This date is closed for appointments.');
+        } else if (st == 'full') {
+          throw StateError('This date is already fully booked.');
+        }
+      }
       final activeCheck = await activeBookingRef.get();
       if (activeCheck.exists) {
         throw StateError('You already have a request for this doctor on this date.');
@@ -2905,212 +2916,66 @@ class FirestoreService {
     } catch (_) {}
   }
 
-  /// Returns available free time slots for a doctor on a given date across ALL chambers.
+  /// Returns available free time slots for a doctor on a given date using dynamic chamber visiting hours.
   static Future<List<DateTime>> getFreeSlotsForDoctor({
     required String doctorId,
     required DateTime date,
-    int slotMinutes = 15,
+    String? chamberId,
+    int slotMinutes = 10,
   }) async {
-    final startOfDay = DateTime(date.year, date.month, date.day, 0, 0, 0);
-    final endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
-
-    final snap = await _db
-        .collection('appointments')
-        .where('doctorId', isEqualTo: doctorId)
-        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
-        .get();
-
-    final busySlots = <({DateTime start, DateTime end})>[];
-    for (final doc in snap.docs) {
-      final st = (doc.data()['status'] ?? '').toString();
-      if (st == 'confirmed' || st == 'in_progress') {
-        final t = doc.data()['scheduledTime'];
-        if (t is Timestamp) {
-          final s = t.toDate();
-          busySlots.add((start: s, end: s.add(Duration(minutes: slotMinutes))));
-        }
-      }
-    }
-
-    final freeSlots = <DateTime>[];
-    // Default visiting hours 9:00 AM to 9:00 PM
-    var currentSlot = DateTime(date.year, date.month, date.day, 9, 0);
-    final endTime = DateTime(date.year, date.month, date.day, 21, 0);
-
-    while (currentSlot.isBefore(endTime)) {
-      final slotEnd = currentSlot.add(Duration(minutes: slotMinutes));
-      final isOverlapping = busySlots.any((b) => currentSlot.isBefore(b.end) && slotEnd.isAfter(b.start));
-      if (!isOverlapping) {
-        freeSlots.add(currentSlot);
-      }
-      currentSlot = slotEnd;
-    }
-
-    return freeSlots;
+    final result = await SchedulingService.getFreeSlots(
+      chamberId: chamberId ?? '',
+      doctorId: doctorId,
+      date: date,
+      defaultSlotMinutes: slotMinutes,
+    );
+    return result.slots;
   }
 
-  /// Checks whether an appointment time has conflicts:
-  /// 1. Within chamber working hours (default 08:00 to 22:00).
-  /// 2. No overlap for the same doctor across all chambers (slot length default 15m).
+  /// Checks whether an appointment time has conflicts via atomic doctor_slots lock document.
   static Future<void> checkAppointmentConflict({
     required String doctorId,
     required String chamberId,
     required DateTime proposedTime,
     String? excludeAppointmentId,
-    int slotMinutes = 15,
+    int slotMinutes = 10,
   }) async {
-    final hour = proposedTime.hour;
-    if (hour < 8 || hour >= 22) {
-      throw StateError(
-          'Selected time (${proposedTime.hour.toString().padLeft(2, "0")}:${proposedTime.minute.toString().padLeft(2, "0")}) is outside visiting hours (08:00 AM - 10:00 PM).');
-    }
-
-    final startOfDay = DateTime(proposedTime.year, proposedTime.month, proposedTime.day, 0, 0, 0);
-    final endOfDay = DateTime(proposedTime.year, proposedTime.month, proposedTime.day, 23, 59, 59, 999);
-    final proposedStart = proposedTime;
-    final proposedEnd = proposedTime.add(Duration(minutes: slotMinutes));
-
-    final snap = await _db
-        .collection('appointments')
-        .where('doctorId', isEqualTo: doctorId)
-        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
-        .get();
-
-    for (final doc in snap.docs) {
-      if (doc.id == excludeAppointmentId) continue;
-      final d = doc.data();
-      final stVal = (d['status'] ?? '').toString().toLowerCase();
-      if (stVal == 'cancelled' || stVal == 'rejected') continue;
-
-      final st = d['scheduledTime'];
-      if (st is Timestamp) {
-        final existingStart = st.toDate();
-        final existingEnd = existingStart.add(Duration(minutes: slotMinutes));
-        final overlaps = proposedStart.isBefore(existingEnd) && proposedEnd.isAfter(existingStart);
-        if (overlaps) {
-          final cName = d['chamberId'] ?? 'another chamber';
-          final startStr = '${existingStart.hour.toString().padLeft(2, "0")}:${existingStart.minute.toString().padLeft(2, "0")}';
-          final endStr = '${existingEnd.hour.toString().padLeft(2, "0")}:${existingEnd.minute.toString().padLeft(2, "0")}';
-          throw StateError(
-              'Schedule conflict: Doctor already has an appointment from $startStr to $endStr at $cName. Slots must not overlap (15-min duration).');
-        }
+    final sId = SchedulingService.slotId(doctorId, proposedTime);
+    final slotSnap = await _db.collection('doctor_slots').doc(sId).get();
+    if (slotSnap.exists) {
+      final apptId = slotSnap.data()?['appointmentId']?.toString();
+      if (apptId != null && apptId != excludeAppointmentId) {
+        throw StateError('Schedule conflict: Doctor already has an appointment booked in this slot.');
       }
     }
   }
 
-  /// Confirms an appointment, assigns time and queue number in a transaction.
-  /// Rejects any slot that overlaps another confirmed appointment of the same doctor across ALL chambers.
+  /// Confirms an appointment, assigns time and queue number atomically using SchedulingService.
   static Future<void> confirmAppointment({
     required String appointmentId,
     required DateTime confirmedTime,
-    int slotMinutes = 15,
+    int slotMinutes = 10,
   }) async {
-    final apptRef = _db.collection('appointments').doc(appointmentId);
-    final apptSnap = await apptRef.get();
-    if (!apptSnap.exists) throw StateError('Appointment not found.');
-    final apptData = apptSnap.data()!;
-    final doctorId = (apptData['doctorId'] ?? '').toString();
-    final chamberId = (apptData['chamberId'] ?? 'demo-chamber').toString();
-    final patientUid = (apptData['userId'] ?? '').toString();
-    final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
-
-    // Check doctor overlap conflict across ALL chambers
-    await checkAppointmentConflict(
-      doctorId: doctorId,
-      chamberId: chamberId,
-      proposedTime: confirmedTime,
-      excludeAppointmentId: appointmentId,
-      slotMinutes: slotMinutes,
+    final actorUid = _auth.currentUser?.uid ?? 'system';
+    await SchedulingService.acceptAppointment(
+      appointmentId: appointmentId,
+      slot: confirmedTime,
+      actorUid: actorUid,
     );
-
-    final dateKey = '${confirmedTime.year}${confirmedTime.month.toString().padLeft(2, "0")}${confirmedTime.day.toString().padLeft(2, "0")}';
-    final queueCounterRef = _db.collection('queues').doc('${chamberId}_$dateKey');
-
-    int assignedQueue = 1;
-    await _db.runTransaction((tx) async {
-      final qSnap = await tx.get(queueCounterRef);
-      if (qSnap.exists) {
-        assignedQueue = (qSnap.data()?['lastQueuePosition'] as num? ?? 0).toInt() + 1;
-      }
-      tx.set(queueCounterRef, {
-        'chamberId': chamberId,
-        'date': dateKey,
-        'lastQueuePosition': assignedQueue,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      tx.update(apptRef, {
-        'status': 'confirmed',
-        'queuePosition': assignedQueue,
-        'scheduledTime': Timestamp.fromDate(confirmedTime),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    });
-
-    if (patientUid.isNotEmpty) {
-      try {
-        final timeStr = '${confirmedTime.hour.toString().padLeft(2, "0")}:${confirmedTime.minute.toString().padLeft(2, "0")}';
-        await NotificationService.createNotification(
-          userId: patientUid,
-          title: 'Appointment Confirmed! 🎉',
-          body: 'Your appointment with $doctorName is confirmed for ${confirmedTime.day}/${confirmedTime.month} at $timeStr. Queue Position: #$assignedQueue.',
-          type: 'appointment_confirmed',
-          relatedId: appointmentId,
-        );
-      } catch (_) {}
-    }
   }
 
-  /// Reschedules an appointment to a new time in a transaction and notifies the patient with old and new times.
+  /// Reschedules an appointment to a new time atomically using SchedulingService.
   static Future<void> rescheduleAppointment({
     required String appointmentId,
     required DateTime newTime,
-    int slotMinutes = 15,
+    int slotMinutes = 10,
   }) async {
-    final apptRef = _db.collection('appointments').doc(appointmentId);
-    final apptSnap = await apptRef.get();
-    if (!apptSnap.exists) throw StateError('Appointment not found.');
-    final apptData = apptSnap.data()!;
-    final doctorId = (apptData['doctorId'] ?? '').toString();
-    final chamberId = (apptData['chamberId'] ?? 'demo-chamber').toString();
-    final patientUid = (apptData['userId'] ?? '').toString();
-    final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
-
-    final oldTs = apptData['scheduledTime'];
-    DateTime? oldTime;
-    if (oldTs is Timestamp) oldTime = oldTs.toDate();
-
-    await checkAppointmentConflict(
-      doctorId: doctorId,
-      chamberId: chamberId,
-      proposedTime: newTime,
-      excludeAppointmentId: appointmentId,
-      slotMinutes: slotMinutes,
+    final actorUid = _auth.currentUser?.uid ?? 'system';
+    await SchedulingService.rescheduleAppointment(
+      appointmentId: appointmentId,
+      newSlot: newTime,
+      actorUid: actorUid,
     );
-
-    await apptRef.update({
-      'scheduledTime': Timestamp.fromDate(newTime),
-      'status': 'confirmed',
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    if (patientUid.isNotEmpty) {
-      try {
-        final oldStr = oldTime != null
-            ? '${oldTime.day}/${oldTime.month} ${oldTime.hour.toString().padLeft(2, "0")}:${oldTime.minute.toString().padLeft(2, "0")}'
-            : 'previously scheduled time';
-        final newStr = '${newTime.day}/${newTime.month} ${newTime.hour.toString().padLeft(2, "0")}:${newTime.minute.toString().padLeft(2, "0")}';
-        await NotificationService.createNotification(
-          userId: patientUid,
-          title: 'Appointment Rescheduled 🕒',
-          body: 'Your appointment with $doctorName has been moved from $oldStr to $newStr.',
-          type: 'appointment_rescheduled',
-          relatedId: appointmentId,
-        );
-      } catch (_) {}
-    }
   }
 
   /// Rejects an appointment with a reason and notifies the patient.
@@ -3126,6 +2991,7 @@ class FirestoreService {
     final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
     final activeKey = apptData['activeBookingKey']?.toString();
 
+    await SchedulingService.releaseSlotAndLock(appointmentId);
     await apptRef.update({
       'status': 'rejected',
       'rejectionReason': reason.trim(),
@@ -3171,6 +3037,7 @@ class FirestoreService {
     final activeKey = apptData['activeBookingKey']?.toString();
     final patientUid = (apptData['userId'] ?? '').toString();
 
+    await SchedulingService.releaseSlotAndLock(appointmentId);
     await apptRef.update({
       'status': 'cancelled',
       'updatedAt': FieldValue.serverTimestamp(),
@@ -3300,6 +3167,7 @@ class FirestoreService {
     final doctorName = (apptData['doctorName'] ?? 'Doctor').toString();
 
     // 1. Mark appointment completed ('done' aligns with AppointmentQueries.completedForChamber / completedForDoctor)
+    await SchedulingService.releaseSlotAndLock(appointmentId);
     await apptRef.update({
       'status': 'done',
       'completedAt': FieldValue.serverTimestamp(),

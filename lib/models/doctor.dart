@@ -16,6 +16,7 @@ class Chamber {
   final String? operatorUid;
   final String? operatorName;
   final String? operatorEmail;
+  final int slotMinutes;
 
   Chamber({
     this.id,
@@ -33,6 +34,7 @@ class Chamber {
     this.operatorUid,
     this.operatorName,
     this.operatorEmail,
+    this.slotMinutes = 10,
   });
 
   factory Chamber.fromJson(Map<String, dynamic> json) {
@@ -71,6 +73,7 @@ class Chamber {
       operatorUid: json['operatorUid'] as String?,
       operatorName: json['operatorName'] as String?,
       operatorEmail: json['operatorEmail'] as String?,
+      slotMinutes: (json['slotMinutes'] as num?)?.toInt() ?? 10,
     );
   }
 
@@ -90,6 +93,7 @@ class Chamber {
     if (operatorUid != null) 'operatorUid': operatorUid,
     if (operatorName != null) 'operatorName': operatorName,
     if (operatorEmail != null) 'operatorEmail': operatorEmail,
+    'slotMinutes': slotMinutes,
   };
 }
 

@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+import 'scheduling_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/doctor.dart';
 import 'api_service.dart';
@@ -713,12 +715,68 @@ class DataService {
   static Future<List<DateTime>> getFreeSlotsForDoctor({
     required String doctorId,
     required DateTime date,
-    int slotMinutes = 15,
+    String? chamberId,
+    int slotMinutes = 10,
   }) {
     return FirestoreService.getFreeSlotsForDoctor(
       doctorId: doctorId,
       date: date,
+      chamberId: chamberId,
       slotMinutes: slotMinutes,
+    );
+  }
+
+  static Future<FreeSlotsResult> getFreeSlots({
+    required String chamberId,
+    required String doctorId,
+    required DateTime date,
+    int? defaultSlotMinutes,
+  }) {
+    return SchedulingService.getFreeSlots(
+      chamberId: chamberId,
+      doctorId: doctorId,
+      date: date,
+      defaultSlotMinutes: defaultSlotMinutes,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> getDayOverride(String chamberId, DateTime date) {
+    return SchedulingService.getDayOverride(chamberId, date);
+  }
+
+  static Future<void> setDayOverride({
+    required String chamberId,
+    required String doctorId,
+    required DateTime date,
+    TimeOfDay? startTime,
+    TimeOfDay? endTime,
+    int? slotMinutes,
+    String? status,
+    String? note,
+    required String actorUid,
+  }) {
+    return SchedulingService.setDayOverride(
+      chamberId: chamberId,
+      doctorId: doctorId,
+      date: date,
+      startTime: startTime,
+      endTime: endTime,
+      slotMinutes: slotMinutes,
+      status: status,
+      note: note,
+      actorUid: actorUid,
+    );
+  }
+
+  static Future<List<DocumentSnapshot<Map<String, dynamic>>>> getAffectedAppointments({
+    required String chamberId,
+    required DateTime date,
+    required TimeOfDay newStartTime,
+  }) {
+    return SchedulingService.getAffectedAppointments(
+      chamberId: chamberId,
+      date: date,
+      newStartTime: newStartTime,
     );
   }
 

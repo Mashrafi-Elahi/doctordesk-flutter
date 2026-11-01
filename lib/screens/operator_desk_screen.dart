@@ -1,12 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-import '../models/user_role.dart';
 import '../services/appointment_queries.dart';
 import '../services/auth_service.dart';
 import '../services/chamber_resolver.dart';
 import '../services/data_service.dart';
 import '../services/firestore_service.dart';
+import '../services/scheduling_service.dart';
 import '../widgets/profile_avatar_button.dart';
 
 /// Operator Desk starts with assigned chambers. Selecting one opens a focused
@@ -154,7 +154,6 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                             ? 'Add a chamber in the Chambers tab'
                             : 'No chamber assignments are available for this operator.',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 14, color: Colors.grey),
                       ),
                     ),
                   )
@@ -164,25 +163,30 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
                         chamberName: _chamberName(widget.chamberId!),
                         doctorId: widget.doctorId,
                       )
-                    : _ChamberOverview(
+                    : _ChamberSelectionList(
                         chamberIds: _assignedChambers,
                         chamberName: _chamberName,
                         doctorsFor: _doctorsFor,
                         doctorId: widget.doctorId,
                       );
+
     if (!widget.showAppBar) return body;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isDetail ? _chamberName(widget.chamberId!) : 'Desk status'),
-        actions: [ProfileAvatarButton(role: _isDoctorDesk ? UserRole.doctor : UserRole.operator)],
+        title: Text(_isDetail ? _chamberName(widget.chamberId!) : 'Chamber Desk'),
+        actions: const [
+          ProfileAvatarButton(),
+          SizedBox(width: 8),
+        ],
       ),
       body: body,
     );
   }
 }
 
-class _ChamberOverview extends StatelessWidget {
-  const _ChamberOverview({
+class _ChamberSelectionList extends StatelessWidget {
+  const _ChamberSelectionList({
     required this.chamberIds,
     required this.chamberName,
     required this.doctorsFor,
@@ -318,6 +322,7 @@ class _ChamberDeskDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final requestsQuery = doctorId != null
         ? AppointmentQueries.pendingRequestsForDoctor(doctorId!)
         : AppointmentQueries.pendingRequestsForChamber(chamberId);
@@ -326,20 +331,40 @@ class _ChamberDeskDetail extends StatelessWidget {
       length: 3,
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(chamberName, style: Theme.of(context).textTheme.titleMedium),
-            ),
+          // 2.7 Desk Header: Visiting hours, slot length, capacity, and action buttons
+          _ChamberScheduleHeader(
+            chamberId: chamberId,
+            chamberName: chamberName,
+            doctorId: doctorId,
           ),
-          const TabBar(tabs: [Tab(text: 'Requests'), Tab(text: "Today's Queue"), Tab(text: 'Done')]),
+          TabBar(
+            labelColor: theme.colorScheme.primary,
+            unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
+            indicatorColor: theme.colorScheme.primary,
+            tabs: const [
+              Tab(text: 'Requests'),
+              Tab(text: "Today's Queue"),
+              Tab(text: 'Done'),
+            ],
+          ),
           Expanded(
             child: TabBarView(
               children: [
-                _AppointmentList(query: requestsQuery, view: _DeskView.requests),
-                _AppointmentList(query: AppointmentQueries.todayQueueForChamber(chamberId), view: _DeskView.queue),
-                _AppointmentList(query: AppointmentQueries.completedForChamber(chamberId), view: _DeskView.done),
+                _AppointmentList(
+                  query: requestsQuery,
+                  view: _DeskView.requests,
+                  chamberId: chamberId,
+                ),
+                _AppointmentList(
+                  query: AppointmentQueries.todayQueueForChamber(chamberId),
+                  view: _DeskView.queue,
+                  chamberId: chamberId,
+                ),
+                _AppointmentList(
+                  query: AppointmentQueries.completedForChamber(chamberId),
+                  view: _DeskView.done,
+                  chamberId: chamberId,
+                ),
               ],
             ),
           ),
@@ -349,13 +374,377 @@ class _ChamberDeskDetail extends StatelessWidget {
   }
 }
 
+class _ChamberScheduleHeader extends StatelessWidget {
+  final String chamberId;
+  final String chamberName;
+  final String? doctorId;
+
+  const _ChamberScheduleHeader({
+    required this.chamberId,
+    required this.chamberName,
+    this.doctorId,
+  });
+
+  String _formatTime(TimeOfDay t) {
+    final h = t.hour > 12 ? t.hour - 12 : (t.hour == 0 ? 12 : t.hour);
+    final p = t.hour >= 12 ? 'PM' : 'AM';
+    return '$h:${t.minute.toString().padLeft(2, '0')} $p';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final today = DateTime.now();
+    final dKey = SchedulingService.dateKey(today);
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('chamber_day_overrides')
+          .doc('${chamberId}_$dKey')
+          .snapshots(),
+      builder: (context, overrideSnap) {
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: AppointmentQueries.todayQueueForChamber(chamberId).snapshots(),
+          builder: (context, queueSnap) {
+            return FutureBuilder<ChamberRecord?>(
+              future: ChamberResolver.resolveChamberRecord(
+                chamberId: chamberId,
+                doctorId: doctorId,
+              ),
+              builder: (context, chamberSnap) {
+                final chamber = chamberSnap.data;
+                final overrideData = overrideSnap.data?.data();
+
+                final schedule = SchedulingService.parseVisitingHours(chamber?.visitingHours);
+                TimeOfDay start = schedule?.start ?? const TimeOfDay(hour: 17, minute: 0);
+                TimeOfDay end = schedule?.end ?? const TimeOfDay(hour: 21, minute: 0);
+                int slotMinutes = chamber?.slotMinutes ?? 10;
+                String status = 'open';
+
+                if (overrideData != null) {
+                  if (overrideData['startHour'] != null && overrideData['startMinute'] != null) {
+                    start = TimeOfDay(
+                      hour: (overrideData['startHour'] as num).toInt(),
+                      minute: (overrideData['startMinute'] as num).toInt(),
+                    );
+                  }
+                  if (overrideData['endHour'] != null && overrideData['endMinute'] != null) {
+                    end = TimeOfDay(
+                      hour: (overrideData['endHour'] as num).toInt(),
+                      minute: (overrideData['endMinute'] as num).toInt(),
+                    );
+                  }
+                  if (overrideData['slotMinutes'] != null) {
+                    slotMinutes = (overrideData['slotMinutes'] as num).toInt().clamp(5, 15);
+                  }
+                  if (overrideData['status'] != null) {
+                    status = overrideData['status'].toString().toLowerCase();
+                  }
+                }
+
+                final totalCap = SchedulingService.capacity(start, end, slotMinutes);
+                final confirmedCount = queueSnap.data?.docs.length ?? 0;
+
+                final String headerText;
+                if (status == 'closed') {
+                  headerText = 'Today: Closed (${_formatTime(start)} to ${_formatTime(end)})';
+                } else if (status == 'full' || (totalCap > 0 && confirmedCount >= totalCap)) {
+                  headerText = 'Today: Fully booked ($confirmedCount of $totalCap booked)';
+                } else if (schedule == null && overrideData == null) {
+                  headerText = 'Visiting hours not set for this chamber';
+                } else {
+                  headerText = 'Today ${_formatTime(start)} to ${_formatTime(end)}, $slotMinutes min per patient, $confirmedCount of $totalCap booked';
+                }
+
+                return Container(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                    border: Border(bottom: BorderSide(color: theme.dividerColor.withValues(alpha: 0.1))),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            status == 'closed'
+                                ? Icons.do_not_disturb_on
+                                : status == 'full'
+                                    ? Icons.event_busy
+                                    : Icons.access_time_filled,
+                            size: 18,
+                            color: status == 'closed'
+                                ? Colors.red
+                                : status == 'full'
+                                    ? Colors.orange
+                                    : theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              headerText,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: status == 'closed'
+                                    ? Colors.red.shade800
+                                    : theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            ActionChip(
+                              avatar: const Icon(Icons.edit_calendar, size: 14),
+                              label: const Text('Change today\'s hours'),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => _showChangeHoursDialog(context, start, end, slotMinutes),
+                            ),
+                            const SizedBox(width: 6),
+                            if (status != 'full')
+                              ActionChip(
+                                avatar: const Icon(Icons.block, size: 14),
+                                label: const Text('Mark full'),
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => _setDayStatus(context, 'full'),
+                              ),
+                            if (status != 'closed') ...[
+                              const SizedBox(width: 6),
+                              ActionChip(
+                                avatar: const Icon(Icons.close, size: 14, color: Colors.red),
+                                label: const Text('Close day'),
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => _showCloseDayDialog(context),
+                              ),
+                            ],
+                            if (status == 'closed' || status == 'full') ...[
+                              const SizedBox(width: 6),
+                              ActionChip(
+                                avatar: const Icon(Icons.refresh, size: 14, color: Colors.green),
+                                label: const Text('Reopen'),
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => _setDayStatus(context, 'open'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _setDayStatus(BuildContext context, String status, {String? note}) async {
+    try {
+      final actorUid = AuthService.currentUser?.uid ?? 'system';
+      await SchedulingService.setDayOverride(
+        chamberId: chamberId,
+        doctorId: doctorId ?? '',
+        date: DateTime.now(),
+        status: status,
+        note: note,
+        actorUid: actorUid,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Day marked as $status.')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating day status: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showCloseDayDialog(BuildContext context) async {
+    final noteCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Close Today?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('No new appointments can be booked or accepted for today.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Reason / Note (optional)',
+                hintText: 'e.g. Doctor in emergency surgery',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Close Day'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true && context.mounted) {
+      await _setDayStatus(context, 'closed', note: noteCtrl.text.trim());
+    }
+  }
+
+  Future<void> _showChangeHoursDialog(
+    BuildContext context,
+    TimeOfDay currentStart,
+    TimeOfDay currentEnd,
+    int currentSlotMinutes,
+  ) async {
+    TimeOfDay pickedStart = currentStart;
+    TimeOfDay pickedEnd = currentEnd;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          return AlertDialog(
+            title: const Text('Change Today\'s Hours'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Start Time'),
+                  trailing: TextButton(
+                    onPressed: () async {
+                      final t = await showTimePicker(context: dialogCtx, initialTime: pickedStart);
+                      if (t != null) setDialogState(() => pickedStart = t);
+                    },
+                    child: Text(_formatTime(pickedStart), style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('End Time'),
+                  trailing: TextButton(
+                    onPressed: () async {
+                      final t = await showTimePicker(context: dialogCtx, initialTime: pickedEnd);
+                      if (t != null) setDialogState(() => pickedEnd = t);
+                    },
+                    child: Text(_formatTime(pickedEnd), style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogCtx, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(dialogCtx, true), child: const Text('Save Hours')),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    // Check for affected patients confirmed before the new start time
+    final affected = await SchedulingService.getAffectedAppointments(
+      chamberId: chamberId,
+      date: DateTime.now(),
+      newStartTime: pickedStart,
+    );
+
+    if (affected.isNotEmpty && context.mounted) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('${affected.length} Confirmed Patient(s) Affected'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('The following patient(s) were scheduled before the new start time. Please review and reschedule them:'),
+                const SizedBox(height: 10),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: affected.length,
+                    itemBuilder: (c, i) {
+                      final d = affected[i].data()!;
+                      final pName = d['patientName'] ?? 'Patient';
+                      final ts = d['scheduledTime'];
+                      final tStr = ts is Timestamp ? '${ts.toDate().hour}:${ts.toDate().minute.toString().padLeft(2, '0')}' : 'Time';
+                      return ListTile(
+                        dense: true,
+                        title: Text(pName),
+                        subtitle: Text('Scheduled: $tStr (Queue #${d['queuePosition'] ?? '-'})'),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Got It')),
+          ],
+        ),
+      );
+    }
+
+    try {
+      final actorUid = AuthService.currentUser?.uid ?? 'system';
+      await SchedulingService.setDayOverride(
+        chamberId: chamberId,
+        doctorId: doctorId ?? '',
+        date: DateTime.now(),
+        startTime: pickedStart,
+        endTime: pickedEnd,
+        status: 'open',
+        actorUid: actorUid,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Today\'s hours updated.')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating hours: $e')),
+        );
+      }
+    }
+  }
+}
+
 enum _DeskView { requests, queue, done }
 
 class _AppointmentList extends StatelessWidget {
-  const _AppointmentList({required this.query, required this.view});
+  const _AppointmentList({
+    required this.query,
+    required this.view,
+    required this.chamberId,
+  });
 
   final Query<Map<String, dynamic>> query;
   final _DeskView view;
+  final String chamberId;
 
   @override
   Widget build(BuildContext context) {
@@ -364,8 +753,8 @@ class _AppointmentList extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError) return _ErrorState(message: 'Unable to load appointments.', onRetry: () {});
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-        final docs = snapshot.data!.docs;
-        if (docs.isEmpty) {
+        final rawDocs = snapshot.data!.docs;
+        if (rawDocs.isEmpty) {
           final message = switch (view) {
             _DeskView.requests => 'No appointment requests.',
             _DeskView.queue => 'No patients are waiting today.',
@@ -373,6 +762,17 @@ class _AppointmentList extends StatelessWidget {
           };
           return Center(child: Text(message));
         }
+
+        // Today's Queue sorted strictly by queuePosition
+        final docs = rawDocs.toList();
+        if (view == _DeskView.queue) {
+          docs.sort((a, b) {
+            final posA = (a.data()['queuePosition'] as num? ?? 99999).toInt();
+            final posB = (b.data()['queuePosition'] as num? ?? 99999).toInt();
+            return posA.compareTo(posB);
+          });
+        }
+
         return ListView.separated(
           padding: const EdgeInsets.all(16),
           itemCount: docs.length,
@@ -381,6 +781,7 @@ class _AppointmentList extends StatelessWidget {
             reference: docs[index].reference,
             data: docs[index].data(),
             view: view,
+            chamberId: chamberId,
           ),
         );
       },
@@ -389,11 +790,17 @@ class _AppointmentList extends StatelessWidget {
 }
 
 class _AppointmentRow extends StatelessWidget {
-  const _AppointmentRow({required this.reference, required this.data, required this.view});
+  const _AppointmentRow({
+    required this.reference,
+    required this.data,
+    required this.view,
+    required this.chamberId,
+  });
 
   final DocumentReference<Map<String, dynamic>> reference;
   final Map<String, dynamic> data;
   final _DeskView view;
+  final String chamberId;
 
   DateTime? get _scheduledTime {
     final value = data['scheduledTime'];
@@ -413,10 +820,16 @@ class _AppointmentRow extends StatelessWidget {
     return value.isEmpty ? 'Doctor not specified' : value;
   }
 
-  String _timeLabel(BuildContext context) {
+  String _format12Hour(DateTime dt) {
+    final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+    final p = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$h:${dt.minute.toString().padLeft(2, '0')} $p';
+  }
+
+  String _timeLabel() {
     final time = _scheduledTime;
     if (time == null) return 'Time not selected';
-    return TimeOfDay.fromDateTime(time).format(context);
+    return _format12Hour(time);
   }
 
   String _dateOnlyLabel() {
@@ -435,48 +848,82 @@ class _AppointmentRow extends StatelessWidget {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
-    List<DateTime> freeSlots = [];
+    FreeSlotsResult? freeResult;
     try {
-      freeSlots = await DataService.getFreeSlotsForDoctor(
+      freeResult = await SchedulingService.getFreeSlots(
+        chamberId: chamberId,
         doctorId: doctorId,
         date: date,
       );
     } catch (_) {}
 
     if (context.mounted) Navigator.pop(context);
-
     if (!context.mounted) return;
 
-    if (freeSlots.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No free slots available for this doctor on this date.')),
+    if (freeResult == null || freeResult.slots.isEmpty) {
+      final reason = freeResult?.emptyReason ?? 'Fully booked';
+      final next = freeResult?.nextVisitingDates ?? const [];
+      String nextText = '';
+      if (next.isNotEmpty) {
+        nextText = '\nNext visiting dates: ${next.map((d) => "${d.day}/${d.month}").join(', ')}';
+      }
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Cannot Accept for ${_dateOnlyLabel()}'),
+          content: Text('$reason.$nextText'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
       );
       return;
     }
 
+    final freeSlots = freeResult.slots;
+    DateTime selectedSlot = freeSlots.first;
+
     final selected = await showDialog<DateTime>(
       context: context,
-      builder: (dlgCtx) => AlertDialog(
-        title: Text('Accept Request — Select Slot (${date.day}/${date.month})'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: freeSlots.map((slot) {
-                final timeStr = TimeOfDay.fromDateTime(slot).format(dlgCtx);
-                return ActionChip(
-                  label: Text(timeStr),
-                  onPressed: () => Navigator.pop(dlgCtx, slot),
-                );
-              }).toList(),
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Accept Request (${date.day}/${date.month}/${date.year})'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Select an available free time slot:'),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: freeSlots.map((slot) {
+                      final isSelected = slot == selectedSlot;
+                      final timeStr = _format12Hour(slot);
+                      return ChoiceChip(
+                        label: Text(timeStr),
+                        selected: isSelected,
+                        onSelected: (val) {
+                          if (val) setDialogState(() => selectedSlot = slot);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(dlgCtx, selectedSlot),
+              child: const Text('Confirm & Assign Queue'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
-        ],
       ),
     );
 
@@ -502,15 +949,100 @@ class _AppointmentRow extends StatelessWidget {
   }
 
   Future<void> _reschedule(BuildContext context) async {
+    final doctorId = (data['doctorId'] ?? '').toString();
     final initial = _scheduledTime ?? DateTime.now();
-    final picked = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initial));
-    if (picked == null || !context.mounted) return;
-    final moved = DateTime(initial.year, initial.month, initial.day, picked.hour, picked.minute);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    FreeSlotsResult? freeResult;
     try {
-      await DataService.rescheduleAppointment(appointmentId: reference.id, newTime: moved);
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Appointment rescheduled.')));
+      freeResult = await SchedulingService.getFreeSlots(
+        chamberId: chamberId,
+        doctorId: doctorId,
+        date: initial,
+      );
+    } catch (_) {}
+
+    if (context.mounted) Navigator.pop(context);
+    if (!context.mounted) return;
+
+    if (freeResult == null || freeResult.slots.isEmpty) {
+      final reason = freeResult?.emptyReason ?? 'No free slots';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cannot reschedule: $reason for ${initial.day}/${initial.month}.')),
+      );
+      return;
+    }
+
+    final freeSlots = freeResult.slots;
+    DateTime selectedSlot = freeSlots.first;
+
+    final selected = await showDialog<DateTime>(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Reschedule Slot (${initial.day}/${initial.month}/${initial.year})'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Select an available free time slot:'),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: freeSlots.map((slot) {
+                      final isSelected = slot == selectedSlot;
+                      final timeStr = _format12Hour(slot);
+                      return ChoiceChip(
+                        label: Text(timeStr),
+                        selected: isSelected,
+                        onSelected: (val) {
+                          if (val) setDialogState(() => selectedSlot = slot);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(dlgCtx, selectedSlot),
+              child: const Text('Reschedule'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (selected == null || !context.mounted) return;
+
+    try {
+      await DataService.rescheduleAppointment(
+        appointmentId: reference.id,
+        newTime: selected,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Appointment rescheduled.')),
+        );
+      }
     } catch (error) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not reschedule: $error')));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not reschedule: $error')),
+        );
+      }
     }
   }
 
@@ -529,9 +1061,12 @@ class _AppointmentRow extends StatelessWidget {
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
           FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () {
               if (reason.text.trim().isEmpty) {
-                ScaffoldMessenger.of(dialogContext).showSnackBar(const SnackBar(content: Text('Enter a rejection reason.')));
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('A rejection reason is mandatory.')),
+                );
                 return;
               }
               Navigator.pop(dialogContext, true);
@@ -563,48 +1098,104 @@ class _AppointmentRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final queuePosition = (data['queuePosition'] as num?)?.toInt();
     final isRequest = view == _DeskView.requests;
+    final scheduledDate = _scheduledTime ?? DateTime.now();
+    final targetDateKey = SchedulingService.dateKey(scheduledDate);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: isRequest
+          ? FirebaseFirestore.instance
+              .collection('chamber_day_overrides')
+              .doc('${chamberId}_$targetDateKey')
+              .snapshots()
+          : null,
+      builder: (context, overrideSnap) {
+        final overrideStatus = (overrideSnap.data?.data()?['status'] ?? '').toString().toLowerCase();
+        final isDateClosed = overrideStatus == 'closed';
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                CircleAvatar(
-                  child: isRequest
-                      ? const Icon(Icons.hourglass_empty, size: 16)
-                      : Text(queuePosition == null ? '–' : '#$queuePosition'),
+                Row(
+                  children: [
+                    CircleAvatar(
+                      child: isRequest
+                          ? const Icon(Icons.hourglass_empty, size: 16)
+                          : Text(queuePosition == null ? '–' : '#$queuePosition'),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_patientName, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          if (isDateClosed)
+                            Container(
+                              margin: const EdgeInsets.only(top: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.red.shade50,
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: Colors.red.shade200),
+                              ),
+                              child: Text(
+                                'Date Closed',
+                                style: TextStyle(fontSize: 10, color: Colors.red.shade900, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      isRequest ? _dateOnlyLabel() : _timeLabel(),
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(child: Text(_patientName, style: const TextStyle(fontWeight: FontWeight.w700))),
-                Text(
-                  isRequest ? _dateOnlyLabel() : _timeLabel(context),
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
+                const SizedBox(height: 7),
+                Text(_doctorName, style: Theme.of(context).textTheme.bodySmall),
+                if (isRequest) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      if (!isDateClosed) ...[
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () => _accept(context),
+                            child: const Text('Accept'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => _reschedule(context),
+                          child: const Text('Reschedule'),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => _reject(context),
+                        tooltip: 'Reject',
+                        icon: const Icon(Icons.close, color: Colors.red),
+                      ),
+                    ],
+                  ),
+                ] else if (view == _DeskView.queue)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => _markDone(context),
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('Mark done'),
+                    ),
+                  ),
               ],
             ),
-            const SizedBox(height: 7),
-            Text(_doctorName, style: Theme.of(context).textTheme.bodySmall),
-            if (isRequest) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(child: FilledButton(onPressed: () => _accept(context), child: const Text('Accept'))),
-                  const SizedBox(width: 8),
-                  Expanded(child: OutlinedButton(onPressed: () => _reschedule(context), child: const Text('Reschedule'))),
-                  IconButton(onPressed: () => _reject(context), tooltip: 'Reject', icon: const Icon(Icons.close, color: Colors.red)),
-                ],
-              ),
-            ] else if (view == _DeskView.queue)
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(onPressed: () => _markDone(context), icon: const Icon(Icons.check_circle_outline), label: const Text('Mark done')),
-              ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

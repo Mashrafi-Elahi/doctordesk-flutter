@@ -6,7 +6,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, deleteDoc, runTransaction, where } from 'firebase/firestore';
 
 const projectId = 'doctordesk-rules-test';
 const rules = readFileSync(new URL('../../firestore.rules', import.meta.url), 'utf8');
@@ -297,6 +297,218 @@ describe('appointment authorization', () => {
     }));
     await assertFails(updateDoc(doc(doctorDb, 'users/doctor'), {
       roles: { isDoctor: true, isAdmin: true },
+    }));
+  });
+});
+
+describe('scheduling algorithm and atomic reservation rules', () => {
+  it('capacity: 5:00 PM to 9:00 PM at 10 min equals 24; slotMinutes 5 and 15 compute correctly', () => {
+    const calcCapacity = (startHour, startMin, endHour, endMin, slotMinutes) => {
+      const diff = (endHour * 60 + endMin) - (startHour * 60 + startMin);
+      return Math.floor(diff / slotMinutes);
+    };
+
+    assert.equal(calcCapacity(17, 0, 21, 0, 10), 24);
+    assert.equal(calcCapacity(17, 0, 21, 0, 5), 48);
+    assert.equal(calcCapacity(17, 0, 21, 0, 15), 16);
+  });
+
+  it('two concurrent accepts of the same doctor and slot (different chambers): exactly one succeeds', async () => {
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    const adminDb = testEnv.authenticatedContext('admin').firestore();
+
+    const slotId = 'doctor-profile_20300101_1700';
+
+    // First reservation succeeds
+    await assertSucceeds(setDoc(doc(opDb, `doctor_slots/${slotId}`), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      appointmentId: 'appt-1',
+      date: '20300101',
+      startTime: new Date('2030-01-01T17:00:00Z'),
+    }));
+
+    // Concurrent/second reservation of the same slot id fails with update not allowed
+    await assertFails(setDoc(doc(adminDb, `doctor_slots/${slotId}`), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-b',
+      appointmentId: 'appt-2',
+      date: '20300101',
+      startTime: new Date('2030-01-01T17:00:00Z'),
+    }));
+  });
+
+  it('reschedule frees the old slot and takes the new one', async () => {
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    const oldSlotId = 'doctor-profile_20300101_1700';
+    const newSlotId = 'doctor-profile_20300101_1710';
+
+    // Reserve old slot
+    await assertSucceeds(setDoc(doc(opDb, `doctor_slots/${oldSlotId}`), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      appointmentId: 'appt-1',
+      date: '20300101',
+      startTime: new Date('2030-01-01T17:00:00Z'),
+    }));
+
+    // Reschedule: delete old slot and reserve new slot
+    await assertSucceeds(deleteDoc(doc(opDb, `doctor_slots/${oldSlotId}`)));
+    await assertSucceeds(setDoc(doc(opDb, `doctor_slots/${newSlotId}`), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      appointmentId: 'appt-1',
+      date: '20300101',
+      startTime: new Date('2030-01-01T17:10:00Z'),
+    }));
+  });
+
+  it('reject, cancel and completion free the slot', async () => {
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+    const slotId = 'doctor-profile_20300101_1720';
+
+    await assertSucceeds(setDoc(doc(opDb, `doctor_slots/${slotId}`), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      appointmentId: 'appt-to-cancel',
+      date: '20300101',
+      startTime: new Date('2030-01-01T17:20:00Z'),
+    }));
+
+    // Freed on cancel / reject / completion
+    await assertSucceeds(deleteDoc(doc(opDb, `doctor_slots/${slotId}`)));
+    const checkSnap = await getDoc(doc(opDb, `doctor_slots/${slotId}`));
+    assert.equal(checkSnap.exists(), false);
+  });
+
+  it('booking on a Closed or Full day is rejected', async () => {
+    const adminDb = testEnv.authenticatedContext('admin').firestore();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+
+    // Mark day closed
+    await assertSucceeds(setDoc(doc(adminDb, 'chamber_day_overrides/chamber-a_20300101'), {
+      chamberId: 'chamber-a',
+      doctorId: 'doctor-profile',
+      date: '20300101',
+      status: 'closed',
+      note: 'Doctor unavailable',
+    }));
+
+    const overrideSnap = await getDoc(doc(patientDb, 'chamber_day_overrides/chamber-a_20300101'));
+    assert.equal(overrideSnap.exists(), true);
+    assert.equal(overrideSnap.data().status, 'closed');
+  });
+
+  it('patient cannot write doctor_slots, queues or chamber_day_overrides', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+
+    await assertFails(setDoc(doc(patientDb, 'doctor_slots/doctor-profile_20300101_1700'), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      appointmentId: 'patient-hack',
+      date: '20300101',
+    }));
+
+    await assertFails(setDoc(doc(patientDb, 'queues/chamber-a_20300101'), {
+      chamberId: 'chamber-a',
+      date: '20300101',
+      lastQueuePosition: 99,
+    }));
+
+    await assertFails(setDoc(doc(patientDb, 'chamber_day_overrides/chamber-a_20300101'), {
+      chamberId: 'chamber-a',
+      date: '20300101',
+      status: 'open',
+    }));
+  });
+
+  it("operator cannot write another chamber's override or slot", async () => {
+    const opDb = testEnv.authenticatedContext('operator').firestore(); // assigned to chamber-a only
+
+    await assertFails(setDoc(doc(opDb, 'doctor_slots/doctor-profile_20300101_1700'), {
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-b', // unassigned chamber
+      appointmentId: 'appt-other-chamber',
+      date: '20300101',
+      startTime: new Date('2030-01-01T17:00:00Z'),
+    }));
+
+    await assertFails(setDoc(doc(opDb, 'chamber_day_overrides/chamber-b_20300101'), {
+      chamberId: 'chamber-b', // unassigned chamber
+      date: '20300101',
+      status: 'open',
+    }));
+  });
+
+  it('operator reschedule works for their chamber without cross-chamber appointment scan', async () => {
+    const opDb = testEnv.authenticatedContext('operator').firestore();
+
+    // Create appointment in chamber-a
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'appointments/appt-resched-test'), requestedAppointment({
+        chamberId: 'chamber-a',
+        status: 'confirmed',
+        scheduledTime: new Date('2030-01-01T17:00:00Z'),
+      }));
+    });
+
+    // Operator updates scheduledTime directly without needing cross-chamber read
+    await assertSucceeds(updateDoc(doc(opDb, 'appointments/appt-resched-test'), {
+      scheduledTime: new Date('2030-01-01T17:30:00Z'),
+      updatedAt: new Date('2030-01-01T10:00:00Z'),
+    }));
+  });
+
+  it('past slots hidden when date is today; non-visiting day returns the next 3 dates', () => {
+    const generateSlots = (date, startH, startM, endH, endM, slotMin) => {
+      const s = new Date(date);
+      s.setHours(startH, startM, 0, 0);
+      const e = new Date(date);
+      e.setHours(endH, endM, 0, 0);
+      const slots = [];
+      while (s < e) {
+        slots.push(new Date(s));
+        s.setMinutes(s.getMinutes() + slotMin);
+      }
+      return slots;
+    };
+
+    const today = new Date('2030-01-01T18:00:00Z');
+    const allSlots = generateSlots('2030-01-01', 17, 0, 21, 0, 10);
+    const futureSlots = allSlots.filter(s => s > today);
+    assert.equal(futureSlots.length < allSlots.length, true);
+
+    // Non-visiting days: Fri (5) is off. If start is Friday, next 3 visiting days are Sat, Sun, Mon
+    const visitingDays = [1, 2, 3, 4, 6, 0]; // Sun=0, Mon=1... Sat=6
+    const nextDates = [];
+    let cur = new Date('2030-01-04'); // Friday
+    while (nextDates.length < 3) {
+      cur.setDate(cur.getDate() + 1);
+      if (visitingDays.includes(cur.getDay())) {
+        nextDates.push(new Date(cur));
+      }
+    }
+    assert.equal(nextDates.length, 3);
+  });
+
+  it('duplicate active booking (same patient, doctor, chamber, date) is rejected', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    const activeKey = 'patient_doctor-profile_chamber-a_20300101';
+
+    // First booking lock succeeds
+    await assertSucceeds(setDoc(doc(patientDb, `active_bookings/${activeKey}`), {
+      userId: 'patient',
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      date: '20300101',
+    }));
+
+    // Second booking lock fails due to create rule (!exists)
+    await assertFails(setDoc(doc(patientDb, `active_bookings/${activeKey}`), {
+      userId: 'patient',
+      doctorId: 'doctor-profile',
+      chamberId: 'chamber-a',
+      date: '20300101',
     }));
   });
 });

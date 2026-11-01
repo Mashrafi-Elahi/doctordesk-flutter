@@ -1,3 +1,4 @@
+import '../services/scheduling_service.dart';
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
 import 'bmdc_verification_screen.dart';
@@ -324,21 +325,103 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       },
                     ),
                     const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.calendar_today, size: 16),
-                      label: Text(
-                          'Preferred Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
-                      onPressed: () async {
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: selectedDate,
-                          firstDate: DateTime.now(),
-                          lastDate: DateTime.now()
-                              .add(const Duration(days: 90)),
+                    Builder(
+                      builder: (context) {
+                        final selectedChamber = doctor.chambers.firstWhere(
+                          (c) => c.id == selectedChamberId,
+                          orElse: () => Chamber(id: selectedChamberId),
                         );
-                        if (picked != null) {
-                          setSheetState(() => selectedDate = picked);
-                        }
+                        final schedule = SchedulingService.parseVisitingHours(selectedChamber.visitingHours);
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            OutlinedButton.icon(
+                              icon: const Icon(Icons.calendar_today, size: 16),
+                              label: Text(
+                                  'Preferred Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
+                              onPressed: () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: selectedDate,
+                                  firstDate: DateTime.now(),
+                                  lastDate: DateTime.now().add(const Duration(days: 90)),
+                                  selectableDayPredicate: (date) {
+                                    if (schedule != null && !schedule.isVisitingDay(date)) {
+                                      return false;
+                                    }
+                                    return true;
+                                  },
+                                );
+                                if (picked != null) {
+                                  setSheetState(() => selectedDate = picked);
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 6),
+                            FutureBuilder<FreeSlotsResult>(
+                              future: SchedulingService.getFreeSlots(
+                                chamberId: selectedChamberId,
+                                doctorId: doctor.id,
+                                date: selectedDate,
+                              ),
+                              builder: (context, snap) {
+                                if (snap.connectionState == ConnectionState.waiting) {
+                                  return const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 4),
+                                    child: LinearProgressIndicator(minHeight: 2),
+                                  );
+                                }
+                                final res = snap.data;
+                                if (res == null) return const SizedBox.shrink();
+                                if (res.emptyReason == 'Closed') {
+                                  return Container(
+                                    margin: const EdgeInsets.symmetric(vertical: 4),
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.red.shade200),
+                                    ),
+                                    child: Text(
+                                      'Closed on this date (${res.overrideData?['note'] ?? 'No consultations'})',
+                                      style: TextStyle(color: Colors.red.shade900, fontSize: 12.5),
+                                    ),
+                                  );
+                                }
+                                if (res.emptyReason == 'Fully booked' || (res.totalCapacity > 0 && res.slotsLeft <= 0)) {
+                                  return Container(
+                                    margin: const EdgeInsets.symmetric(vertical: 4),
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.orange.shade200),
+                                    ),
+                                    child: Text(
+                                      'Fully booked for this date (0 slots left)',
+                                      style: TextStyle(color: Colors.orange.shade900, fontSize: 12.5),
+                                    ),
+                                  );
+                                }
+                                if (res.totalCapacity > 0) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 4),
+                                    child: Text(
+                                      '${res.slotsLeft} slots left for ${selectedDate.day}/${selectedDate.month}',
+                                      style: TextStyle(
+                                        color: Colors.green.shade800,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12.5,
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return const SizedBox.shrink();
+                              },
+                            ),
+                          ],
+                        );
                       },
                     ),
                     const SizedBox(height: 16),

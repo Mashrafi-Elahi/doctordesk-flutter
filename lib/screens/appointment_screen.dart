@@ -148,10 +148,12 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                 if (ts is Timestamp) {
                                   final dt = ts.toDate();
                                   if (isRequested) {
-                                    dateStr = '${dt.day}/${dt.month}/${dt.year}';
+                                    dateStr = 'Preferred Date: ${dt.day}/${dt.month}/${dt.year}';
                                   } else {
+                                    final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+                                    final p = dt.hour >= 12 ? 'PM' : 'AM';
                                     dateStr =
-                                        '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                        '${dt.day}/${dt.month}/${dt.year} at $h:${dt.minute.toString().padLeft(2, '0')} $p';
                                   }
                                 }
 

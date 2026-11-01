@@ -196,6 +196,61 @@ service cloud.firestore {
       );
     }
 
+    // 4c. Doctor Slots (Global reservation locks: doctor_slots/{doctorId}_{yyyyMMdd}_{HHmm})
+    // Public read for authenticated users to check slot availability.
+    // Create/Delete by doctor, assigned operator for the chamber, or admin. Update prohibited.
+    match /doctor_slots/{slotId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (request.resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == request.resource.data.doctorId) ||
+        (request.resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         request.resource.data.chamberId in getUserData().operatorAssignments)
+      );
+      allow delete: if isAuthenticated() && (
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments)
+      );
+      allow update: if false;
+    }
+
+    // 4d. Chamber Day Overrides (chamber_day_overrides/{chamberId}_{yyyyMMdd})
+    // Signed-in users can read to discover hours and closed/full days.
+    // Create/Update only by the chamber's doctor, assigned operator, or admin; patients never.
+    match /chamber_day_overrides/{overrideId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (
+        isAdmin() ||
+        (request.resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == request.resource.data.doctorId) ||
+        (request.resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         request.resource.data.chamberId in getUserData().operatorAssignments)
+      );
+      allow delete: if isAdmin() || (
+        resource.data.doctorId != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().doctorProfileId == resource.data.doctorId
+      ) || (
+        resource.data.chamberId != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().operatorAssignments != null &&
+        resource.data.chamberId in getUserData().operatorAssignments
+      );
+    }
+
     // 4b. Queue Counter Documents (for transactional queue numbers: queues/{chamberId}_{yyyyMMdd})
     // Restricted to assigned operator for this chamber, doctor, or admin. Patients must not write queue counters.
     match /queues/{queueId} {
