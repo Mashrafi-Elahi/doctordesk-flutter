@@ -9,7 +9,14 @@ import 'create_post_screen.dart';
 
 String _publicName(String? value, {String fallback = 'Community member'}) {
   final trimmed = value?.trim() ?? '';
-  if (trimmed.isEmpty || trimmed.contains('@')) return fallback;
+  if (trimmed.isEmpty) return fallback;
+  if (trimmed.contains('@')) {
+    final prefix = trimmed.split('@').first.trim();
+    if (prefix.isNotEmpty) {
+      return prefix[0].toUpperCase() + prefix.substring(1);
+    }
+    return fallback;
+  }
   return trimmed;
 }
 
