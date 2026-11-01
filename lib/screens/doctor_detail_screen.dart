@@ -574,7 +574,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                             ),
                           ),
                         ],
-                        if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified') ...[
+                        if (doctor.verificationStatus == 'checked_found') ...[
                           const SizedBox(height: 4),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -726,7 +726,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       _buildBulletItem('Qualified: ${doctor.education.join(", ")}'),
                     if (doctor.concentrations.isNotEmpty)
                       _buildBulletItem('Clinical Focus: ${doctor.concentrations.join(", ")}'),
-                    if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified')
+                    if (doctor.verificationStatus == 'checked_found')
                       _buildBulletItem(_bmdcCheckedLabel(doctor)),
                     if (doctor.experienceYears <= 0 && doctor.education.isEmpty)
                       _buildBulletItem('Specialist medical practitioner with registered credentials'),
