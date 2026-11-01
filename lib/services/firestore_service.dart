@@ -3167,7 +3167,9 @@ class FirestoreService {
   static Future<void> cancelAppointmentByPatient(String appointmentId) async {
     final apptRef = _db.collection('appointments').doc(appointmentId);
     final apptSnap = await apptRef.get();
-    final activeKey = apptSnap.data()?['activeBookingKey']?.toString();
+    final apptData = apptSnap.data() ?? {};
+    final activeKey = apptData['activeBookingKey']?.toString();
+    final patientUid = (apptData['userId'] ?? '').toString();
 
     await apptRef.update({
       'status': 'cancelled',

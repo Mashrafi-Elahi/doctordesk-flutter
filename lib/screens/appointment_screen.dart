@@ -25,8 +25,6 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final currentUid = AuthService.currentUser?.uid;
-
     return DefaultTabController(
       initialIndex: widget.initialTabIndex.clamp(0, 1),
       length: 2,
@@ -139,8 +137,6 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                 final docName = data['doctorName'] ??
                                     data['doctorId'] ??
                                     'Specialist Doctor';
-                                final chamber =
-                                    data['chamberId'] ?? 'Main Chamber';
                                 final patient =
                                     data['patientName'] ?? 'Patient';
                                 final status = data['status'] ?? 'waiting';
