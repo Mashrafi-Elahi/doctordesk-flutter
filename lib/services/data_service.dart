@@ -656,12 +656,12 @@ class DataService {
     return FirestoreService.streamTodayWaitingCount(chamberId);
   }
 
-  static Future<List<String>> fetchChamberDoctors(String chamberId) {
-    return FirestoreService.fetchChamberDoctors(chamberId);
+  static Future<List<String>> fetchChamberDoctors(String chamberId, {String? chamberName}) {
+    return FirestoreService.fetchChamberDoctors(chamberId, chamberName: chamberName);
   }
 
-  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId) {
-    return FirestoreService.fetchChamberDoctorDetails(chamberId);
+  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId, {String? chamberName}) {
+    return FirestoreService.fetchChamberDoctorDetails(chamberId, chamberName: chamberName);
   }
 
   static Future<void> confirmAppointment({
@@ -777,6 +777,30 @@ class DataService {
       chamberId: chamberId,
       date: date,
       newStartTime: newStartTime,
+    );
+  }
+
+  static Future<Map<String, dynamic>> createWalkInAppointment({
+    required String chamberId,
+    required String doctorId,
+    required String patientName,
+    String? patientPhone,
+    String? operatorNote,
+    DateTime? specificDate,
+    DateTime? specificSlot,
+    bool allowOverrideClosedOrFull = false,
+  }) {
+    final actorUid = FirestoreService.auth.currentUser?.uid ?? 'unknown_actor';
+    return SchedulingService.createWalkInAppointment(
+      chamberId: chamberId,
+      doctorId: doctorId,
+      patientName: patientName,
+      patientPhone: patientPhone,
+      operatorNote: operatorNote,
+      specificDate: specificDate,
+      specificSlot: specificSlot,
+      allowOverrideClosedOrFull: allowOverrideClosedOrFull,
+      actorUid: actorUid,
     );
   }
 

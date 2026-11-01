@@ -2071,22 +2071,54 @@ class FirestoreService {
             }).length);
   }
 
-  /// Fetches unique doctor names practicing in a chamber.
-  static Future<List<String>> fetchChamberDoctors(String chamberId) async {
+  /// Fetches unique doctor details practicing in a chamber matching id or name, hiding deleted/hidden doctors.
+  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(
+    String chamberId, {
+    String? chamberName,
+  }) async {
     try {
       final snap = await _db.collection('doctors').limit(100).get();
-      final List<String> result = [];
+      final List<Map<String, dynamic>> result = [];
+      final Set<String> seenIds = {};
+
       for (final doc in snap.docs) {
         final d = doc.data();
+        if (d['isDeleted'] == true ||
+            d['isHidden'] == true ||
+            d['status'] == 'deleted' ||
+            d['status'] == 'hidden') {
+          continue;
+        }
+
         final chambers = (d['chambers'] as List?) ?? [];
         for (final c in chambers) {
-          if (c is Map) {
-            final id = c['id'] ?? c['hospitalName'] ?? c['name'];
-            if (id == chamberId || c['hospitalName'] == chamberId) {
-              final name = (d['name'] ?? '').toString();
-              if (name.isNotEmpty && !result.contains(name)) {
-                result.add(name);
-              }
+          if (c is! Map) continue;
+          final cId = (c['id'] ?? '').toString().trim();
+          final cName = (c['name'] ?? '').toString().trim();
+          final cHospital = (c['hospitalName'] ?? '').toString().trim();
+
+          final matches = (cId.isNotEmpty && cId == chamberId) ||
+              (cName.isNotEmpty && cName == chamberId) ||
+              (cHospital.isNotEmpty && cHospital == chamberId) ||
+              (chamberName != null &&
+                  chamberName.isNotEmpty &&
+                  (cName == chamberName ||
+                      cHospital == chamberName ||
+                      cId == chamberName));
+
+          if (matches) {
+            final docId = doc.id;
+            if (seenIds.add(docId)) {
+              final hours = (c['visitingHours'] ?? c['hours'] ?? c['time'] ?? '').toString();
+              final specialities = (d['specialities'] as List?) ?? [];
+              result.add({
+                'doctorId': docId,
+                'name': (d['name'] ?? 'Doctor').toString(),
+                'speciality': specialities.isNotEmpty ? specialities.first.toString() : 'Specialist',
+                'hours': hours,
+                'degree': (d['degree'] ?? '').toString(),
+                'chamber': c,
+              });
             }
           }
         }
@@ -2095,6 +2127,15 @@ class FirestoreService {
     } catch (_) {
       return [];
     }
+  }
+
+  /// Fetches unique doctor names practicing in a chamber.
+  static Future<List<String>> fetchChamberDoctors(
+    String chamberId, {
+    String? chamberName,
+  }) async {
+    final details = await fetchChamberDoctorDetails(chamberId, chamberName: chamberName);
+    return details.map((d) => (d['name'] ?? 'Doctor').toString()).toList();
   }
 
   static Future<Map<String, dynamic>> createAppointment({
@@ -3222,42 +3263,6 @@ class FirestoreService {
       );
     } catch (e) {
       debugPrint('Error unlocking follow-up chat: $e');
-    }
-  }
-
-  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId) async {
-    try {
-      final snap = await _db.collection('doctors').limit(100).get();
-      final List<Map<String, dynamic>> result = [];
-      final Set<String> seenIds = {};
-
-      for (final doc in snap.docs) {
-        final d = doc.data();
-        final chambers = (d['chambers'] as List?) ?? [];
-        for (final c in chambers) {
-          if (c is Map) {
-            final id = (c['id'] ?? c['hospitalName'] ?? c['name'] ?? '').toString();
-            if (id == chamberId || c['hospitalName'] == chamberId) {
-              final docId = doc.id;
-              if (!seenIds.contains(docId)) {
-                seenIds.add(docId);
-                final hours = (c['visitingHours'] ?? c['hours'] ?? c['time'] ?? 'Visiting Hours: 5:00 PM - 9:00 PM').toString();
-                final specialities = (d['specialities'] as List?) ?? [];
-                result.add({
-                  'doctorId': docId,
-                  'name': (d['name'] ?? 'Doctor').toString(),
-                  'speciality': specialities.isNotEmpty ? specialities.first.toString() : 'Specialist',
-                  'hours': hours,
-                  'degree': (d['degree'] ?? '').toString(),
-                });
-              }
-            }
-          }
-        }
-      }
-      return result;
-    } catch (_) {
-      return [];
     }
   }
 

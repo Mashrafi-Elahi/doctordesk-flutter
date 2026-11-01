@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -137,7 +138,7 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
   }
 
   Future<List<String>> _doctorsFor(String chamberId) =>
-      _doctorFutures.putIfAbsent(chamberId, () => DataService.fetchChamberDoctors(chamberId));
+      _doctorFutures.putIfAbsent(chamberId, () => DataService.fetchChamberDoctors(chamberId, chamberName: _chamberNames[chamberId]));
 
   @override
   Widget build(BuildContext context) {
@@ -281,8 +282,12 @@ class _ChamberCard extends StatelessWidget {
                   future: doctors,
                   builder: (context, snapshot) {
                     final doctorNames = snapshot.data ?? const [];
+                    if (doctorNames.isEmpty) {
+                      return const Text('No doctors listed');
+                    }
+                    final countLabel = '${doctorNames.length} ${doctorNames.length == 1 ? "doctor" : "doctors"}';
                     return Text(
-                      doctorNames.isEmpty ? 'No doctors listed' : doctorNames.join(' • '),
+                      '$countLabel: ${doctorNames.join(", ")}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     );
@@ -450,7 +455,7 @@ class _ChamberScheduleHeader extends StatelessWidget {
                   headerText = 'Today: Closed (${_formatTime(start)} to ${_formatTime(end)})';
                 } else if (status == 'full' || (totalCap > 0 && confirmedCount >= totalCap)) {
                   headerText = 'Today: Fully booked ($confirmedCount of $totalCap booked)';
-                } else if (schedule == null && overrideData == null) {
+                } else if ((schedule == null && overrideData == null) || totalCap == 0) {
                   headerText = 'Visiting hours not set for this chamber';
                 } else {
                   headerText = 'Today ${_formatTime(start)} to ${_formatTime(end)}, $slotMinutes min per patient, $confirmedCount of $totalCap booked';
@@ -499,6 +504,13 @@ class _ChamberScheduleHeader extends StatelessWidget {
                         scrollDirection: Axis.horizontal,
                         child: Row(
                           children: [
+                            ActionChip(
+                              avatar: const Icon(Icons.person_add_alt_1, size: 14),
+                              label: const Text('Add walk-in'),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => _showWalkInDialog(context),
+                            ),
+                            const SizedBox(width: 6),
                             ActionChip(
                               avatar: const Icon(Icons.edit_calendar, size: 14),
                               label: const Text('Change today\'s hours'),
@@ -568,6 +580,277 @@ class _ChamberScheduleHeader extends StatelessWidget {
         );
       }
     }
+  }
+
+  Future<void> _showWalkInDialog(BuildContext context) async {
+    final doctors = await DataService.fetchChamberDoctorDetails(chamberId, chamberName: chamberName);
+    if (!context.mounted) return;
+
+    if (doctors.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No doctors are currently listed for this chamber.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final nameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+
+    String selectedDoctorId = doctors.first['doctorId'] as String;
+    String selectedMode = 'walk_in';
+    DateTime selectedDate = DateTime.now();
+    DateTime? selectedSlot;
+    List<DateTime> availableSlots = [];
+    bool loadingSlots = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          return AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.person_add_alt_1),
+                const SizedBox(width: 8),
+                Text(selectedMode == 'walk_in' ? 'Add Walk-in' : 'Offline Booking'),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(value: 'walk_in', label: Text('Today Walk-in')),
+                        ButtonSegment(value: 'offline', label: Text('Specific Date')),
+                      ],
+                      selected: {selectedMode},
+                      onSelectionChanged: (val) async {
+                        setDialogState(() {
+                          selectedMode = val.first;
+                          selectedSlot = null;
+                        });
+                        if (selectedMode == 'offline') {
+                          setDialogState(() => loadingSlots = true);
+                          final res = await SchedulingService.getFreeSlots(
+                            chamberId: chamberId,
+                            doctorId: selectedDoctorId,
+                            date: selectedDate,
+                          );
+                          setDialogState(() {
+                            availableSlots = res.slots;
+                            loadingSlots = false;
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Patient Name *',
+                        hintText: 'Enter patient full name',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'Phone Number (optional)',
+                        hintText: '01XXXXXXXXX',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedDoctorId,
+                      decoration: const InputDecoration(labelText: 'Assign Doctor'),
+                      items: doctors.map((d) {
+                        return DropdownMenuItem<String>(
+                          value: d['doctorId'] as String,
+                          child: Text(d['name'] as String),
+                        );
+                      }).toList(),
+                      onChanged: (val) async {
+                        if (val != null) {
+                          setDialogState(() {
+                            selectedDoctorId = val;
+                            selectedSlot = null;
+                          });
+                          if (selectedMode == 'offline') {
+                            setDialogState(() => loadingSlots = true);
+                            final res = await SchedulingService.getFreeSlots(
+                              chamberId: chamberId,
+                              doctorId: selectedDoctorId,
+                              date: selectedDate,
+                            );
+                            setDialogState(() {
+                              availableSlots = res.slots;
+                              loadingSlots = false;
+                            });
+                          }
+                        }
+                      },
+                    ),
+                    if (selectedMode == 'offline') ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.calendar_today, size: 14),
+                            label: const Text('Pick Date'),
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: dialogCtx,
+                                initialDate: selectedDate,
+                                firstDate: DateTime.now(),
+                                lastDate: DateTime.now().add(const Duration(days: 60)),
+                              );
+                              if (picked != null) {
+                                setDialogState(() {
+                                  selectedDate = picked;
+                                  selectedSlot = null;
+                                  loadingSlots = true;
+                                });
+                                final res = await SchedulingService.getFreeSlots(
+                                  chamberId: chamberId,
+                                  doctorId: selectedDoctorId,
+                                  date: picked,
+                                );
+                                setDialogState(() {
+                                  availableSlots = res.slots;
+                                  loadingSlots = false;
+                                });
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (loadingSlots)
+                        const Center(child: Padding(padding: EdgeInsets.all(8), child: CircularProgressIndicator()))
+                      else if (availableSlots.isEmpty)
+                        const Text('No free slots found. Patient will be placed in queue without a locked slot.', style: TextStyle(fontSize: 12, color: Colors.orange))
+                      else ...[
+                        const Text('Select Free Slot (Optional):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: availableSlots.map((slot) {
+                            final h = slot.hour > 12 ? slot.hour - 12 : (slot.hour == 0 ? 12 : slot.hour);
+                            final p = slot.hour >= 12 ? 'PM' : 'AM';
+                            final label = '$h:${slot.minute.toString().padLeft(2, "0")} $p';
+                            return ChoiceChip(
+                              label: Text(label, style: const TextStyle(fontSize: 11)),
+                              selected: selectedSlot == slot,
+                              onSelected: (val) {
+                                setDialogState(() => selectedSlot = val ? slot : null);
+                              },
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ],
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: noteCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Reason / Note (optional)',
+                        hintText: 'e.g. Walk-in follow-up consultation',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: () async {
+                  final name = nameCtrl.text.trim();
+                  if (name.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please enter patient name.')),
+                    );
+                    return;
+                  }
+
+                  final targetDate = selectedMode == 'offline' ? selectedDate : DateTime.now();
+                  final dKey = SchedulingService.dateKey(targetDate);
+                  final overrideSnap = await FirebaseFirestore.instance
+                      .collection('chamber_day_overrides')
+                      .doc('${chamberId}_$dKey')
+                      .get();
+                  bool allowOverride = false;
+                  if (overrideSnap.exists) {
+                    final st = (overrideSnap.data()?['status'] ?? '').toString().toLowerCase();
+                    if (st == 'closed' || st == 'full') {
+                      if (!dialogCtx.mounted) return;
+                      final confirm = await showDialog<bool>(
+                        context: dialogCtx,
+                        builder: (confirmCtx) => AlertDialog(
+                          title: Text('Date is $st'.toUpperCase()),
+                          content: Text('This chamber is marked as $st for ${targetDate.day}/${targetDate.month}. Do you want to proceed and add this patient anyway?'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(confirmCtx, false), child: const Text('No, cancel')),
+                            FilledButton(onPressed: () => Navigator.pop(confirmCtx, true), child: const Text('Yes, add anyway')),
+                          ],
+                        ),
+                      );
+                      if (confirm != true) return;
+                      allowOverride = true;
+                    }
+                  }
+
+                  try {
+                    final res = await DataService.createWalkInAppointment(
+                      chamberId: chamberId,
+                      doctorId: selectedDoctorId,
+                      patientName: name,
+                      patientPhone: phoneCtrl.text.trim(),
+                      operatorNote: noteCtrl.text.trim(),
+                      specificDate: selectedMode == 'offline' ? selectedDate : null,
+                      specificSlot: selectedSlot,
+                      allowOverrideClosedOrFull: allowOverride,
+                    );
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Patient added to queue as #${res["queuePosition"]}!'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to add patient: $e')),
+                      );
+                    }
+                  }
+                },
+                child: const Text('Add to Queue'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _showCloseDayDialog(BuildContext context) async {
@@ -751,7 +1034,17 @@ class _AppointmentList extends StatelessWidget {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: query.snapshots(),
       builder: (context, snapshot) {
-        if (snapshot.hasError) return _ErrorState(message: 'Unable to load appointments.', onRetry: () {});
+        if (snapshot.hasError) {
+          final err = snapshot.error.toString();
+          final displayMsg = kDebugMode
+              ? 'Error loading appointments: $err'
+              : (err.contains('permission-denied')
+                  ? 'Access denied. You may not be assigned to this chamber.'
+                  : (err.contains('FAILED_PRECONDITION') || err.contains('requires an index')
+                      ? 'Database index required. Please deploy Firestore indexes.'
+                      : 'Unable to load appointments.'));
+          return _ErrorState(message: displayMsg, onRetry: () {});
+        }
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
         final rawDocs = snapshot.data!.docs;
         if (rawDocs.isEmpty) {
@@ -861,7 +1154,9 @@ class _AppointmentRow extends StatelessWidget {
     if (!context.mounted) return;
 
     if (freeResult == null || freeResult.slots.isEmpty) {
-      final reason = freeResult?.emptyReason ?? 'Fully booked';
+      final reason = (freeResult?.totalCapacity ?? 0) == 0
+          ? 'Visiting hours not set for this chamber'
+          : (freeResult?.emptyReason ?? 'No slots available');
       final next = freeResult?.nextVisitingDates ?? const [];
       String nextText = '';
       if (next.isNotEmpty) {
@@ -1130,7 +1425,30 @@ class _AppointmentRow extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(_patientName, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          Row(
+                            children: [
+                              Text(_patientName, style: const TextStyle(fontWeight: FontWeight.w700)),
+                              if (data['source'] == 'walk_in' || data['source'] == 'offline') ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.shade50,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.blue.shade300),
+                                  ),
+                                  child: Text(
+                                    data['source'] == 'walk_in' ? 'Walk-in' : 'Offline',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.blue.shade800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                           if (isDateClosed)
                             Container(
                               margin: const EdgeInsets.only(top: 4),

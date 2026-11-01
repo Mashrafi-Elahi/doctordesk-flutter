@@ -78,25 +78,110 @@ class SchedulingService {
     return List.generate(n, (i) => s.add(Duration(minutes: i * slotMinutes)));
   }
 
+  static List<int> _parseVisitingDays(String text) {
+    final lower = text.toLowerCase();
+
+    if (lower.contains('everyday') || lower.contains('daily') || lower.contains('all days')) {
+      return [1, 2, 3, 4, 5, 6, 7];
+    }
+
+    final dayMap = <String, int>{
+      'sat': DateTime.saturday,
+      'saturday': DateTime.saturday,
+      'sun': DateTime.sunday,
+      'sunday': DateTime.sunday,
+      'mon': DateTime.monday,
+      'monday': DateTime.monday,
+      'tue': DateTime.tuesday,
+      'tues': DateTime.tuesday,
+      'tuesday': DateTime.tuesday,
+      'wed': DateTime.wednesday,
+      'wednesday': DateTime.wednesday,
+      'thu': DateTime.thursday,
+      'thur': DateTime.thursday,
+      'thurs': DateTime.thursday,
+      'thursday': DateTime.thursday,
+      'fri': DateTime.friday,
+      'friday': DateTime.friday,
+    };
+
+    // 1. Check for a day range: e.g. 'Sat-Thu', 'Sat–Thu', 'Sat—Thu', 'Sat to Thu', 'Sun-Thu', 'Mon-Fri'
+    final rangeRegex = RegExp(
+      r'\b(sat|saturday|sun|sunday|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday)\b'
+      r'\s*(?:–|—|-|\bto\b)\s*'
+      r'\b(sat|saturday|sun|sunday|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday)\b',
+      caseSensitive: false,
+    );
+    final rangeMatch = rangeRegex.firstMatch(lower);
+    if (rangeMatch != null) {
+      final startDayKey = rangeMatch.group(1)!.toLowerCase();
+      final endDayKey = rangeMatch.group(2)!.toLowerCase();
+      final startDay = dayMap[startDayKey];
+      final endDay = dayMap[endDayKey];
+
+      if (startDay != null && endDay != null) {
+        const weekCycle = [
+          DateTime.saturday,
+          DateTime.sunday,
+          DateTime.monday,
+          DateTime.tuesday,
+          DateTime.wednesday,
+          DateTime.thursday,
+          DateTime.friday,
+        ];
+        final startIndex = weekCycle.indexOf(startDay);
+        final endIndex = weekCycle.indexOf(endDay);
+        if (startIndex != -1 && endIndex != -1) {
+          final days = <int>[];
+          var idx = startIndex;
+          while (true) {
+            days.add(weekCycle[idx]);
+            if (idx == endIndex) break;
+            idx = (idx + 1) % weekCycle.length;
+          }
+          return days;
+        }
+      }
+    }
+
+    // 2. Check for discrete day lists: e.g. 'Sat, Sun, Mon', 'Sat, Tue, Thu', 'Fri, Sat'
+    final tokenRegex = RegExp(
+      r'\b(sat|saturday|sun|sunday|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday)\b',
+      caseSensitive: false,
+    );
+    final matches = tokenRegex.allMatches(lower);
+    if (matches.isNotEmpty) {
+      final days = <int>{};
+      for (final m in matches) {
+        final key = m.group(1)!.toLowerCase();
+        final day = dayMap[key];
+        if (day != null) days.add(day);
+      }
+      if (days.isNotEmpty) {
+        return days.toList();
+      }
+    }
+
+    // Default: Saturday to Thursday (Bangladesh/clinic standard: Friday closed)
+    return [
+      DateTime.saturday,
+      DateTime.sunday,
+      DateTime.monday,
+      DateTime.tuesday,
+      DateTime.wednesday,
+      DateTime.thursday,
+    ];
+  }
+
   static ParsedSchedule? parseVisitingHours(String? text) {
     if (text == null || text.trim().isEmpty) return null;
     final clean = text.trim();
 
-    // Check for days: e.g. (Sat-Thu), (Sat–Wed), (Fri Closed), etc.
-    final lower = clean.toLowerCase();
-    List<int> days = [1, 2, 3, 4, 6, 7]; // Default Sat–Thu
+    final days = _parseVisitingDays(clean);
 
-    if (lower.contains('sat') && lower.contains('thu')) {
-      days = [DateTime.saturday, DateTime.sunday, DateTime.monday, DateTime.tuesday, DateTime.wednesday, DateTime.thursday];
-    } else if (lower.contains('sat') && lower.contains('wed')) {
-      days = [DateTime.saturday, DateTime.sunday, DateTime.monday, DateTime.tuesday, DateTime.wednesday];
-    } else if (lower.contains('everyday') || lower.contains('daily') || lower.contains('all days')) {
-      days = [1, 2, 3, 4, 5, 6, 7];
-    }
-
-    // Match times: e.g. "5:00 PM – 9:00 PM", "05:00 PM - 09:00 PM", "17:00 - 21:00"
+    // Match times: e.g. '5:00 PM – 9:00 PM', '5:00 PM — 9:00 PM', '5:00 PM - 9:00 PM', '5:00 PM to 9:00 PM', '17:00 - 21:00'
     final regex = RegExp(
-      r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:–|-|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?',
+      r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:–|—|-|\bto\b)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?',
       caseSensitive: false,
     );
     final match = regex.firstMatch(clean);
@@ -119,6 +204,18 @@ class SchedulingService {
         if (startH < 12 && startH >= 1 && endH >= 12) {
           startH += 12;
         }
+      }
+
+      // Handle 12h without AM/PM in clinic contexts (e.g. '5:00 - 9:00' -> 17:00 - 21:00)
+      if (startPeriod == null && endPeriod == null) {
+        if (startH >= 1 && startH <= 7 && endH <= 11 && endH > startH) {
+          startH += 12;
+          endH += 12;
+        }
+      }
+
+      if (startH * 60 + startM >= endH * 60 + endM) {
+        return null;
       }
 
       return ParsedSchedule(
@@ -210,6 +307,15 @@ class SchedulingService {
     }
 
     final totalCap = capacity(start, end, slotMinutes);
+    if (totalCap == 0) {
+      return FreeSlotsResult(
+        slots: const [],
+        emptyReason: 'Visiting hours not set',
+        totalCapacity: 0,
+        confirmedCount: 0,
+        overrideData: overrideData,
+      );
+    }
     if (overrideStatus == 'full') {
       return FreeSlotsResult(
         slots: const [],
@@ -249,7 +355,7 @@ class SchedulingService {
 
     final confirmedCount = takenTimeKeys.length;
     final emptyReason = free.isEmpty
-        ? (confirmedCount >= totalCap ? 'Fully booked' : 'No available slots today')
+        ? (totalCap > 0 && confirmedCount >= totalCap ? 'Fully booked' : (totalCap == 0 ? 'Visiting hours not set' : 'No available slots today'))
         : null;
 
     return FreeSlotsResult(
@@ -555,5 +661,138 @@ class SchedulingService {
       }
       return false;
     }).toList();
+  }
+
+  static Future<Map<String, dynamic>> createWalkInAppointment({
+    required String chamberId,
+    required String doctorId,
+    required String patientName,
+    String? patientPhone,
+    String? operatorNote,
+    DateTime? specificDate,
+    DateTime? specificSlot,
+    bool allowOverrideClosedOrFull = false,
+    required String actorUid,
+  }) async {
+    final date = specificDate ?? DateTime.now();
+    final dKey = dateKey(date);
+
+    // 1. Check override status for closed/full
+    final overrideDocId = '${chamberId}_$dKey';
+    final overrideSnap = await _db.collection('chamber_day_overrides').doc(overrideDocId).get();
+    if (overrideSnap.exists) {
+      final st = (overrideSnap.data()?['status'] ?? '').toString().toLowerCase();
+      if ((st == 'closed' || st == 'full') && !allowOverrideClosedOrFull) {
+        throw StateError('This date is marked as ${st.toUpperCase()}. Please confirm an override to proceed.');
+      }
+    }
+
+    // 2. Resolve chamber name and doctor name
+    final chamberRec = await ChamberResolver.resolveChamberRecord(
+      chamberId: chamberId,
+      doctorId: doctorId,
+    );
+    final resolvedChamberName = chamberRec?.name ?? 'Chamber';
+
+    String resolvedDoctorName = 'Specialist Doctor';
+    try {
+      final docSnap = await _db.collection('doctors').doc(doctorId).get();
+      if (docSnap.exists) {
+        resolvedDoctorName = (docSnap.data()?['name'] ?? resolvedDoctorName).toString();
+      }
+    } catch (_) {}
+
+    // 3. Resolve scheduled slot
+    DateTime scheduledSlot;
+    bool reserveSlotLock = false;
+
+    if (specificSlot != null) {
+      scheduledSlot = specificSlot;
+      reserveSlotLock = true;
+    } else {
+      final freeRes = await getFreeSlots(
+        chamberId: chamberId,
+        doctorId: doctorId,
+        date: date,
+      );
+      if (freeRes.slots.isNotEmpty) {
+        scheduledSlot = freeRes.slots.first;
+        reserveSlotLock = true;
+      } else {
+        scheduledSlot = DateTime.now();
+        reserveSlotLock = false;
+      }
+    }
+
+    final slotDocId = slotId(doctorId, scheduledSlot);
+    final slotLockRef = _db.collection('doctor_slots').doc(slotDocId);
+    final queueRef = _db.collection('queues').doc('${chamberId}_$dKey');
+    final apptRef = _db.collection('appointments').doc();
+
+    int assignedQueuePos = 1;
+
+    await _db.runTransaction((tx) async {
+      if (reserveSlotLock) {
+        final lockSnap = await tx.get(slotLockRef);
+        if (lockSnap.exists) {
+          throw StateError('Slot ${scheduledSlot.hour}:${scheduledSlot.minute.toString().padLeft(2, "0")} is already reserved.');
+        }
+      }
+
+      final queueSnap = await tx.get(queueRef);
+      final currentQueue = (queueSnap.data()?['lastNumber'] as num?)?.toInt() ?? 0;
+      assignedQueuePos = currentQueue + 1;
+
+      tx.set(
+        queueRef,
+        {
+          'chamberId': chamberId,
+          'date': dKey,
+          'lastNumber': assignedQueuePos,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      final isWalkIn = specificDate == null;
+      final data = <String, dynamic>{
+        'patientName': patientName.trim(),
+        if (patientPhone != null && patientPhone.trim().isNotEmpty)
+          'patientPhone': patientPhone.trim(),
+        'chamberId': chamberId,
+        'chamberName': resolvedChamberName,
+        'doctorId': doctorId,
+        'doctorName': resolvedDoctorName,
+        'status': 'confirmed',
+        'source': isWalkIn ? 'walk_in' : 'offline',
+        'operatorNote': operatorNote?.trim() ?? '',
+        'queuePosition': assignedQueuePos,
+        'scheduledTime': Timestamp.fromDate(scheduledSlot),
+        'slotMinutes': chamberRec?.slotMinutes ?? 10,
+        'createdBy': actorUid,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      tx.set(apptRef, data);
+
+      if (reserveSlotLock) {
+        tx.set(slotLockRef, {
+          'appointmentId': apptRef.id,
+          'doctorId': doctorId,
+          'chamberId': chamberId,
+          'date': dKey,
+          'startTime': Timestamp.fromDate(scheduledSlot),
+          'source': isWalkIn ? 'walk_in' : 'offline',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+    });
+
+    return {
+      'appointmentId': apptRef.id,
+      'queuePosition': assignedQueuePos,
+      'scheduledTime': scheduledSlot,
+    };
   }
 }

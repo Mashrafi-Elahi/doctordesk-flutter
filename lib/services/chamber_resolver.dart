@@ -105,7 +105,7 @@ class ChamberResolver {
             final matchesId = chamberId != null && chamberId.isNotEmpty && (cId == chamberId || cName == chamberId);
             final matchesName = storedName != null && storedName.isNotEmpty && (cName == storedName || cId == storedName);
 
-            if (matchesId || matchesName || rawChambers.length == 1) {
+              if (matchesId || matchesName || rawChambers.length == 1) {
               final cleanName = (cName.isNotEmpty && !cName.startsWith('chamber-'))
                   ? cName
                   : (storedName != null && storedName.isNotEmpty && !storedName.startsWith('chamber-'))
@@ -124,6 +124,60 @@ class ChamberResolver {
               );
               cacheRecord(resolvedId, rec);
               if (chamberId != null && chamberId.isNotEmpty) cacheRecord(chamberId, rec);
+              return rec;
+            }
+          }
+        }
+      }
+
+      // 3. Search doctors collection across registered doctors if doctorId was null or not matched
+      if (chamberId != null && chamberId.isNotEmpty) {
+        final docsSnap = await FirebaseFirestore.instance
+            .collection('doctors')
+            .limit(100)
+            .get();
+        for (final doc in docsSnap.docs) {
+          final d = doc.data();
+          if (d['isDeleted'] == true || d['isHidden'] == true ||
+              d['status'] == 'deleted' || d['status'] == 'hidden') {
+            continue;
+          }
+          final rawChambers = (d['chambers'] as List?) ?? [];
+          for (final c in rawChambers) {
+            if (c is! Map) continue;
+            final cMap = Map<String, dynamic>.from(c);
+            final cId = (cMap['id'] ?? '').toString().trim();
+            final cName = (cMap['name'] ?? '').toString().trim();
+            final cHospital = (cMap['hospitalName'] ?? '').toString().trim();
+
+            final matchesId = (cId.isNotEmpty && cId == chamberId) ||
+                (cName.isNotEmpty && cName == chamberId) ||
+                (cHospital.isNotEmpty && cHospital == chamberId);
+            final matchesName = storedName != null && storedName.isNotEmpty &&
+                (cName == storedName || cHospital == storedName || cId == storedName);
+
+            if (matchesId || matchesName) {
+              final cleanName = (cHospital.isNotEmpty && !cHospital.startsWith('chamber-'))
+                  ? cHospital
+                  : (cName.isNotEmpty && !cName.startsWith('chamber-'))
+                      ? cName
+                      : (storedName != null && storedName.isNotEmpty && !storedName.startsWith('chamber-'))
+                          ? storedName
+                          : 'Chamber';
+              final resolvedId = cId.isNotEmpty ? cId : chamberId;
+              final rec = ChamberRecord(
+                id: resolvedId,
+                name: cleanName,
+                doctorId: doc.id,
+                visitingHours: (cMap['visitingHours'] ?? cMap['hours'])?.toString(),
+                slotMinutes: ((cMap['slotMinutes'] as num?)?.toInt() ?? 10).clamp(5, 15),
+                hasOperator: cMap['hasOperator'] == true || cMap['operatorUid'] != null,
+                operatorUid: cMap['operatorUid']?.toString(),
+                raw: cMap,
+              );
+              cacheRecord(resolvedId, rec);
+              cacheRecord(chamberId, rec);
+              if (cleanName.isNotEmpty) cacheRecord(cleanName, rec);
               return rec;
             }
           }

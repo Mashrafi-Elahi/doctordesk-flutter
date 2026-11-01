@@ -142,6 +142,7 @@ service cloud.firestore {
       allow create: if isAuthenticated() && (
         (request.resource.data.userId == request.auth.uid &&
           request.resource.data.status == 'requested' &&
+          (!('source' in request.resource.data) || request.resource.data.source == null) &&
           (!('queuePosition' in request.resource.data) || request.resource.data.queuePosition == null) &&
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
           (!('doctorProfileId' in getUserData()) ||

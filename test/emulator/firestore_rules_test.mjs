@@ -511,4 +511,34 @@ describe('scheduling algorithm and atomic reservation rules', () => {
       date: '20300101',
     }));
   });
+
+  it('operator can create a walk-in for their chamber, not for another chamber, patient cannot', async () => {
+    const operatorDb = testEnv.authenticatedContext('operator').firestore();
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+
+    const walkInChamberA = {
+      patientName: 'Walk-in Patient',
+      chamberId: 'chamber-a',
+      doctorId: 'doctor-profile',
+      status: 'confirmed',
+      source: 'walk_in',
+      queuePosition: 1,
+      scheduledTime: new Date('2030-01-01T17:00:00Z'),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // 1. Operator assigned to chamber-a CAN create walk-in for chamber-a
+    await assertSucceeds(setDoc(doc(operatorDb, 'appointments/walkin-chamber-a'), walkInChamberA));
+
+    // 2. Operator CANNOT create walk-in for another chamber (chamber-b)
+    const walkInChamberB = {
+      ...walkInChamberA,
+      chamberId: 'chamber-b',
+    };
+    await assertFails(setDoc(doc(operatorDb, 'appointments/walkin-chamber-b'), walkInChamberB));
+
+    // 3. Patient CANNOT create a walk-in appointment
+    await assertFails(setDoc(doc(patientDb, 'appointments/walkin-by-patient'), walkInChamberA));
+  });
 });

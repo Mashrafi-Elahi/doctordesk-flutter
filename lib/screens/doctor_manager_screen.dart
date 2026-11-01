@@ -481,6 +481,19 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
                           .collection('doctors')
                           .doc(_doctorProfileId)
                           .set({'chambers': _chambers}, SetOptions(merge: true));
+
+                      final chId = (chamberData['id'] ?? '').toString();
+                      if (chId.isNotEmpty) {
+                        await FirebaseFirestore.instance
+                            .collection('chambers')
+                            .doc(chId)
+                            .set({
+                              ...chamberData,
+                              'doctorId': _doctorProfileId,
+                              'doctorName': user?.displayName ?? 'Doctor',
+                              'updatedAt': FieldValue.serverTimestamp(),
+                            }, SetOptions(merge: true));
+                      }
                     } catch (_) {}
                   }
 
