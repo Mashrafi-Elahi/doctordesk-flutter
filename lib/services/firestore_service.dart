@@ -603,12 +603,11 @@ class FirestoreService {
             bestChamber = ch;
           }
         } else if (isAreaMatch) {
-          bestDist = null;
-          bestChamber = ch;
+          bestChamber ??= ch;
         }
       }
 
-      if (bestDist != null && bestChamber != null) {
+      if (bestChamber != null) {
         final copy = Map<String, dynamic>.from(data);
         copy['distance'] = bestDist;
         copy['chamber'] = bestChamber;
@@ -2713,8 +2712,8 @@ class FirestoreService {
         'education': ['MBBS', 'FCPS'],
         'bmdcRegNumber': 'A-98765',
         'isBmdcVerified': true,
-        'ratingAverage': 4.9,
-        'ratingCount': 34,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Bup Medical',
@@ -2733,8 +2732,8 @@ class FirestoreService {
         'education': ['MBBS', 'FCPS', 'FRCS'],
         'bmdcRegNumber': 'A-12345',
         'isBmdcVerified': true,
-        'ratingAverage': 4.8,
-        'ratingCount': 120,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Dhaka Medical College Hospital',
@@ -2753,8 +2752,8 @@ class FirestoreService {
         'education': ['MBBS', 'FCPS', 'MRCP'],
         'bmdcRegNumber': 'A-23456',
         'isBmdcVerified': true,
-        'ratingAverage': 4.9,
-        'ratingCount': 88,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Square Hospital',
@@ -2773,8 +2772,8 @@ class FirestoreService {
         'education': ['MBBS', 'DLO', 'FCPS'],
         'bmdcRegNumber': 'A-34567',
         'isBmdcVerified': true,
-        'ratingAverage': 4.7,
-        'ratingCount': 52,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Green Life Hospital',
@@ -2793,8 +2792,8 @@ class FirestoreService {
         'education': ['MBBS', 'FCPS', 'MS (Gynae)'],
         'bmdcRegNumber': 'A-45678',
         'isBmdcVerified': true,
-        'ratingAverage': 4.9,
-        'ratingCount': 95,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Popular Diagnostic Centre',
@@ -2813,8 +2812,8 @@ class FirestoreService {
         'education': ['MBBS', 'DDV', 'FCPS'],
         'bmdcRegNumber': 'A-56789',
         'isBmdcVerified': true,
-        'ratingAverage': 4.8,
-        'ratingCount': 63,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Labaid Specialized Hospital',
@@ -2833,8 +2832,8 @@ class FirestoreService {
         'education': ['MBBS', 'FCPS'],
         'bmdcRegNumber': 'A-67890',
         'isBmdcVerified': true,
-        'ratingAverage': 4.8,
-        'ratingCount': 42,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'Ibn Sina Medical College Hospital',
@@ -2853,8 +2852,8 @@ class FirestoreService {
         'education': ['MBBS', 'MS (CTS)', 'FACS'],
         'bmdcRegNumber': 'A-67890',
         'isBmdcVerified': true,
-        'ratingAverage': 4.9,
-        'ratingCount': 142,
+        'ratingAverage': 0.0,
+        'ratingCount': 0,
         'chambers': [
           {
             'hospitalName': 'National Heart Foundation',

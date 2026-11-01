@@ -225,6 +225,19 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     }
 
     // Build (id, label) pairs -- chamberId must be the Firestore doc ID, not the name.
+    final isClaimed = doctor.claimedByUid != null && doctor.claimedByUid!.trim().isNotEmpty;
+    if (!isClaimed) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("This doctor hasn't joined DoctorDesk yet"),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
     final chamberOptions = <({String id, String label})>[];
     for (final c in doctor.chambers) {
       final id = (c.id ?? '').trim();
@@ -1038,6 +1051,54 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
               }
 
               final hasUnlockedChat = _unlockedChatSession != null && _unlockedChatSession!.canSendMessage;
+              final isClaimed = doctor.claimedByUid != null && doctor.claimedByUid!.trim().isNotEmpty;
+              final theme = Theme.of(context);
+
+              Widget buildBookAppointmentButton({bool isExpanded = false}) {
+                if (isClaimed) {
+                  return FilledButton(
+                    onPressed: () => _showBookingSheet(doctor),
+                    style: FilledButton.styleFrom(
+                      minimumSize: Size(isExpanded ? 0 : double.infinity, 50),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                      ),
+                    ),
+                    child: Text(
+                      'Book Appointment',
+                      style: isExpanded
+                          ? AppTheme.buttonText.copyWith(fontSize: 13)
+                          : AppTheme.buttonText,
+                    ),
+                  );
+                } else {
+                  return OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: theme.primaryColor,
+                      side: BorderSide(color: theme.primaryColor.withValues(alpha: 0.4)),
+                      minimumSize: Size(isExpanded ? 0 : double.infinity, 50),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                      ),
+                    ),
+                    onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("This doctor hasn't joined DoctorDesk yet"),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    ),
+                    child: Text(
+                      'Book Appointment',
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w600,
+                        color: theme.primaryColor,
+                        fontSize: isExpanded ? 13 : 14,
+                      ),
+                    ),
+                  );
+                }
+              }
 
               if (hasUnlockedChat) {
                 return Row(
@@ -1075,34 +1136,13 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       flex: 6,
-                      child: FilledButton(
-                        onPressed: () => _showBookingSheet(doctor),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 50),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                          ),
-                        ),
-                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
-                      ),
+                      child: buildBookAppointmentButton(isExpanded: true),
                     ),
                   ],
                 );
               }
 
-              return FilledButton(
-                onPressed: () => _showBookingSheet(doctor),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 50),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-                  ),
-                ),
-                child: Text(
-                  'Book Appointment',
-                  style: AppTheme.buttonText,
-                ),
-              );
+              return buildBookAppointmentButton(isExpanded: false);
             },
           ),
         ),

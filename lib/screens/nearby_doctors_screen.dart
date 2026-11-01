@@ -376,8 +376,11 @@ class _NearbyDoctorsScreenState extends State<NearbyDoctorsScreen> {
   }
 
   String? _formatDistance(double? km) {
-    if (km == null) return null; // no coords -> hide the label
-    return '${km.toStringAsFixed(1)} km away'; // always km, so "0.0 km" at the same spot
+    if (km == null) return null;
+    if (km < 1.0) {
+      return '${(km * 1000).round()} m away';
+    }
+    return '${km.toStringAsFixed(1)} km away';
   }
 
   Future<void> _showLocationPicker() async {
