@@ -211,4 +211,92 @@ describe('appointment authorization', () => {
       createdAt: new Date('2030-01-01T09:00:00Z'),
     }));
   });
+
+  it('prevents a patient from confirming an appointment, setting time, or setting queue number', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+
+    // Patient cannot create appointment as confirmed
+    await assertFails(setDoc(doc(patientDb, 'appointments/patient-direct-confirm'), requestedAppointment({
+      status: 'confirmed',
+    })));
+
+    // Patient cannot create appointment with a queue position
+    await assertFails(setDoc(doc(patientDb, 'appointments/patient-direct-queue'), requestedAppointment({
+      queuePosition: 1,
+    })));
+
+    // Create a valid requested appointment
+    await assertSucceeds(setDoc(doc(patientDb, 'appointments/patient-valid-appt'), requestedAppointment()));
+
+    // Patient cannot update appointment status to confirmed
+    await assertFails(updateDoc(doc(patientDb, 'appointments/patient-valid-appt'), {
+      status: 'confirmed',
+    }));
+
+    // Patient cannot update scheduledTime
+    await assertFails(updateDoc(doc(patientDb, 'appointments/patient-valid-appt'), {
+      scheduledTime: new Date('2030-01-02T10:00:00Z'),
+    }));
+  });
+
+  it('prevents a patient from writing to queues collection', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertFails(setDoc(doc(patientDb, 'queues/chamber-a_2030-01-01'), {
+      chamberId: 'chamber-a',
+      date: '2030-01-01',
+      currentNumber: 1,
+    }));
+  });
+
+  it('prevents a patient from creating or activating a chat', async () => {
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    // Patient cannot create chat
+    await assertFails(setDoc(doc(patientDb, 'chats/patient-created-chat'), {
+      patientUid: 'patient',
+      doctorUid: 'doctor',
+      isActive: true,
+      createdAt: new Date('2030-01-01T09:00:00Z'),
+    }));
+
+    // Seed inactive chat by doctor
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'chats/care-chat'), {
+        patientUid: 'patient',
+        doctorUid: 'doctor',
+        isActive: false,
+        messageCount: 0,
+      });
+    });
+
+    // Patient cannot activate chat
+    await assertFails(updateDoc(doc(patientDb, 'chats/care-chat'), {
+      isActive: true,
+    }));
+  });
+
+  it('prevents a stranger from reading a chat', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'chats/private-chat'), {
+        patientUid: 'patient',
+        doctorUid: 'doctor',
+        participants: ['patient', 'doctor'],
+      });
+    });
+
+    const strangerDb = testEnv.authenticatedContext('stranger').firestore();
+    await assertFails(getDoc(doc(strangerDb, 'chats/private-chat')));
+
+    const patientDb = testEnv.authenticatedContext('patient').firestore();
+    await assertSucceeds(getDoc(doc(patientDb, 'chats/private-chat')));
+  });
+
+  it('prevents a doctor from setting isAdmin on their own user profile', async () => {
+    const doctorDb = testEnv.authenticatedContext('doctor').firestore();
+    await assertFails(updateDoc(doc(doctorDb, 'users/doctor'), {
+      'roles.isAdmin': true,
+    }));
+    await assertFails(updateDoc(doc(doctorDb, 'users/doctor'), {
+      roles: { isDoctor: true, isAdmin: true },
+    }));
+  });
 });
