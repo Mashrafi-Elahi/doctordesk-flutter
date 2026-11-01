@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,6 +7,7 @@ import '../services/api_service.dart';
 import '../services/data_service.dart';
 import '../services/auth_service.dart';
 import '../services/app_language.dart';
+import '../services/chamber_resolver.dart';
 import '../widgets/profile_avatar_button.dart';
 import 'doctors_screen.dart';
 
@@ -71,8 +73,18 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
             ),
           ),
         ),
-        body: currentUid == null
-            ? const TabBarView(
+        body: StreamBuilder<User?>(
+          stream: AuthService.authStateChanges,
+          initialData: AuthService.currentUser,
+          builder: (context, authSnapshot) {
+            if (authSnapshot.connectionState == ConnectionState.waiting &&
+                !authSnapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final user = authSnapshot.data;
+            if (user == null) {
+              return const TabBarView(
                 children: [
                   _EmptyState(
                     icon: Icons.calendar_today_outlined,
@@ -86,8 +98,11 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                         'Your visit history will show up here after consultations.',
                   ),
                 ],
-              )
-            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              );
+            }
+
+            final currentUid = user.uid;
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: FirebaseFirestore.instance
                     .collection('appointments')
                     .where('userId', isEqualTo: currentUid)
@@ -177,11 +192,19 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                             FontWeight.bold,
                                                         fontSize: 16),
                                                   ),
-                                                  Text(
-                                                    'Chamber: $chamber',
-                                                    style: TextStyle(
-                                                        color: Colors.grey[600],
-                                                        fontSize: 13),
+                                                  FutureBuilder<String>(
+                                                    future: ChamberResolver.resolveChamberName(
+                                                      chamberId: (data['chamberId'] ?? '').toString(),
+                                                      storedName: data['chamberName']?.toString(),
+                                                      doctorId: data['doctorId']?.toString(),
+                                                    ),
+                                                    initialData: ChamberResolver.getCached(data['chamberId']?.toString()),
+                                                    builder: (ctx, snap) => Text(
+                                                      'Chamber: ${snap.data ?? 'Chamber'}',
+                                                      style: TextStyle(
+                                                          color: Colors.grey[600],
+                                                          fontSize: 13),
+                                                    ),
                                                   ),
                                                 ],
                                               ),
@@ -316,8 +339,17 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                     leading: const Icon(Icons.check_circle,
                                         color: Colors.green),
                                     title: Text(docName),
-                                    subtitle: Text(
-                                        'Chamber: ${data['chamberId'] ?? 'General'}'),
+                                    subtitle: FutureBuilder<String>(
+                                      future: ChamberResolver.resolveChamberName(
+                                        chamberId: (data['chamberId'] ?? '').toString(),
+                                        storedName: data['chamberName']?.toString(),
+                                        doctorId: data['doctorId']?.toString(),
+                                      ),
+                                      initialData: ChamberResolver.getCached(data['chamberId']?.toString()),
+                                      builder: (ctx, snap) => Text(
+                                        'Chamber: ${snap.data ?? 'Chamber'}',
+                                      ),
+                                    ),
                                   ),
                                 );
                               },
@@ -325,7 +357,9 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                     ],
                   );
                 },
-              ),
+              );
+          },
+        ),
         floatingActionButton: FloatingActionButton(
           heroTag: null,
           onPressed: () {

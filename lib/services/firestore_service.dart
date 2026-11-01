@@ -2100,6 +2100,7 @@ class FirestoreService {
     required String patientName,
     required DateTime scheduledTime,
     String? chamberId,
+    String? chamberName,
     String? doctorId,
     String? doctorName,
     String? operatorNote,
@@ -2137,6 +2138,7 @@ class FirestoreService {
 
     // 1. Look up desk operators for the chamber (users whose operatorAssignments contains chamberId)
     List<String> operatorUids = [];
+    String resolvedChamberName = (chamberName ?? '').trim();
     if (resolvedChamberId.isNotEmpty) {
       try {
         final opUsersSnap = await _db
@@ -2147,6 +2149,40 @@ class FirestoreService {
             .map((d) => d.id)
             .where((id) => id.isNotEmpty && id != uid)
             .toList();
+
+        // Check doctor document's chambers list for fallback operator mapping and chamber name
+        if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
+          final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
+          if (docSnap.exists) {
+            final rawChambers = (docSnap.data()?['chambers'] as List?) ?? [];
+            for (final c in rawChambers) {
+              final cMap = Map<String, dynamic>.from(c as Map);
+              final cId = (cMap['id'] ?? '').toString();
+              final cHospital = (cMap['hospitalName'] ?? cMap['name'] ?? '').toString();
+              if (cId == resolvedChamberId || cHospital == resolvedChamberId) {
+                if (resolvedChamberName.isEmpty && cHospital.isNotEmpty) {
+                  resolvedChamberName = cHospital;
+                }
+                final directOpUid = (cMap['operatorUid'] ?? '').toString();
+                if (directOpUid.isNotEmpty && directOpUid != uid && !operatorUids.contains(directOpUid)) {
+                  operatorUids.add(directOpUid);
+                }
+                final altId = cId == resolvedChamberId ? cHospital : cId;
+                if (altId.isNotEmpty && altId != resolvedChamberId) {
+                  final altSnap = await _db
+                      .collection('users')
+                      .where('operatorAssignments', arrayContains: altId)
+                      .get();
+                  for (final d in altSnap.docs) {
+                    if (d.id.isNotEmpty && d.id != uid && !operatorUids.contains(d.id)) {
+                      operatorUids.add(d.id);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       } catch (_) {}
     }
 
@@ -2178,6 +2214,7 @@ class FirestoreService {
           'doctorName': doctorName ?? 'Specialist Doctor',
           'scheduledTime': Timestamp.fromDate(scheduledTime),
           'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+          if (resolvedChamberName.isNotEmpty) 'chamberName': resolvedChamberName,
           'doctorId': resolvedDoctorId,
           'operatorNote': operatorNote ?? '',
           'status': apptStatus,
@@ -2211,6 +2248,7 @@ class FirestoreService {
         'doctorName': doctorName ?? 'Specialist Doctor',
         'scheduledTime': Timestamp.fromDate(scheduledTime),
         'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+        if (resolvedChamberName.isNotEmpty) 'chamberName': resolvedChamberName,
         'doctorId': resolvedDoctorId,
         'operatorNote': operatorNote ?? '',
         'status': apptStatus,
@@ -3098,6 +3136,18 @@ class FirestoreService {
       try {
         await _db.collection('active_bookings').doc(activeKey).delete();
       } catch (_) {}
+    } else {
+      final chamberId = (apptData['chamberId'] ?? '').toString();
+      final doctorId = (apptData['doctorId'] ?? '').toString();
+      final ts = apptData['scheduledTime'];
+      if (patientUid.isNotEmpty && doctorId.isNotEmpty && ts is Timestamp) {
+        final dt = ts.toDate();
+        final dateKey = '${dt.year}-${dt.month.toString().padLeft(2, "0")}-${dt.day.toString().padLeft(2, "0")}';
+        final fallbackKey = '${patientUid}_${doctorId}_${chamberId}_$dateKey';
+        try {
+          await _db.collection('active_bookings').doc(fallbackKey).delete();
+        } catch (_) {}
+      }
     }
 
     if (patientUid.isNotEmpty) {
@@ -3128,6 +3178,18 @@ class FirestoreService {
       try {
         await _db.collection('active_bookings').doc(activeKey).delete();
       } catch (_) {}
+    } else {
+      final chamberId = (apptData['chamberId'] ?? '').toString();
+      final doctorId = (apptData['doctorId'] ?? '').toString();
+      final ts = apptData['scheduledTime'];
+      if (patientUid.isNotEmpty && doctorId.isNotEmpty && ts is Timestamp) {
+        final dt = ts.toDate();
+        final dateKey = '${dt.year}-${dt.month.toString().padLeft(2, "0")}-${dt.day.toString().padLeft(2, "0")}';
+        final fallbackKey = '${patientUid}_${doctorId}_${chamberId}_$dateKey';
+        try {
+          await _db.collection('active_bookings').doc(fallbackKey).delete();
+        } catch (_) {}
+      }
     }
   }
 
@@ -3235,12 +3297,29 @@ class FirestoreService {
     final doctorId = (apptData['doctorId'] ?? '').toString();
     final doctorName = (apptData['doctorName'] ?? 'Doctor').toString();
 
-    // 1. Mark appointment completed
+    // 1. Mark appointment completed ('done' aligns with AppointmentQueries.completedForChamber / completedForDoctor)
     await apptRef.update({
-      'status': 'completed',
+      'status': 'done',
       'completedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    // 2. Release active_bookings lock on completion
+    final activeKey = apptData['activeBookingKey']?.toString();
+    final chamberId = (apptData['chamberId'] ?? '').toString();
+    final ts = apptData['scheduledTime'];
+    if (activeKey != null && activeKey.isNotEmpty) {
+      try {
+        await _db.collection('active_bookings').doc(activeKey).delete();
+      } catch (_) {}
+    } else if (patientUid.isNotEmpty && doctorId.isNotEmpty && ts is Timestamp) {
+      final dt = ts.toDate();
+      final dateKey = '${dt.year}-${dt.month.toString().padLeft(2, "0")}-${dt.day.toString().padLeft(2, "0")}';
+      final fallbackKey = '${patientUid}_${doctorId}_${chamberId}_$dateKey';
+      try {
+        await _db.collection('active_bookings').doc(fallbackKey).delete();
+      } catch (_) {}
+    }
 
     if (doctorId.isEmpty || patientUid.isEmpty) return;
 

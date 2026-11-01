@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/user_role.dart';
 import '../services/appointment_queries.dart';
 import '../services/auth_service.dart';
+import '../services/chamber_resolver.dart';
 import '../services/data_service.dart';
 import '../services/firestore_service.dart';
 import '../widgets/profile_avatar_button.dart';
@@ -126,7 +127,14 @@ class _OperatorDeskScreenState extends State<OperatorDeskScreen> {
     }
   }
 
-  String _chamberName(String chamberId) => _chamberNames[chamberId] ?? 'Assigned chamber';
+  String _chamberName(String chamberId) {
+    final cached = _chamberNames[chamberId];
+    if (cached != null && cached.isNotEmpty && !cached.startsWith('chamber-')) {
+      return cached;
+    }
+    final res = ChamberResolver.getCached(chamberId);
+    return res != 'Chamber' ? res : 'Chamber';
+  }
 
   Future<List<String>> _doctorsFor(String chamberId) =>
       _doctorFutures.putIfAbsent(chamberId, () => DataService.fetchChamberDoctors(chamberId));

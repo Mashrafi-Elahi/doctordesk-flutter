@@ -360,6 +360,10 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   selectedDate.month,
                                   selectedDate.day,
                                 );
+                                final selectedOption = chamberOptions.firstWhere(
+                                  (o) => o.id == selectedChamberId,
+                                  orElse: () => (id: selectedChamberId, label: 'Chamber'),
+                                );
                                 await FirestoreService.createAppointment(
                                   patientName:
                                       patientNameCtrl.text.trim().isNotEmpty
@@ -367,6 +371,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                           : 'Patient',
                                   scheduledTime: scheduled,
                                   chamberId: selectedChamberId,
+                                  chamberName: selectedOption.label,
                                   doctorId: doctor.id,
                                   doctorName: doctor.name,
                                   status: 'requested',
@@ -376,7 +381,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                   messenger.showSnackBar(
                                     const SnackBar(
                                       content: Text(
-                                          'Appointment request submitted! The chamber desk will confirm your queue number and time.'),
+                                          'Request sent. You will be notified once it is confirmed with a date and time.'),
                                       behavior: SnackBarBehavior.floating,
                                     ),
                                   );
