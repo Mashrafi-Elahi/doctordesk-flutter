@@ -195,7 +195,7 @@ class _DoctorManagerScreenState extends State<DoctorManagerScreen> {
             : TabBarView(
                 children: [
                   // Tab 1: Live Patient Queue Desk
-                  const OperatorDeskScreen(showAppBar: false),
+                  OperatorDeskScreen(showAppBar: false, doctorId: _doctorProfileId),
 
                   // Tab 2: Chambers & Operator Assignment
                   _buildChambersSection(colorScheme),

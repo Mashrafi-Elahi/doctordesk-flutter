@@ -207,6 +207,7 @@ class DataService {
     String? phone,
     String? role,
     bool isDoctor = false,
+    String? photoUrl,
   }) {
     if (isFirestore) {
       return FirestoreService.syncUser(
@@ -216,6 +217,7 @@ class DataService {
         phone: phone,
         role: role,
         isDoctor: isDoctor,
+        photoUrl: photoUrl,
       );
     }
     return ApiService.syncUser(
@@ -225,6 +227,7 @@ class DataService {
       phone: phone,
       role: role,
       isDoctor: isDoctor,
+      photoUrl: photoUrl,
     );
   }
 
@@ -609,5 +612,115 @@ class DataService {
       return FirestoreService.rejectOperatorApplication(applicationId);
     }
     return Future.value();
+  }
+
+  static Future<void> uploadBundledDoctorsToFirestore({
+    required Function(int processed, int total, String status) onProgress,
+    bool restartFromBeginning = false,
+  }) {
+    return FirestoreService.uploadBundledDoctorsToFirestore(
+      onProgress: onProgress,
+      restartFromBeginning: restartFromBeginning,
+    );
+  }
+
+  static Future<Map<String, dynamic>> assignDoctorToEmail({
+    required String doctorId,
+    required String email,
+  }) {
+    return FirestoreService.assignDoctorToEmail(
+      doctorId: doctorId,
+      email: email,
+    );
+  }
+
+  static Future<void> recordManualBmdcVerification({
+    required String doctorId,
+    required String registrationNumber,
+    required String outcome,
+    String? note,
+  }) {
+    return FirestoreService.recordManualBmdcVerification(
+      doctorId: doctorId,
+      registrationNumber: registrationNumber,
+      outcome: outcome,
+      note: note,
+    );
+  }
+
+  static Stream<int> streamTodayWaitingCount(String chamberId) {
+    return FirestoreService.streamTodayWaitingCount(chamberId);
+  }
+
+  static Future<List<String>> fetchChamberDoctors(String chamberId) {
+    return FirestoreService.fetchChamberDoctors(chamberId);
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId) {
+    return FirestoreService.fetchChamberDoctorDetails(chamberId);
+  }
+
+  static Future<void> confirmAppointment({
+    required String appointmentId,
+    required DateTime confirmedTime,
+    int slotMinutes = 15,
+  }) {
+    return FirestoreService.confirmAppointment(
+      appointmentId: appointmentId,
+      confirmedTime: confirmedTime,
+      slotMinutes: slotMinutes,
+    );
+  }
+
+  static Future<void> rescheduleAppointment({
+    required String appointmentId,
+    required DateTime newTime,
+    int slotMinutes = 15,
+  }) {
+    return FirestoreService.rescheduleAppointment(
+      appointmentId: appointmentId,
+      newTime: newTime,
+      slotMinutes: slotMinutes,
+    );
+  }
+
+  static Future<void> rejectAppointment({
+    required String appointmentId,
+    required String reason,
+  }) {
+    return FirestoreService.rejectAppointment(
+      appointmentId: appointmentId,
+      reason: reason,
+    );
+  }
+
+  static Future<void> cancelAppointmentByPatient(String appointmentId) {
+    return FirestoreService.cancelAppointmentByPatient(appointmentId);
+  }
+
+  static Future<void> reroutePendingRequests({
+    List<String>? chamberIds,
+    String? doctorId,
+  }) {
+    return FirestoreService.reroutePendingRequests(
+      chamberIds: chamberIds,
+      doctorId: doctorId,
+    );
+  }
+
+  static Future<List<DateTime>> getFreeSlotsForDoctor({
+    required String doctorId,
+    required DateTime date,
+    int slotMinutes = 15,
+  }) {
+    return FirestoreService.getFreeSlotsForDoctor(
+      doctorId: doctorId,
+      date: date,
+      slotMinutes: slotMinutes,
+    );
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchTestAppointments() {
+    return FirestoreService.fetchTestAppointments();
   }
 }

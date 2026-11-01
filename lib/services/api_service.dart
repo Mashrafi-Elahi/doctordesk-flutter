@@ -562,6 +562,7 @@ class ApiService {
     String? phone,
     String? role,
     bool isDoctor = false,
+    String? photoUrl,
   }) async {
     if (FirestoreConfig.useFirestore) {
       return FirestoreService.syncUser(
@@ -571,6 +572,7 @@ class ApiService {
         phone: phone,
         role: role,
         isDoctor: isDoctor,
+        photoUrl: photoUrl,
       );
     }
 

@@ -24,6 +24,7 @@ class AuthService {
 
   static UserRoles _currentUserRoles = const UserRoles();
   static UserRoles get userRoles => _currentUserRoles;
+  static bool get isAdmin => _currentUserRoles.isAdmin;
 
   static bool _isGuestMode = false;
   static bool get isGuest => _isGuestMode && !isSignedIn;
@@ -59,18 +60,35 @@ class AuthService {
     );
   }
 
+  static UserRole _activeRole = UserRole.patient;
+  static UserRole get activeRole => _activeRole;
+
   static Future<UserRole> getSavedRole() async {
     final prefs = await SharedPreferences.getInstance();
     final isGuest = prefs.getBool('is_guest_mode') ?? false;
-    if (isGuest) return UserRole.patient;
+    if (isGuest) {
+      _activeRole = UserRole.patient;
+      return UserRole.patient;
+    }
     final roleStr = prefs.getString('user_role');
-    if (roleStr == 'admin') return UserRole.admin;
-    if (roleStr == 'doctor') return UserRole.doctor;
-    if (roleStr == 'operator') return UserRole.operator;
+    if (roleStr == 'admin') {
+      _activeRole = UserRole.admin;
+      return UserRole.admin;
+    }
+    if (roleStr == 'doctor') {
+      _activeRole = UserRole.doctor;
+      return UserRole.doctor;
+    }
+    if (roleStr == 'operator') {
+      _activeRole = UserRole.operator;
+      return UserRole.operator;
+    }
+    _activeRole = UserRole.patient;
     return UserRole.patient;
   }
 
   static Future<void> saveRole(UserRole role) async {
+    _activeRole = role;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user_role', role.name);
   }
@@ -113,6 +131,7 @@ class AuthService {
       await ApiService.syncUser(
         uid: credential.user!.uid,
         email: email.trim(),
+        photoUrl: credential.user?.photoURL,
       );
       await fetchUserRoles();
       if (_currentUserRoles.isAdmin) {
@@ -153,6 +172,7 @@ class AuthService {
       await ApiService.syncUser(
         uid: credential.user!.uid,
         email: email.trim(),
+        photoUrl: credential.user?.photoURL,
         name: name ?? '',
         phone: phone ?? '',
         isDoctor: isDoctor,
@@ -201,6 +221,7 @@ class AuthService {
           email: user.email ?? '',
           name: user.displayName ?? '',
           isDoctor: isDoctor,
+          photoUrl: user.photoURL,
         );
       }
       await fetchUserRoles();

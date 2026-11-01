@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,6 +10,7 @@ import '../models/doctor.dart';
 import 'doctor_search_index.dart';
 import 'geofire_utils.dart';
 import 'notification_service.dart';
+import 'chat_service.dart';
 
 /// Cloud Firestore service providing complete data access for DoctorDesk.
 /// Matches the method signatures of [ApiService] for transparent backend switching.
@@ -72,14 +74,162 @@ class FirestoreService {
   /// Fetches doctors with pagination, optional specialty filter, and indexed
   /// multilingual token search across names, specialties, symptoms, chambers, and degrees.
   /// Uses the 6,000+ bundled APK directory directly to avoid hitting Firestore 50k read limits.
+  static final Map<String, List<DocumentSnapshot>> _fetchCursors = {};
+
+  /// Fetches doctors with pagination. Firestore `doctors` is the primary source of truth.
+  /// Uses cursor-based pagination (startAfterDocument). If offline or Firestore fails,
+  /// falls back to local cache and bundled list, merging by doctor ID (Firestore wins).
   static Future<Map<String, dynamic>> fetchDoctors({
     int page = 1,
     int limit = 20,
     String? search,
     String? speciality,
   }) async {
+    final normSearch = search?.trim() ?? '';
+    final normSpec = (speciality != null && speciality.trim().isNotEmpty && speciality != 'All')
+        ? speciality.trim()
+        : null;
+    final queryKey = '${normSpec ?? ""}|$normSearch|$limit';
+
+    try {
+      Query<Map<String, dynamic>> query = _db.collection('doctors');
+
+      if (normSpec != null) {
+        query = query.where('specialities', arrayContains: normSpec);
+      }
+
+      if (normSearch.isNotEmpty && normSpec == null) {
+        final prefixes = DoctorSearchIndex.queryPrefixes(normSearch);
+        if (prefixes.isNotEmpty) {
+          query = query.where('searchPrefixes', arrayContainsAny: prefixes.take(10).toList());
+        }
+      }
+
+      if (normSearch.isEmpty) {
+        query = query.orderBy('name_lower', descending: false);
+      }
+
+      if (page > 1) {
+        final cursors = _fetchCursors[queryKey];
+        if (cursors != null && cursors.length >= page - 1) {
+          query = query.startAfterDocument(cursors[page - 2]);
+        }
+      }
+
+      query = query.limit(limit);
+      final snapshot = await query.get();
+
+      if (snapshot.docs.isNotEmpty) {
+        _fetchCursors.putIfAbsent(queryKey, () => []);
+        final cursors = _fetchCursors[queryKey]!;
+        if (cursors.length < page) {
+          cursors.add(snapshot.docs.last);
+        } else {
+          cursors[page - 1] = snapshot.docs.last;
+        }
+
+        final firestoreDoctors = snapshot.docs.map((docSnap) {
+          final data = Map<String, dynamic>.from(docSnap.data());
+          data['_id'] = docSnap.id;
+          data['id'] = docSnap.id;
+          return Doctor.fromJson(data);
+        }).where((d) => !d.isHidden && !d.isDeleted).toList();
+
+        List<Doctor> resultDocs = firestoreDoctors;
+        if (normSearch.isNotEmpty && normSpec != null) {
+          final rawMaps = firestoreDoctors.map((d) => d.toJson()).toList();
+          final ranked = DoctorSearchIndex.rank(rawMaps, normSearch);
+          resultDocs = ranked.map(Doctor.fromJson).toList();
+        }
+
+        if (page == 1 && normSearch.isEmpty && normSpec == null) {
+          _cacheDiscoveryDoctorsLocally(resultDocs);
+        }
+
+        final hasMore = snapshot.docs.length >= limit;
+        return {
+          'doctors': resultDocs,
+          'total': hasMore ? (page * limit) + limit : ((page - 1) * limit) + resultDocs.length,
+          'totalPages': hasMore ? page + 1 : page,
+          'isOffline': false,
+        };
+      } else if (page > 1) {
+        return {
+          'doctors': <Doctor>[],
+          'total': (page - 1) * limit,
+          'totalPages': page - 1,
+          'isOffline': false,
+        };
+      }
+      // If page == 1 and Firestore returns 0 docs (e.g. initial state before bundled upload),
+      // seamlessly fall through to fallback so discovery remains populated.
+    } catch (e) {
+      debugPrint('Firestore fetchDoctors online failed, falling back to cache/bundled: $e');
+    }
+
+    return _fetchDoctorsFallback(
+      page: page,
+      limit: limit,
+      search: search,
+      speciality: speciality,
+    );
+  }
+
+  static Future<void> _cacheDiscoveryDoctorsLocally(List<Doctor> docs) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = docs.map((d) => d.toJson()).toList();
+      await prefs.setString('cached_discovery_doctors', jsonEncode(list));
+    } catch (_) {}
+  }
+
+  static Future<List<Doctor>> _getLocalCachedDoctors() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final str = prefs.getString('cached_discovery_doctors');
+      if (str != null && str.isNotEmpty) {
+        final List decoded = jsonDecode(str);
+        return decoded.map((j) => Doctor.fromJson(Map<String, dynamic>.from(j as Map))).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<Map<String, dynamic>> _fetchDoctorsFallback({
+    int page = 1,
+    int limit = 20,
+    String? search,
+    String? speciality,
+  }) async {
+    final cachedDocs = await _getLocalCachedDoctors();
     final allMaps = await _getIndexedBundledMaps();
-    List<Map<String, dynamic>> records = List<Map<String, dynamic>>.from(allMaps);
+    final Map<String, Map<String, dynamic>> byId = {};
+
+    for (final m in allMaps) {
+      final id = (m['_id'] ?? m['id'] ?? '').toString();
+      byId[id] = Map<String, dynamic>.from(m);
+    }
+
+    // Cached Firestore docs merge with bundled, Firestore wins
+    for (final cd in cachedDocs) {
+      final cJson = cd.toJson();
+      if (byId.containsKey(cd.id)) {
+        byId[cd.id]!.addAll(cJson);
+      } else {
+        byId[cd.id] = cJson;
+      }
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final hiddenIds = (prefs.getStringList('hidden_doctor_ids') ?? []).toSet();
+    final deletedIds = (prefs.getStringList('deleted_doctor_ids') ?? []).toSet();
+
+    List<Map<String, dynamic>> records = byId.values.where((data) {
+      final id = (data['_id'] ?? data['id'] ?? '').toString();
+      if (hiddenIds.contains(id) || deletedIds.contains(id)) return false;
+      if (data['hidden'] == true || data['isHidden'] == true || data['isDeleted'] == true) return false;
+      return true;
+    }).toList();
 
     if (speciality != null &&
         speciality.trim().isNotEmpty &&
@@ -110,7 +260,7 @@ class FirestoreService {
       'doctors': doctors,
       'total': totalCount,
       'totalPages': totalPages,
-      'isOffline': false,
+      'isOffline': true,
     };
   }
 
@@ -224,9 +374,13 @@ class FirestoreService {
       'experienceYears': experienceYears,
       'education': education,
       'bmdcRegNumber': normalizedBmdc,
+      'bmdcNumber': normalizedBmdc,
       'isBmdcVerified': isClaimed && normalizedBmdc.isNotEmpty,
+      'verificationStatus': isClaimed && normalizedBmdc.isNotEmpty ? 'verified' : 'unverified',
       'isClaimed': isClaimed,
+      'claimStatus': isClaimed ? 'claimed' : 'unclaimed',
       if (isClaimed) 'claimedByUid': applicantUid.trim(),
+      'status': 'active',
       'ratingAverage': 0.0,
       'ratingCount': 0,
       'reviewCount': 0,
@@ -651,6 +805,7 @@ class FirestoreService {
         await _db.collection('doctors').doc(doctorId).set({
           'ratingAverage': 0.0,
           'ratingCount': 0,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       } else {
         double sum = 0;
@@ -667,6 +822,7 @@ class FirestoreService {
         await _db.collection('doctors').doc(doctorId).set({
           'ratingAverage': double.parse(avg.toStringAsFixed(1)),
           'ratingCount': allReviews.length,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
     } catch (e) {
@@ -734,6 +890,7 @@ class FirestoreService {
         await _db.collection('doctors').doc(doctorId).set({
           'ratingAverage': double.parse(avg.toStringAsFixed(1)),
           'ratingCount': allReviews.length,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
     } catch (e) {
@@ -784,6 +941,9 @@ class FirestoreService {
     return true;
   }
 
+  /// Submits a claim request for a doctor profile.
+  /// Creates a document in `claim_requests` with status 'pending'.
+  /// No role is granted automatically (requires admin review & approval).
   static Future<Map<String, dynamic>> claimDoctor(
     String doctorId, {
     required String bmdcRegNumber,
@@ -795,58 +955,51 @@ class FirestoreService {
       doctor = await fetchDoctorById(doctorId);
     } catch (_) {}
 
-    final doctorRef = _db.collection('doctors').doc(doctorId);
-    final claimData = <String, dynamic>{
-      'id': doctorId,
-      '_id': doctorId,
-      if (doctor != null) 'name': doctor.name,
-      if (doctor != null) 'specialities': doctor.specialities,
-      if (doctor != null) 'experienceYears': doctor.experienceYears,
-      if (doctor != null) 'education': doctor.education,
-      if (doctor != null) 'designation': doctor.designation,
-      if (doctor != null) 'chambers': doctor.chambers.map((c) => c.toJson()).toList(),
-      'bmdcRegNumber': bmdcRegNumber,
-      'claimedByUid': claimedByUid,
+    final doctorName = doctor?.name ?? 'Dr. Specialist';
+    final speciality = doctor?.specialities.isNotEmpty == true ? doctor!.specialities.first : 'General Medicine';
+    final chamberName = doctor?.chambers.isNotEmpty == true ? doctor!.chambers.first.hospitalName : '';
+
+    String applicantName = '';
+    String applicantEmail = '';
+    try {
+      final userSnap = await _db.collection('users').doc(claimedByUid).get();
+      if (userSnap.exists) {
+        final uData = userSnap.data() ?? {};
+        applicantName = (uData['name'] ?? uData['displayName'] ?? '').toString();
+        applicantEmail = (uData['email'] ?? '').toString();
+      }
+    } catch (_) {}
+
+    final claimDocRef = await _db.collection('claim_requests').add({
+      'doctorId': doctorId,
+      'doctorName': doctorName,
+      'speciality': speciality,
+      'chamberName': chamberName,
+      'applicantUid': claimedByUid,
+      'applicantName': applicantName,
+      'applicantEmail': applicantEmail,
+      'bmdcNumber': bmdcRegNumber,
       'certificateImageUrl': certificateImageUrl ?? '',
-      'isClaimed': true,
-      'isBmdcVerified': true,
-    };
+      'status': 'pending',
+      'submittedAt': FieldValue.serverTimestamp(),
+    });
 
-    // 1. Write doctor claim using set(merge: true) so it creates the document if missing
-    await doctorRef.set(claimData, SetOptions(merge: true));
+    // Notice: NO ROLE IS GRANTED AUTOMATICALLY. Admin must review and approve.
 
-    // 2. Link the user account in users/{claimedByUid}
-    final userRef = _db.collection('users').doc(claimedByUid);
-    await userRef.set({
-      'name': doctor?.name ?? 'Dr. Specialist',
-      'roles': {
-        'isDoctor': true,
-      },
-      'chamberCount': (doctor?.chambers.isNotEmpty == true) ? doctor!.chambers.length : 1,
-      'doctorProfileId': doctorId,
-      'bmdcRegNumber': bmdcRegNumber,
-      'doctorProfile': {
-        'id': doctorId,
-        'name': doctor?.name ?? 'Dr. Specialist',
-        'bmdcRegNumber': bmdcRegNumber,
-        'isBmdcVerified': true,
-      },
-    }, SetOptions(merge: true));
-
-    // 3. Trigger in-app notification
     try {
       await NotificationService.createNotification(
         userId: claimedByUid,
-        title: 'Doctor Profile Claimed',
-        body: 'You are now the verified doctor for ${doctor?.name ?? "your profile"}. You can now manage appointments and live queues.',
-        type: 'system',
+        title: 'Claim Request Submitted',
+        body: 'Your claim request for $doctorName has been submitted for admin verification.',
+        type: 'claim_pending',
         relatedId: doctorId,
       );
     } catch (_) {}
 
     return {
-      'isClaimed': true,
-      'isBmdcVerified': true,
+      'claimRequestId': claimDocRef.id,
+      'doctorId': doctorId,
+      'status': 'pending',
     };
   }
 
@@ -929,21 +1082,69 @@ class FirestoreService {
     required String operatorName,
     required String operatorEmail,
   }) async {
-    // 1. Update user document
+    // 1. Resolve human-readable chamber name and doctor name
+    final docRef = _db.collection('doctors').doc(doctorId);
+    final docSnap = await docRef.get();
+    String chamberName = chamberId;
+    String docName = 'Doctor';
+
+    if (docSnap.exists) {
+      final data = docSnap.data() ?? {};
+      docName = (data['name'] ?? 'Doctor').toString();
+      final rawChambers = (data['chambers'] as List?) ?? [];
+      for (final c in rawChambers) {
+        if (c is Map) {
+          final cid = (c['id'] ?? c['hospitalName'] ?? c['name'] ?? '').toString();
+          if (cid == chamberId) {
+            chamberName = (c['name'] ?? c['hospitalName'] ?? chamberId).toString();
+            break;
+          }
+        }
+      }
+    }
+    if (chamberName == chamberId) {
+      if (chamberId == 'demo-chamber') {
+        chamberName = 'Popular Central Diagnostic Desk';
+      } else if (chamberId == 'chamber-bup-1') {
+        chamberName = 'BUP Medical Center Desk';
+      } else if (chamberId.startsWith('chamber-')) {
+        chamberName = 'Chamber Desk (${chamberId.substring(8, 12.clamp(0, chamberId.length))})';
+      }
+    }
+
+    // 2. Save top-level chambers document
+    await _db.collection('chambers').doc(chamberId).set({
+      'id': chamberId,
+      'chamberId': chamberId,
+      'name': chamberName,
+      'chamberName': chamberName,
+      'doctorId': doctorId,
+      'doctorName': docName,
+      'operatorUid': operatorUid,
+      'operatorName': operatorName,
+      'operatorEmail': operatorEmail,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // 3. Update user document with operator role, operatorAssignments, and structured assignedChambers
     final userRef = _db.collection('users').doc(operatorUid);
     await userRef.set({
-      'name': operatorName,
-      'email': operatorEmail,
       'roles': {
         'isOperator': true,
       },
       'operatorAssignments': FieldValue.arrayUnion([chamberId]),
-      'assignedDoctorId': doctorId,
+      'assignedChambers': FieldValue.arrayUnion([
+        {
+          'chamberId': chamberId,
+          'chamberName': chamberName,
+          'doctorId': doctorId,
+          'doctorName': docName,
+        }
+      ]),
+      'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 2. Update the doctor document's chambers list
-    final docRef = _db.collection('doctors').doc(doctorId);
-    final docSnap = await docRef.get();
+    // 4. Update the doctor document's chambers list
     if (docSnap.exists) {
       final data = docSnap.data() ?? {};
       final rawChambers = (data['chambers'] as List?) ?? [];
@@ -961,12 +1162,12 @@ class FirestoreService {
       await docRef.update({'chambers': updatedChambers});
     }
 
-    // 3. Send in-app notification
+    // 5. Send in-app notification
     try {
       await NotificationService.createNotification(
         userId: operatorUid,
         title: 'Desk Operator Assigned',
-        body: 'You have been assigned as desk operator for $chamberId.',
+        body: 'You have been assigned as desk operator for $chamberName.',
         type: 'system',
         relatedId: chamberId,
       );
@@ -987,6 +1188,7 @@ class FirestoreService {
         currentAssignments.remove(chamberId);
         await userRef.set({
           'operatorAssignments': currentAssignments,
+          'updatedAt': FieldValue.serverTimestamp(),
           if (currentAssignments.isEmpty)
             'roles': {
               'isOperator': false,
@@ -1023,6 +1225,7 @@ class FirestoreService {
     String? phone,
     String? role,
     bool isDoctor = false,
+    String? photoUrl,
   }) async {
     try {
       final userRef = _db.collection('users').doc(uid);
@@ -1035,7 +1238,9 @@ class FirestoreService {
           'email': email ?? '',
           'name': name ?? '',
           'username': generatedUsername,
+          'photoUrl': photoUrl ?? '',
           'phone': phone ?? '',
+
           'roles': {
             'isDoctor': false,
             'isOperator': false,
@@ -1053,6 +1258,7 @@ class FirestoreService {
             'status': 'pending',
             'appliedAt': FieldValue.serverTimestamp(),
             'phone': phone ?? '',
+
             'name': name ?? '',
             'email': email ?? '',
           };
@@ -1100,6 +1306,11 @@ class FirestoreService {
             };
           }
         }
+        if (photoUrl != null && photoUrl.isNotEmpty && existing.data()?['photoUrl'] != photoUrl) {
+          updates['photoUrl'] = photoUrl;
+        }
+        updates['lastLoginAt'] = FieldValue.serverTimestamp();
+        updates['updatedAt'] = FieldValue.serverTimestamp();
         if (updates.isNotEmpty) {
           await userRef.update(updates);
         }
@@ -1488,10 +1699,14 @@ class FirestoreService {
           'designation': 'Consultant',
           'education': const <String>[],
           'bmdcRegNumber': bmdcNumber,
+          'bmdcNumber': bmdcNumber,
           'isClaimed': true,
+          'claimStatus': 'claimed',
           'claimedByUid': uid,
           // Approval records an application review, not automatic BMDC verification.
           'isBmdcVerified': false,
+          'verificationStatus': 'pending',
+          'status': 'active',
           'phone': application['phone']?.toString() ??
               user['phone']?.toString() ??
               '',
@@ -1786,6 +2001,7 @@ class FirestoreService {
   // APPOINTMENTS & QUEUE MANAGEMENT
   // =========================================================================
 
+  /// Fetches appointments for today (00:00 to 23:59) for a chamber or doctor.
   static Future<List<Map<String, dynamic>>> fetchTodayQueue(
       String chamberId) async {
     try {
@@ -1799,19 +2015,25 @@ class FirestoreService {
               .toList() ??
           const <String>[];
 
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day, 0, 0, 0);
+      final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+
       Query<Map<String, dynamic>> query = _db.collection('appointments');
       if (roles['isDoctor'] == true &&
           doctorProfileId != null &&
           doctorProfileId.isNotEmpty) {
         query = query.where('doctorId', isEqualTo: doctorProfileId);
-      } else if (roles['isOperator'] == true &&
-          assignments.contains(chamberId)) {
+      } else if ((roles['isOperator'] == true && assignments.contains(chamberId)) || roles['isAdmin'] == true) {
         query = query.where('chamberId', isEqualTo: chamberId);
       } else {
-        // A queue must never fall back to every appointment in the database.
         return [];
       }
-      query = query.orderBy('queuePosition', descending: false);
+
+      query = query
+          .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+          .orderBy('scheduledTime', descending: false);
 
       final snapshot = await query.get();
       return snapshot.docs.map((doc) {
@@ -1826,6 +2048,50 @@ class FirestoreService {
       }).toList();
     } catch (e) {
       debugPrint('Firestore fetchTodayQueue error: $e');
+      return [];
+    }
+  }
+
+  /// Live stream of today's waiting count for a chamber (single source of truth).
+  static Stream<int> streamTodayWaitingCount(String chamberId) {
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day, 0, 0, 0);
+    final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+
+    return _db
+        .collection('appointments')
+        .where('chamberId', isEqualTo: chamberId)
+        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+        .snapshots()
+        .map((snap) => snap.docs.where((doc) {
+              final status = (doc.data()['status'] ?? '').toString().toLowerCase();
+              return status != 'done' && status != 'cancelled';
+            }).length);
+  }
+
+  /// Fetches unique doctor names practicing in a chamber.
+  static Future<List<String>> fetchChamberDoctors(String chamberId) async {
+    try {
+      final snap = await _db.collection('doctors').limit(100).get();
+      final List<String> result = [];
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final chambers = (d['chambers'] as List?) ?? [];
+        for (final c in chambers) {
+          if (c is Map) {
+            final id = c['id'] ?? c['hospitalName'] ?? c['name'];
+            if (id == chamberId || c['hospitalName'] == chamberId) {
+              final name = (d['name'] ?? '').toString();
+              if (name.isNotEmpty && !result.contains(name)) {
+                result.add(name);
+              }
+            }
+          }
+        }
+      }
+      return result;
+    } catch (_) {
       return [];
     }
   }
@@ -1866,46 +2132,140 @@ class FirestoreService {
       }
     }
 
-    // Count only this creator's records. That query is allowed by the same
-    // owner rule and avoids leaking the global appointment count.
-    final countSnap = await _db
-        .collection('appointments')
-        .where('userId', isEqualTo: uid)
-        .count()
-        .get();
-    final count = countSnap.count ?? 0;
+    final isPatient = !isDoctorQueueEntry && !isAssignedOperator && roles['isAdmin'] != true;
+    final apptStatus = isPatient ? 'requested' : status;
 
-    final data = <String, dynamic>{
-      'patientName': patientName,
-      'doctorName': doctorName ?? 'Specialist Doctor',
-      'scheduledTime': Timestamp.fromDate(scheduledTime),
-      'chamberId':
-          resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
-      'doctorId': resolvedDoctorId,
-      'operatorNote': operatorNote ?? '',
-      'status': status,
-      'queuePosition': count + 1,
-      'userId': uid,
-      'createdAt': FieldValue.serverTimestamp(),
-    };
+    // 1. Look up desk operators for the chamber (users whose operatorAssignments contains chamberId)
+    List<String> operatorUids = [];
+    if (resolvedChamberId.isNotEmpty) {
+      try {
+        final opUsersSnap = await _db
+            .collection('users')
+            .where('operatorAssignments', arrayContains: resolvedChamberId)
+            .get();
+        operatorUids = opUsersSnap.docs
+            .map((d) => d.id)
+            .where((id) => id.isNotEmpty && id != uid)
+            .toList();
+      } catch (_) {}
+    }
 
-    final docRef = await _db.collection('appointments').add(data);
+    final bool hasOperator = operatorUids.isNotEmpty;
+    final String handledBy = hasOperator ? 'operator' : 'doctor';
+
+    final dateKey = '${scheduledTime.year}-${scheduledTime.month.toString().padLeft(2, "0")}-${scheduledTime.day.toString().padLeft(2, "0")}';
+    final activeBookingKey = '${uid}_${resolvedDoctorId ?? "doc"}_${resolvedChamberId}_$dateKey';
+    final activeBookingRef = _db.collection('active_bookings').doc(activeBookingKey);
+    final apptRef = _db.collection('appointments').doc();
+
+    if (isPatient) {
+      // Reject if this patient already has an active appointment with same doctor and chamber on same date.
+      // The active_bookings lock doc uniquely identifies (userId_doctorId_chamberId_dateKey),
+      // making a fast direct get() sufficient without needing a composite index on appointments.
+      final activeCheck = await activeBookingRef.get();
+      if (activeCheck.exists) {
+        throw StateError('You already have a request for this doctor on this date.');
+      }
+
+      await _db.runTransaction((tx) async {
+        final activeSnap = await tx.get(activeBookingRef);
+        if (activeSnap.exists) {
+          throw StateError('You already have a request for this doctor on this date.');
+        }
+
+        final data = <String, dynamic>{
+          'patientName': patientName,
+          'doctorName': doctorName ?? 'Specialist Doctor',
+          'scheduledTime': Timestamp.fromDate(scheduledTime),
+          'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+          'doctorId': resolvedDoctorId,
+          'operatorNote': operatorNote ?? '',
+          'status': apptStatus,
+          'handledBy': handledBy,
+          'activeBookingKey': activeBookingKey,
+          'userId': uid,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+
+        tx.set(apptRef, data);
+        tx.set(activeBookingRef, {
+          'appointmentId': apptRef.id,
+          'userId': uid,
+          'doctorId': resolvedDoctorId,
+          'chamberId': resolvedChamberId,
+          'date': dateKey,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      });
+    } else {
+      final countSnap = await _db
+          .collection('appointments')
+          .where('chamberId', isEqualTo: resolvedChamberId)
+          .count()
+          .get();
+      final queuePos = (countSnap.count ?? 0) + 1;
+
+      final data = <String, dynamic>{
+        'patientName': patientName,
+        'doctorName': doctorName ?? 'Specialist Doctor',
+        'scheduledTime': Timestamp.fromDate(scheduledTime),
+        'chamberId': resolvedChamberId.isEmpty ? 'demo-chamber' : resolvedChamberId,
+        'doctorId': resolvedDoctorId,
+        'operatorNote': operatorNote ?? '',
+        'status': apptStatus,
+        'handledBy': handledBy,
+        'queuePosition': queuePos,
+        'userId': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      await apptRef.set(data);
+    }
 
     try {
       final docLabel = doctorName ?? 'your doctor';
-      await NotificationService.createNotification(
-        userId: uid,
-        title: 'Appointment Confirmed',
-        body: 'Appointment with $docLabel scheduled on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
-        type: 'appointment',
-        relatedId: docRef.id,
-      );
+      // 1. Patient: "Appointment Requested"
+      if (isPatient) {
+        await NotificationService.createNotification(
+          userId: uid,
+          title: 'Appointment Requested',
+          body: 'Your request with $docLabel for ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year} has been submitted and is awaiting confirmation.',
+          type: 'appointment_requested',
+          relatedId: apptRef.id,
+        );
+      }
+
+      // 2. Exclusive notification: if operators exist, notify ONLY operators; if none, notify ONLY doctor. Never both. Never admin.
+      if (hasOperator) {
+        for (final opUid in operatorUids) {
+          await NotificationService.createNotification(
+            userId: opUid,
+            title: 'New Appointment Request',
+            body: '$patientName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
+            type: 'new_appointment_request',
+            relatedId: apptRef.id,
+          );
+        }
+      } else if (resolvedDoctorId != null && resolvedDoctorId.isNotEmpty) {
+        final docSnap = await _db.collection('doctors').doc(resolvedDoctorId).get();
+        final claimedByUid = (docSnap.data()?['claimedByUid'] ?? '').toString();
+        if (claimedByUid.isNotEmpty && claimedByUid != uid) {
+          await NotificationService.createNotification(
+            userId: claimedByUid,
+            title: 'New Appointment Request',
+            body: '$patientName has requested an appointment on ${scheduledTime.day}/${scheduledTime.month}/${scheduledTime.year}.',
+            type: 'new_appointment_request',
+            relatedId: apptRef.id,
+          );
+        }
+      }
     } catch (_) {}
 
     return {
-      '_id': docRef.id,
-      'id': docRef.id,
-      ...data,
+      '_id': apptRef.id,
+      'id': apptRef.id,
+      'status': apptStatus,
       'scheduledTime': scheduledTime.toIso8601String(),
     };
   }
@@ -1950,6 +2310,195 @@ class FirestoreService {
     await batch.commit();
   }
 
+  /// Stream or fetch claim requests for admin console
+  static Stream<List<Map<String, dynamic>>> streamClaimRequests({String? statusFilter}) {
+    Query<Map<String, dynamic>> query = _db.collection('claim_requests');
+    if (statusFilter != null && statusFilter != 'all') {
+      query = query.where('status', isEqualTo: statusFilter);
+    }
+    return query.snapshots().map(
+      (snap) {
+        final list = snap.docs.map((d) {
+          final data = Map<String, dynamic>.from(d.data());
+          data['id'] = d.id;
+          return data;
+        }).toList();
+        list.sort((a, b) {
+          final aTime = a['submittedAt'] as Timestamp?;
+          final bTime = b['submittedAt'] as Timestamp?;
+          if (aTime == null || bTime == null) return 0;
+          return bTime.compareTo(aTime);
+        });
+        return list;
+      },
+    );
+  }
+
+  /// Admin approves a doctor claim request
+  static Future<void> approveClaimRequest({
+    required String requestId,
+    required String doctorId,
+    required String applicantUid,
+    required String bmdcNumber,
+    required String adminUid,
+  }) async {
+    final batch = _db.batch();
+    final claimRef = _db.collection('claim_requests').doc(requestId);
+    batch.update(claimRef, {
+      'status': 'approved',
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': adminUid,
+    });
+
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    batch.set(doctorRef, {
+      'claimedByUid': applicantUid,
+      'isClaimed': true,
+      'claimStatus': 'approved',
+      'bmdcNumber': bmdcNumber,
+      'bmdcRegNumber': bmdcNumber,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    final userRef = _db.collection('users').doc(applicantUid);
+    batch.set(userRef, {
+      'roles': {
+        'isDoctor': true,
+      },
+      'doctorProfileId': doctorId,
+      'bmdcRegNumber': bmdcNumber,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    try {
+      await NotificationService.createNotification(
+        userId: applicantUid,
+        title: 'Doctor Profile Claim Approved! 🎉',
+        body: 'Your claim request has been verified and approved by the admin.',
+        type: 'claim_approved',
+        relatedId: doctorId,
+      );
+    } catch (_) {}
+  }
+
+  /// Admin rejects a doctor claim request
+  static Future<void> rejectClaimRequest({
+    required String requestId,
+    required String doctorId,
+    required String applicantUid,
+    required String reason,
+    required String adminUid,
+  }) async {
+    final batch = _db.batch();
+    final claimRef = _db.collection('claim_requests').doc(requestId);
+    batch.update(claimRef, {
+      'status': 'rejected',
+      'rejectionReason': reason,
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': adminUid,
+    });
+
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    batch.set(doctorRef, {
+      'claimStatus': 'unclaimed',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    try {
+      await NotificationService.createNotification(
+        userId: applicantUid,
+        title: 'Doctor Profile Claim Rejected',
+        body: 'Reason: ',
+        type: 'claim_rejected',
+        relatedId: doctorId,
+      );
+    } catch (_) {}
+  }
+
+  /// Stores a manual BMDC decision and an immutable audit entry in one batch.
+  /// Firestore rules require the caller to be represented by /admins/{uid}.
+  static Future<void> recordManualBmdcVerification({
+    required String doctorId,
+    required String registrationNumber,
+    required String outcome,
+    String? note,
+  }) async {
+    const allowedOutcomes = {'found', 'not_found', 'mismatch'};
+    if (!allowedOutcomes.contains(outcome)) {
+      throw ArgumentError.value(outcome, 'outcome', 'Unsupported BMDC outcome');
+    }
+    final adminUid = _auth.currentUser?.uid;
+    if (adminUid == null || adminUid.isEmpty) {
+      throw StateError('An authenticated admin is required for BMDC verification.');
+    }
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    final historyRef = _db.collection('doctor_verification_history').doc();
+    final isFound = outcome == 'found';
+    final verificationStatus = outcome == 'found'
+        ? 'checked_found'
+        : (outcome == 'mismatch' ? 'checked_mismatch' : 'checked_not_found');
+
+    final batch = _db.batch();
+    batch.set(doctorRef, {
+      'bmdcNumber': registrationNumber.trim(),
+      'bmdcRegNumber': registrationNumber.trim(),
+      'verificationStatus': verificationStatus,
+      'isBmdcVerified': isFound,
+      'checkedAt': FieldValue.serverTimestamp(),
+      'checkedBy': adminUid,
+      'sourceUrl': 'https://verify.bmdc.org.bd/',
+      'method': 'manual',
+      'note': note?.trim() ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    batch.set(historyRef, {
+      'doctorId': doctorId,
+      'bmdcNumber': registrationNumber.trim(),
+      'outcome': outcome,
+      'provider': 'manual',
+      'method': 'manual',
+      'sourceUrl': 'https://verify.bmdc.org.bd/',
+      'note': note?.trim() ?? '',
+      'verifiedByUid': adminUid,
+      'checkedBy': adminUid,
+      'checkedAt': FieldValue.serverTimestamp(),
+      'verifiedAt': FieldValue.serverTimestamp(),
+    });
+
+    final doctor = await doctorRef.get();
+    final claimedUid = doctor.data()?['claimedByUid']?.toString();
+    if (claimedUid != null && claimedUid.isNotEmpty) {
+      final userRef = _db.collection('users').doc(claimedUid);
+      batch.set(userRef, {
+        'isBmdcVerified': isFound,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    await batch.commit();
+  }
+
+  /// Fetches doctors from Firestore for verification review
+  static Future<List<Map<String, dynamic>>> fetchDoctorsForVerification({
+    String? statusFilter,
+  }) async {
+    Query<Map<String, dynamic>> query = _db.collection('doctors');
+    if (statusFilter != null && statusFilter != 'all') {
+      query = query.where('verificationStatus', isEqualTo: statusFilter);
+    }
+    final snap = await query.limit(100).get();
+    return snap.docs.map((d) {
+      final data = Map<String, dynamic>.from(d.data());
+      data['id'] = d.id;
+      return data;
+    }).toList();
+  }
+
   static List<Doctor>? _cachedBundledDoctors;
 
   /// Loads the full 6,000+ doctors bundled in local APK assets (0 Firestore reads)
@@ -1969,6 +2518,10 @@ class FirestoreService {
       return _cachedBundledDoctors!;
     }
   }
+
+  /// Returns the actual number of records in the APK's bundled directory.
+  /// Admin upload UI uses this instead of a hand-maintained display constant.
+  static Future<int> bundledDoctorCount() async => (await getBundledDoctors()).length;
 
   static List<Map<String, dynamic>> _defaultFallbackDoctors() {
     return [
@@ -2132,4 +2685,631 @@ class FirestoreService {
       },
     ];
   }
+
+  /// Uploads bundled doctors to Firestore in batches of 500.
+  /// Uses stable IDs from bundled JSON, is idempotent (set with merge: true),
+  /// and is resumable via SharedPreferences cursor.
+  static Future<void> uploadBundledDoctorsToFirestore({
+    required Function(int processed, int total, String status) onProgress,
+    bool restartFromBeginning = false,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    const cursorKey = 'admin_bundled_doctors_upload_cursor';
+    int startIndex = restartFromBeginning ? 0 : (prefs.getInt(cursorKey) ?? 0);
+
+    final jsonStr = await rootBundle.loadString('assets/data/bundled_doctors.json');
+    final List decoded = jsonDecode(jsonStr);
+    final total = decoded.length;
+
+    if (startIndex >= total) {
+      startIndex = 0;
+    }
+
+    const batchSize = 500;
+    for (int i = startIndex; i < total; i += batchSize) {
+      final end = (i + batchSize < total) ? (i + batchSize) : total;
+      final chunk = decoded.sublist(i, end);
+
+      final batch = _db.batch();
+      for (int cIdx = 0; cIdx < chunk.length; cIdx++) {
+        final item = Map<String, dynamic>.from(chunk[cIdx] as Map);
+        final stableId = (item['_id'] ?? item['id'] ?? 'doc_${i + cIdx}').toString();
+        final docRef = _db.collection('doctors').doc(stableId);
+
+        final name = (item['name'] ?? '').toString();
+        final specs = List<String>.from(item['specialities'] ?? []);
+        final bmdc = (item['bmdcNumber'] ?? item['bmdcRegNumber'] ?? '').toString();
+        final isVer = item['isBmdcVerified'] == true;
+        final claimed = item['isClaimed'] == true || item['claimedByUid'] != null;
+
+        final data = <String, dynamic>{
+          'name': name,
+          'name_lower': name.toLowerCase(),
+          'specialities': specs,
+          'designation': (item['designation'] ?? 'Consultant').toString(),
+          'experienceYears': (item['experienceYears'] as num?)?.toDouble() ?? 5.0,
+          'education': List<String>.from(item['education'] ?? ['MBBS']),
+          'bmdcNumber': bmdc,
+          'bmdcRegNumber': bmdc,
+          'isBmdcVerified': isVer,
+          'verificationStatus': isVer ? 'verified' : 'unverified',
+          'isClaimed': claimed,
+          'claimStatus': claimed ? 'claimed' : 'unclaimed',
+          if (item['claimedByUid'] != null) 'claimedByUid': item['claimedByUid'].toString(),
+          'ratingAverage': (item['ratingAverage'] as num?)?.toDouble() ?? 0.0,
+          'ratingCount': (item['ratingCount'] as num?)?.toInt() ?? 0,
+          'chambers': item['chambers'] ?? [],
+          'status': 'active',
+          'updatedAt': FieldValue.serverTimestamp(),
+          ...DoctorSearchIndex.fieldsFor({
+            'name': name,
+            'designation': item['designation'] ?? 'Consultant',
+            'specialities': specs,
+            'education': item['education'] ?? ['MBBS'],
+            'chambers': item['chambers'] ?? [],
+          }),
+        };
+
+        batch.set(docRef, data, SetOptions(merge: true));
+      }
+
+      onProgress(i, total, 'Writing batch ${(i ~/ batchSize) + 1} of ${(total / batchSize).ceil()}...');
+      await batch.commit();
+
+      await prefs.setInt(cursorKey, end);
+      onProgress(end, total, 'Uploaded $end / $total doctors');
+    }
+
+    onProgress(total, total, 'Upload complete! All $total doctors are live in Firestore.');
+  }
+
+  /// Links a doctor profile to an existing user by email.
+  /// Looks up user by email; throws if user does not exist (no placeholders written).
+  static Future<Map<String, dynamic>> assignDoctorToEmail({
+    required String doctorId,
+    required String email,
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+    final userSnap = await _db
+        .collection('users')
+        .where('email', isEqualTo: cleanEmail)
+        .limit(1)
+        .get();
+
+    if (userSnap.docs.isEmpty) {
+      throw StateError('No registered user found with email "$cleanEmail".');
+    }
+
+    final userDoc = userSnap.docs.first;
+    final uid = userDoc.id;
+    final userData = userDoc.data();
+    final existingRoles = Map<String, dynamic>.from((userData['roles'] as Map?) ?? const {});
+    existingRoles['isDoctor'] = true;
+
+    final batch = _db.batch();
+
+    final doctorRef = _db.collection('doctors').doc(doctorId);
+    batch.set(doctorRef, {
+      'claimedByUid': uid,
+      'isClaimed': true,
+      'claimStatus': 'claimed',
+      'status': 'active',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    batch.set(userDoc.reference, {
+      'roles': existingRoles,
+      'doctorProfileId': doctorId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    return {
+      'uid': uid,
+      'email': cleanEmail,
+      'name': userData['name'] ?? 'User',
+      'doctorId': doctorId,
+    };
+  }
+
+  /// If an operator is assigned or removed later, requests still 'requested' are re-routed:
+  /// recompute handledBy from the current operators.
+  static Future<void> reroutePendingRequests({
+    List<String>? chamberIds,
+    String? doctorId,
+  }) async {
+    try {
+      Query<Map<String, dynamic>> query = _db
+          .collection('appointments')
+          .where('status', isEqualTo: 'requested');
+
+      if (chamberIds != null && chamberIds.isNotEmpty) {
+        query = query.where('chamberId', whereIn: chamberIds);
+      } else if (doctorId != null && doctorId.isNotEmpty) {
+        query = query.where('doctorId', isEqualTo: doctorId);
+      }
+
+      final snap = await query.get();
+      if (snap.docs.isEmpty) return;
+
+      final batch = _db.batch();
+      bool hasUpdates = false;
+      final Map<String, bool> chamberHasOperators = {};
+
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final chId = (data['chamberId'] ?? '').toString();
+        if (chId.isEmpty) continue;
+
+        if (!chamberHasOperators.containsKey(chId)) {
+          final opUsers = await _db
+              .collection('users')
+              .where('operatorAssignments', arrayContains: chId)
+              .limit(1)
+              .get();
+          chamberHasOperators[chId] = opUsers.docs.isNotEmpty;
+        }
+
+        final expectedHandledBy = chamberHasOperators[chId] == true ? 'operator' : 'doctor';
+        if (data['handledBy'] != expectedHandledBy) {
+          batch.update(doc.reference, {
+            'handledBy': expectedHandledBy,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          hasUpdates = true;
+        }
+      }
+
+      if (hasUpdates) {
+        await batch.commit();
+      }
+    } catch (_) {}
+  }
+
+  /// Returns available free time slots for a doctor on a given date across ALL chambers.
+  static Future<List<DateTime>> getFreeSlotsForDoctor({
+    required String doctorId,
+    required DateTime date,
+    int slotMinutes = 15,
+  }) async {
+    final startOfDay = DateTime(date.year, date.month, date.day, 0, 0, 0);
+    final endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
+
+    final snap = await _db
+        .collection('appointments')
+        .where('doctorId', isEqualTo: doctorId)
+        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+        .get();
+
+    final busySlots = <({DateTime start, DateTime end})>[];
+    for (final doc in snap.docs) {
+      final st = (doc.data()['status'] ?? '').toString();
+      if (st == 'confirmed' || st == 'in_progress') {
+        final t = doc.data()['scheduledTime'];
+        if (t is Timestamp) {
+          final s = t.toDate();
+          busySlots.add((start: s, end: s.add(Duration(minutes: slotMinutes))));
+        }
+      }
+    }
+
+    final freeSlots = <DateTime>[];
+    // Default visiting hours 9:00 AM to 9:00 PM
+    var currentSlot = DateTime(date.year, date.month, date.day, 9, 0);
+    final endTime = DateTime(date.year, date.month, date.day, 21, 0);
+
+    while (currentSlot.isBefore(endTime)) {
+      final slotEnd = currentSlot.add(Duration(minutes: slotMinutes));
+      final isOverlapping = busySlots.any((b) => currentSlot.isBefore(b.end) && slotEnd.isAfter(b.start));
+      if (!isOverlapping) {
+        freeSlots.add(currentSlot);
+      }
+      currentSlot = slotEnd;
+    }
+
+    return freeSlots;
+  }
+
+  /// Checks whether an appointment time has conflicts:
+  /// 1. Within chamber working hours (default 08:00 to 22:00).
+  /// 2. No overlap for the same doctor across all chambers (slot length default 15m).
+  static Future<void> checkAppointmentConflict({
+    required String doctorId,
+    required String chamberId,
+    required DateTime proposedTime,
+    String? excludeAppointmentId,
+    int slotMinutes = 15,
+  }) async {
+    final hour = proposedTime.hour;
+    if (hour < 8 || hour >= 22) {
+      throw StateError(
+          'Selected time (${proposedTime.hour.toString().padLeft(2, "0")}:${proposedTime.minute.toString().padLeft(2, "0")}) is outside visiting hours (08:00 AM - 10:00 PM).');
+    }
+
+    final startOfDay = DateTime(proposedTime.year, proposedTime.month, proposedTime.day, 0, 0, 0);
+    final endOfDay = DateTime(proposedTime.year, proposedTime.month, proposedTime.day, 23, 59, 59, 999);
+    final proposedStart = proposedTime;
+    final proposedEnd = proposedTime.add(Duration(minutes: slotMinutes));
+
+    final snap = await _db
+        .collection('appointments')
+        .where('doctorId', isEqualTo: doctorId)
+        .where('scheduledTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('scheduledTime', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+        .get();
+
+    for (final doc in snap.docs) {
+      if (doc.id == excludeAppointmentId) continue;
+      final d = doc.data();
+      final stVal = (d['status'] ?? '').toString().toLowerCase();
+      if (stVal == 'cancelled' || stVal == 'rejected') continue;
+
+      final st = d['scheduledTime'];
+      if (st is Timestamp) {
+        final existingStart = st.toDate();
+        final existingEnd = existingStart.add(Duration(minutes: slotMinutes));
+        final overlaps = proposedStart.isBefore(existingEnd) && proposedEnd.isAfter(existingStart);
+        if (overlaps) {
+          final cName = d['chamberId'] ?? 'another chamber';
+          final startStr = '${existingStart.hour.toString().padLeft(2, "0")}:${existingStart.minute.toString().padLeft(2, "0")}';
+          final endStr = '${existingEnd.hour.toString().padLeft(2, "0")}:${existingEnd.minute.toString().padLeft(2, "0")}';
+          throw StateError(
+              'Schedule conflict: Doctor already has an appointment from $startStr to $endStr at $cName. Slots must not overlap (15-min duration).');
+        }
+      }
+    }
+  }
+
+  /// Confirms an appointment, assigns time and queue number in a transaction.
+  /// Rejects any slot that overlaps another confirmed appointment of the same doctor across ALL chambers.
+  static Future<void> confirmAppointment({
+    required String appointmentId,
+    required DateTime confirmedTime,
+    int slotMinutes = 15,
+  }) async {
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    if (!apptSnap.exists) throw StateError('Appointment not found.');
+    final apptData = apptSnap.data()!;
+    final doctorId = (apptData['doctorId'] ?? '').toString();
+    final chamberId = (apptData['chamberId'] ?? 'demo-chamber').toString();
+    final patientUid = (apptData['userId'] ?? '').toString();
+    final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
+
+    // Check doctor overlap conflict across ALL chambers
+    await checkAppointmentConflict(
+      doctorId: doctorId,
+      chamberId: chamberId,
+      proposedTime: confirmedTime,
+      excludeAppointmentId: appointmentId,
+      slotMinutes: slotMinutes,
+    );
+
+    final dateKey = '${confirmedTime.year}${confirmedTime.month.toString().padLeft(2, "0")}${confirmedTime.day.toString().padLeft(2, "0")}';
+    final queueCounterRef = _db.collection('queues').doc('${chamberId}_$dateKey');
+
+    int assignedQueue = 1;
+    await _db.runTransaction((tx) async {
+      final qSnap = await tx.get(queueCounterRef);
+      if (qSnap.exists) {
+        assignedQueue = (qSnap.data()?['lastQueuePosition'] as num? ?? 0).toInt() + 1;
+      }
+      tx.set(queueCounterRef, {
+        'chamberId': chamberId,
+        'date': dateKey,
+        'lastQueuePosition': assignedQueue,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      tx.update(apptRef, {
+        'status': 'confirmed',
+        'queuePosition': assignedQueue,
+        'scheduledTime': Timestamp.fromDate(confirmedTime),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+
+    if (patientUid.isNotEmpty) {
+      try {
+        final timeStr = '${confirmedTime.hour.toString().padLeft(2, "0")}:${confirmedTime.minute.toString().padLeft(2, "0")}';
+        await NotificationService.createNotification(
+          userId: patientUid,
+          title: 'Appointment Confirmed! 🎉',
+          body: 'Your appointment with $doctorName is confirmed for ${confirmedTime.day}/${confirmedTime.month} at $timeStr. Queue Position: #$assignedQueue.',
+          type: 'appointment_confirmed',
+          relatedId: appointmentId,
+        );
+      } catch (_) {}
+    }
+  }
+
+  /// Reschedules an appointment to a new time in a transaction and notifies the patient with old and new times.
+  static Future<void> rescheduleAppointment({
+    required String appointmentId,
+    required DateTime newTime,
+    int slotMinutes = 15,
+  }) async {
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    if (!apptSnap.exists) throw StateError('Appointment not found.');
+    final apptData = apptSnap.data()!;
+    final doctorId = (apptData['doctorId'] ?? '').toString();
+    final chamberId = (apptData['chamberId'] ?? 'demo-chamber').toString();
+    final patientUid = (apptData['userId'] ?? '').toString();
+    final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
+
+    final oldTs = apptData['scheduledTime'];
+    DateTime? oldTime;
+    if (oldTs is Timestamp) oldTime = oldTs.toDate();
+
+    await checkAppointmentConflict(
+      doctorId: doctorId,
+      chamberId: chamberId,
+      proposedTime: newTime,
+      excludeAppointmentId: appointmentId,
+      slotMinutes: slotMinutes,
+    );
+
+    await apptRef.update({
+      'scheduledTime': Timestamp.fromDate(newTime),
+      'status': 'confirmed',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (patientUid.isNotEmpty) {
+      try {
+        final oldStr = oldTime != null
+            ? '${oldTime.day}/${oldTime.month} ${oldTime.hour.toString().padLeft(2, "0")}:${oldTime.minute.toString().padLeft(2, "0")}'
+            : 'previously scheduled time';
+        final newStr = '${newTime.day}/${newTime.month} ${newTime.hour.toString().padLeft(2, "0")}:${newTime.minute.toString().padLeft(2, "0")}';
+        await NotificationService.createNotification(
+          userId: patientUid,
+          title: 'Appointment Rescheduled 🕒',
+          body: 'Your appointment with $doctorName has been moved from $oldStr to $newStr.',
+          type: 'appointment_rescheduled',
+          relatedId: appointmentId,
+        );
+      } catch (_) {}
+    }
+  }
+
+  /// Rejects an appointment with a reason and notifies the patient.
+  static Future<void> rejectAppointment({
+    required String appointmentId,
+    required String reason,
+  }) async {
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    if (!apptSnap.exists) throw StateError('Appointment not found.');
+    final apptData = apptSnap.data()!;
+    final patientUid = (apptData['userId'] ?? '').toString();
+    final doctorName = (apptData['doctorName'] ?? 'Specialist Doctor').toString();
+    final activeKey = apptData['activeBookingKey']?.toString();
+
+    await apptRef.update({
+      'status': 'rejected',
+      'rejectionReason': reason.trim(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (activeKey != null && activeKey.isNotEmpty) {
+      try {
+        await _db.collection('active_bookings').doc(activeKey).delete();
+      } catch (_) {}
+    }
+
+    if (patientUid.isNotEmpty) {
+      try {
+        await NotificationService.createNotification(
+          userId: patientUid,
+          title: 'Appointment Request Declined',
+          body: 'Your appointment request with $doctorName was declined. Reason: ${reason.trim()}.',
+          type: 'appointment_rejected',
+          relatedId: appointmentId,
+        );
+      } catch (_) {}
+    }
+  }
+
+  /// Patient cancels their own appointment.
+  static Future<void> cancelAppointmentByPatient(String appointmentId) async {
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    final activeKey = apptSnap.data()?['activeBookingKey']?.toString();
+
+    await apptRef.update({
+      'status': 'cancelled',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (activeKey != null && activeKey.isNotEmpty) {
+      try {
+        await _db.collection('active_bookings').doc(activeKey).delete();
+      } catch (_) {}
+    }
+  }
+
+  /// Fetches test appointments (missing or legacy status like 'waiting', empty status, etc.)
+  static Future<List<Map<String, dynamic>>> fetchTestAppointments() async {
+    final snap = await _db.collection('appointments').limit(100).get();
+    const validStatuses = {'requested', 'confirmed', 'in_progress', 'done', 'cancelled', 'rejected'};
+    final results = <Map<String, dynamic>>[];
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final status = (data['status'] ?? '').toString();
+      if (!validStatuses.contains(status)) {
+        results.add({'id': doc.id, ...data});
+      }
+    }
+    return results;
+  }
+
+  /// Individually deletes a single test appointment document.
+  static Future<void> deleteTestAppointment(String appointmentId) async {
+    await _db.collection('appointments').doc(appointmentId).delete();
+  }
+
+  static Future<void> softHideDoctor({
+    required String doctorId,
+    required String reason,
+    required String adminUid,
+  }) async {
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
+      'hidden': true,
+      'isHidden': true,
+      'hiddenReason': reason.trim(),
+      'hiddenBy': adminUid,
+      'hiddenAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hiddenList = prefs.getStringList('hidden_doctor_ids') ?? [];
+      if (!hiddenList.contains(doctorId)) {
+        hiddenList.add(doctorId);
+        await prefs.setStringList('hidden_doctor_ids', hiddenList);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> restoreDoctor(String doctorId) async {
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
+      'hidden': false,
+      'isHidden': false,
+      'isDeleted': false,
+      'hiddenReason': FieldValue.delete(),
+      'hiddenBy': FieldValue.delete(),
+      'hiddenAt': FieldValue.delete(),
+      'deletedAt': FieldValue.delete(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hiddenList = prefs.getStringList('hidden_doctor_ids') ?? [];
+      hiddenList.remove(doctorId);
+      await prefs.setStringList('hidden_doctor_ids', hiddenList);
+
+      final deletedList = prefs.getStringList('deleted_doctor_ids') ?? [];
+      deletedList.remove(doctorId);
+      await prefs.setStringList('deleted_doctor_ids', deletedList);
+    } catch (_) {}
+  }
+
+  static Future<void> hardDeleteDoctor({
+    required String doctorId,
+    bool isBundled = true,
+  }) async {
+    final docRef = _db.collection('doctors').doc(doctorId);
+    await docRef.set({
+      'isDeleted': true,
+      'deletedAt': FieldValue.serverTimestamp(),
+      'hidden': true,
+      'isHidden': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final deletedList = prefs.getStringList('deleted_doctor_ids') ?? [];
+      if (!deletedList.contains(doctorId)) {
+        deletedList.add(doctorId);
+        await prefs.setStringList('deleted_doctor_ids', deletedList);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> markAppointmentCompletedAndUnlockChat(String appointmentId) async {
+    final apptRef = _db.collection('appointments').doc(appointmentId);
+    final apptSnap = await apptRef.get();
+    if (!apptSnap.exists) return;
+
+    final apptData = apptSnap.data() ?? {};
+    final patientUid = (apptData['userId'] ?? '').toString();
+    final patientName = (apptData['patientName'] ?? 'Patient').toString();
+    final doctorId = (apptData['doctorId'] ?? '').toString();
+    final doctorName = (apptData['doctorName'] ?? 'Doctor').toString();
+
+    // 1. Mark appointment completed
+    await apptRef.update({
+      'status': 'completed',
+      'completedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (doctorId.isEmpty || patientUid.isEmpty) return;
+
+    // 2. Fetch doctor profile to check claimedByUid & messagingMode
+    try {
+      final docSnap = await _db.collection('doctors').doc(doctorId).get();
+      if (!docSnap.exists) return;
+
+      final docData = docSnap.data() ?? {};
+      final doctorUid = (docData['claimedByUid'] ?? '').toString();
+      if (doctorUid.isEmpty) return;
+
+      final messagingMode = (docData['messagingMode'] ?? 'followup').toString();
+      if (messagingMode == 'off' || messagingMode == 'paid') {
+        return;
+      }
+
+      final followupDays = (docData['followupDays'] as num?)?.toInt() ?? 7;
+      final followupMaxMessages = (docData['followupMaxMessages'] as num?)?.toInt() ?? 20;
+
+      await ChatService.unlockChatForCare(
+        doctorUid: doctorUid,
+        patientUid: patientUid,
+        doctorName: doctorName,
+        patientName: patientName,
+        doctorId: doctorId,
+        unlockedBy: appointmentId,
+        followupDays: followupDays,
+        followupMaxMessages: followupMaxMessages,
+      );
+    } catch (e) {
+      debugPrint('Error unlocking follow-up chat: $e');
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchChamberDoctorDetails(String chamberId) async {
+    try {
+      final snap = await _db.collection('doctors').limit(100).get();
+      final List<Map<String, dynamic>> result = [];
+      final Set<String> seenIds = {};
+
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final chambers = (d['chambers'] as List?) ?? [];
+        for (final c in chambers) {
+          if (c is Map) {
+            final id = (c['id'] ?? c['hospitalName'] ?? c['name'] ?? '').toString();
+            if (id == chamberId || c['hospitalName'] == chamberId) {
+              final docId = doc.id;
+              if (!seenIds.contains(docId)) {
+                seenIds.add(docId);
+                final hours = (c['visitingHours'] ?? c['hours'] ?? c['time'] ?? 'Visiting Hours: 5:00 PM - 9:00 PM').toString();
+                final specialities = (d['specialities'] as List?) ?? [];
+                result.add({
+                  'doctorId': docId,
+                  'name': (d['name'] ?? 'Doctor').toString(),
+                  'speciality': specialities.isNotEmpty ? specialities.first.toString() : 'Specialist',
+                  'hours': hours,
+                  'degree': (d['degree'] ?? '').toString(),
+                });
+              }
+            }
+          }
+        }
+      }
+      return result;
+    } catch (_) {
+      return [];
+    }
+  }
+
 }

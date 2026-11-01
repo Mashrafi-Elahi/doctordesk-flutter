@@ -1,12 +1,18 @@
+import '../models/chat_message.dart';
+import '../services/chat_service.dart';
+import 'bmdc_verification_screen.dart';
+import 'doctor_manager_screen.dart';
+import '../models/user_role.dart';
+import 'chat_screen.dart';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/doctor.dart';
-import '../models/user_role.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
@@ -44,6 +50,25 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
   List<Map<String, dynamic>> _reviews = [];
   bool _isReviewsLoading = true;
 
+  ChatSession? _unlockedChatSession;
+
+  Future<void> _checkChatUnlock(Doctor doctor) async {
+    final uid = AuthService.currentUser?.uid;
+    final docUid = doctor.claimedByUid;
+    if (uid != null && docUid != null && docUid.isNotEmpty) {
+      try {
+        final chat = await ChatService.getUnlockedChatForDoctorAndPatient(
+          doctorUid: docUid,
+          patientUid: uid,
+        );
+        if (mounted) {
+          setState(() {
+            _unlockedChatSession = chat;
+          });
+        }
+      } catch (_) {}
+    }
+  }
   @override
   void initState() {
     super.initState();
@@ -68,6 +93,7 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
         _doctor = doctor;
         _isLoading = false;
       });
+      _checkChatUnlock(doctor);
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -109,39 +135,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           ' Their areas of focus include ${doctor.concentrations.join(", ")}.');
     }
     return buffer.toString();
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Claim bottom sheet
-  // ──────────────────────────────────────────────────────────────────────────
-
-  void _openClaimSheet(Doctor doctor) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _ClaimSheet(
-        doctorId: widget.doctorId,
-        doctorName: doctor.name,
-        onSuccess: () async {
-          await AuthService.saveRole(UserRole.doctor);
-          await AuthService.fetchUserRoles();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Doctor profile claimed successfully! You now have full doctor privileges.',
-                ),
-                duration: Duration(seconds: 4),
-              ),
-            );
-          }
-          _loadDoctor();
-        },
-      ),
-    );
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -220,17 +213,49 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       return;
     }
 
-    final chambers = doctor.chambers
-        .map((c) => c.hospitalName ?? '')
-        .where((s) => s.isNotEmpty)
-        .toList();
-    if (chambers.isEmpty) {
-      chambers.add(doctor.chamber?.hospitalName ?? 'Main Consultation Chamber');
+    final roles = AuthService.userRoles;
+    if (roles.doctorProfileId != null &&
+        roles.doctorProfileId!.isNotEmpty &&
+        roles.doctorProfileId == doctor.id) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You cannot book an appointment with your own profile.')),
+      );
+      return;
     }
 
-    String selectedChamber = chambers.first;
+    // Build (id, label) pairs -- chamberId must be the Firestore doc ID, not the name.
+    final chamberOptions = <({String id, String label})>[];
+    for (final c in doctor.chambers) {
+      final id = (c.id ?? '').trim();
+      final label = (c.hospitalName ?? '').trim();
+      if (id.isNotEmpty) {
+        chamberOptions.add((id: id, label: label.isEmpty ? 'Unnamed chamber' : label));
+      }
+    }
+    if (chamberOptions.isEmpty && doctor.chamber != null) {
+      final c = doctor.chamber!;
+      final id = (c.id ?? '').trim();
+      final label = (c.hospitalName ?? '').trim();
+      if (id.isNotEmpty) {
+        chamberOptions.add((id: id, label: label.isEmpty ? 'Main Chamber' : label));
+      }
+    }
+    if (chamberOptions.isEmpty) {
+      debugPrint('[Booking] No chamber IDs found for doctor ${doctor.id}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No bookable chamber found for this doctor. Please try again later.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    String selectedChamberId = chamberOptions.first.id;
     DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
-    TimeOfDay selectedTime = const TimeOfDay(hour: 10, minute: 0);
+    // Preferred date only; time and queue number are assigned upon acceptance.
     final patientNameCtrl = TextEditingController(
       text: AuthService.currentUser?.displayName?.isNotEmpty == true
           ? AuthService.currentUser!.displayName!
@@ -281,62 +306,40 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      initialValue: selectedChamber,
+                      initialValue: selectedChamberId,
                       decoration: const InputDecoration(
                         labelText: 'Select Chamber',
                         prefixIcon: Icon(Icons.location_on_outlined),
                         border: OutlineInputBorder(),
                         isDense: true,
                       ),
-                      items: chambers
-                          .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)))
+                      items: chamberOptions
+                          .map((opt) => DropdownMenuItem(
+                              value: opt.id, child: Text(opt.label)))
                           .toList(),
                       onChanged: (val) {
                         if (val != null) {
-                          setSheetState(() => selectedChamber = val);
+                          setSheetState(() => selectedChamberId = val);
                         }
                       },
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.calendar_today, size: 16),
-                            label: Text(
-                                '${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
-                            onPressed: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: selectedDate,
-                                firstDate: DateTime.now(),
-                                lastDate: DateTime.now()
-                                    .add(const Duration(days: 90)),
-                              );
-                              if (picked != null) {
-                                setSheetState(() => selectedDate = picked);
-                              }
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.access_time, size: 16),
-                            label: Text(selectedTime.format(context)),
-                            onPressed: () async {
-                              final picked = await showTimePicker(
-                                context: context,
-                                initialTime: selectedTime,
-                              );
-                              if (picked != null) {
-                                setSheetState(() => selectedTime = picked);
-                              }
-                            },
-                          ),
-                        ),
-                      ],
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.calendar_today, size: 16),
+                      label: Text(
+                          'Preferred Date: ${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'),
+                      onPressed: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: selectedDate,
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime.now()
+                              .add(const Duration(days: 90)),
+                        );
+                        if (picked != null) {
+                          setSheetState(() => selectedDate = picked);
+                        }
+                      },
                     ),
                     const SizedBox(height: 16),
                     FilledButton(
@@ -346,12 +349,16 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               setSheetState(() => isSubmitting = true);
                               final messenger = ScaffoldMessenger.of(context);
                               try {
+                                if (AuthService.userRoles.operatorAssignments
+                                    .contains(selectedChamberId)) {
+                                  throw StateError(
+                                    'Operators cannot submit a patient request for a chamber they operate.',
+                                  );
+                                }
                                 final scheduled = DateTime(
                                   selectedDate.year,
                                   selectedDate.month,
                                   selectedDate.day,
-                                  selectedTime.hour,
-                                  selectedTime.minute,
                                 );
                                 await FirestoreService.createAppointment(
                                   patientName:
@@ -359,17 +366,17 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                                           ? patientNameCtrl.text.trim()
                                           : 'Patient',
                                   scheduledTime: scheduled,
-                                  chamberId: selectedChamber,
+                                  chamberId: selectedChamberId,
                                   doctorId: doctor.id,
                                   doctorName: doctor.name,
-                                  status: 'waiting',
+                                  status: 'requested',
                                 );
                                 if (ctx.mounted) Navigator.pop(ctx);
                                 if (mounted) {
                                   messenger.showSnackBar(
                                     const SnackBar(
                                       content: Text(
-                                          'Appointment booked! Check the Appointments tab.'),
+                                          'Appointment request submitted! The chamber desk will confirm your queue number and time.'),
                                       behavior: SnackBarBehavior.floating,
                                     ),
                                   );
@@ -377,9 +384,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                               } catch (e) {
                                 setSheetState(() => isSubmitting = false);
                                 if (mounted) {
+                                  final msg = e.toString().contains('already have a request')
+                                      ? 'You already have a request for this doctor on this date.'
+                                      : 'Booking error: $e';
                                   messenger.showSnackBar(
-                                    SnackBar(
-                                        content: Text('Booking error: $e')),
+                                    SnackBar(content: Text(msg)),
                                   );
                                 }
                               }
@@ -474,6 +483,30 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
           'Doctor Profile',
           style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
         ),
+        actions: [
+          if (AuthService.isAdmin) ...[
+            TextButton.icon(
+              icon: const Icon(Icons.verified_outlined, color: Colors.white, size: 16),
+              label: const Text('Verify BMDC', style: TextStyle(color: Colors.white, fontSize: 12)),
+              onPressed: () async {
+                final res = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BmdcVerificationScreen(
+                      doctorId: doctor.id,
+                      doctorName: doctor.name,
+                      bmdcNumber: doctor.bmdcNumber ?? doctor.bmdcRegNumber ?? '',
+                      currentStatus: doctor.verificationStatus,
+                    ),
+                  ),
+                );
+                if (res == true) {
+                  _loadDoctor();
+                }
+              },
+            ),
+          ],
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(
@@ -510,6 +543,58 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check_circle, size: 12, color: AppColors.primary),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Claimed',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified') ...[
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.green.shade300),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.verified, size: 12, color: Colors.green),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _bmdcCheckedLabel(doctor),
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.green.shade900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         if (doctor.specialities.isNotEmpty) ...[
                           const SizedBox(height: 2),
                           Text(
@@ -636,8 +721,8 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                       _buildBulletItem('Qualified: ${doctor.education.join(", ")}'),
                     if (doctor.concentrations.isNotEmpty)
                       _buildBulletItem('Clinical Focus: ${doctor.concentrations.join(", ")}'),
-                    if (doctor.isBmdcVerified)
-                      _buildBulletItem('BMDC & NID Verified Specialist'),
+                    if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified')
+                      _buildBulletItem(_bmdcCheckedLabel(doctor)),
                     if (doctor.experienceYears <= 0 && doctor.education.isEmpty)
                       _buildBulletItem('Specialist medical practitioner with registered credentials'),
                   ],
@@ -798,16 +883,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
               ),
             ),
 
-            // ── 8. Claim this profile ──────────────────────────────────────
-            if (!doctor.isClaimed)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPadding),
-                child: _SectionCard(
-                  title: 'Claim this profile',
-                  child: _buildClaimContent(doctor),
-                ),
-              ),
-
             const SizedBox(height: 100), // Reserve bottom space for floating/fixed button
           ],
         ),
@@ -815,18 +890,105 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(AppConstants.screenPadding),
-          child: FilledButton(
-            onPressed: () => _showBookingSheet(doctor),
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(double.infinity, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppConstants.radiusButton),
-              ),
-            ),
-            child: Text(
-              'Book Appointment',
-              style: AppTheme.buttonText,
-            ),
+          child: Builder(
+            builder: (context) {
+              final isOwnProfile = AuthService.userRoles.doctorProfileId != null &&
+                  AuthService.userRoles.doctorProfileId!.isNotEmpty &&
+                  AuthService.userRoles.doctorProfileId == doctor.id;
+              final isPatientPortal = AuthService.activeRole == UserRole.patient || AuthService.isGuest;
+
+              if (isOwnProfile) {
+                return FilledButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DoctorManagerScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Manage profile'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                    ),
+                  ),
+                );
+              }
+
+              if (!isPatientPortal) {
+                return const SizedBox.shrink();
+              }
+
+              final hasUnlockedChat = _unlockedChatSession != null && _unlockedChatSession!.canSendMessage;
+
+              if (hasUnlockedChat) {
+                return Row(
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF16A34A),
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                        ),
+                        icon: const Icon(Icons.chat, color: Colors.white, size: 18),
+                        label: Text(
+                          'Follow-up Chat',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                chatId: _unlockedChatSession!.id,
+                                otherUserName: doctor.name,
+                                otherUserUid: doctor.claimedByUid!,
+                                isDoctor: false,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 6,
+                      child: FilledButton(
+                        onPressed: () => _showBookingSheet(doctor),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 50),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                          ),
+                        ),
+                        child: Text('Book Appointment', style: AppTheme.buttonText.copyWith(fontSize: 13)),
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              return FilledButton(
+                onPressed: () => _showBookingSheet(doctor),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppConstants.radiusButton),
+                  ),
+                ),
+                child: Text(
+                  'Book Appointment',
+                  style: AppTheme.buttonText,
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -881,21 +1043,36 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     );
   }
 
+  String _bmdcCheckedLabel(Doctor doctor) {
+    DateTime? dt;
+    final v = doctor.verifiedAt;
+    if (v is Timestamp) {
+      dt = v.toDate();
+    } else if (v is DateTime) {
+      dt = v;
+    } else if (v is String) {
+      dt = DateTime.tryParse(v);
+    }
+    if (dt != null) {
+      final dateStr = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+      return 'Registration checked on $dateStr';
+    }
+    return 'Registration checked';
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Reviews content widget
   // ──────────────────────────────────────────────────────────────────────────
 
   Widget _buildReviewsContent() {
     final isSignedIn = AuthService.isSignedIn && !AuthService.isGuest;
-    final isDoctor = AuthService.userRoles.isDoctor;
-    final isOperator = AuthService.userRoles.isOperator;
+    final isOwnProfile = AuthService.userRoles.doctorProfileId != null &&
+        AuthService.userRoles.doctorProfileId!.isNotEmpty &&
+        AuthService.userRoles.doctorProfileId == widget.doctorId;
+    final isPatientPortal = AuthService.activeRole == UserRole.patient || AuthService.isGuest;
+    final canWriteReview = isPatientPortal && !isOwnProfile;
 
-    String buttonLabel = 'Write a review';
-    if (isDoctor) {
-      buttonLabel = 'Rate as Doctor Specialist (Peer review)';
-    } else if (isOperator) {
-      buttonLabel = 'Rate as Chamber Operator';
-    }
+    const buttonLabel = 'Write a review';
 
     return StreamBuilder<List<Map<String, dynamic>>>(
       stream: FirestoreService.reviewsStream(widget.doctorId),
@@ -970,11 +1147,11 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
                   ],
                 ),
               ),
-            ] else ...[
+            ] else if (canWriteReview) ...[
               TextButton.icon(
                 onPressed: _openReviewSheet,
                 icon: const Icon(Icons.edit_outlined, size: 18),
-                label: Text(buttonLabel),
+                label: const Text(buttonLabel),
               ),
             ],
           ],
@@ -983,106 +1160,6 @@ class _DoctorDetailScreenState extends State<DoctorDetailScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Claim content widget
-  // ──────────────────────────────────────────────────────────────────────────
-
-  Widget _buildClaimContent(Doctor doctor) {
-    final isSignedIn = AuthService.isSignedIn && !AuthService.isGuest;
-    final currentUid = AuthService.currentUser?.uid;
-    final isClaimedByMe = doctor.isClaimed &&
-        doctor.claimedByUid != null &&
-        doctor.claimedByUid == currentUid;
-
-    if (isClaimedByMe) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.green.shade50,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.green.shade200),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.verified, color: Colors.green, size: 24),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'You have claimed this profile',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green.shade900,
-                      fontSize: 13,
-                    ),
-                  ),
-                  Text(
-                    'BMDC: ${doctor.bmdcRegNumber ?? "Verified"} • Full control enabled',
-                    style: TextStyle(
-                      color: Colors.green.shade700,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            FilledButton.tonal(
-              onPressed: () async {
-                await AuthService.saveRole(UserRole.doctor);
-                await AuthService.fetchUserRoles();
-                if (mounted) {
-                  Navigator.of(context).pop();
-                }
-              },
-              child: const Text('Doctor Desk'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (doctor.isClaimed) {
-      return Row(
-        children: [
-          const Icon(Icons.verified, size: 18, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Text(
-            'This profile is claimed and BMDC-verified.',
-            style: TextStyle(color: Colors.grey[700], fontSize: 13),
-          ),
-        ],
-      );
-    }
-
-    if (!isSignedIn) {
-      return Row(
-        children: [
-          Icon(Icons.lock_outline, size: 18, color: Colors.grey[400]),
-          const SizedBox(width: 8),
-          Text('Sign in to claim this profile.',
-              style: TextStyle(color: Colors.grey[600])),
-        ],
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Are you ${doctor.name}? Claim this profile to manage your information, '
-          'respond to reviews, and display your BMDC verification badge.',
-          style: TextStyle(color: Colors.grey[700], height: 1.5),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonal(
-          onPressed: () => _openClaimSheet(doctor),
-          child: const Text('Claim this profile'),
-        ),
-      ],
-    );
-  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1293,22 +1370,25 @@ class _ReviewCard extends StatelessWidget {
 // Claim bottom sheet (multi-step)
 // ════════════════════════════════════════════════════════════════════════════
 
-class _ClaimSheet extends StatefulWidget {
+/// Claiming is intentionally exposed only from Profile > Are you a Doctor.
+/// This reusable sheet is kept separate from the doctor detail route.
+class ProfileDoctorClaimSheet extends StatefulWidget {
   final String doctorId;
   final String doctorName;
   final VoidCallback onSuccess;
 
-  const _ClaimSheet({
+  const ProfileDoctorClaimSheet({
+    super.key,
     required this.doctorId,
     required this.doctorName,
     required this.onSuccess,
   });
 
   @override
-  State<_ClaimSheet> createState() => _ClaimSheetState();
+  State<ProfileDoctorClaimSheet> createState() => _ProfileDoctorClaimSheetState();
 }
 
-class _ClaimSheetState extends State<_ClaimSheet> {
+class _ProfileDoctorClaimSheetState extends State<ProfileDoctorClaimSheet> {
   final _bmdcController = TextEditingController();
   File? _certFile;
   double? _uploadProgress;

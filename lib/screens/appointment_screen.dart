@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/data_service.dart';
 import '../services/auth_service.dart';
 import '../services/app_language.dart';
 import '../widgets/profile_avatar_button.dart';
@@ -128,13 +129,19 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                 final patient =
                                     data['patientName'] ?? 'Patient';
                                 final status = data['status'] ?? 'waiting';
+                                final isRequested = status == 'requested';
+                                final isConfirmed = status == 'confirmed';
                                 final pos = data['queuePosition'];
                                 final ts = data['scheduledTime'];
                                 String dateStr = 'Scheduled';
                                 if (ts is Timestamp) {
                                   final dt = ts.toDate();
-                                  dateStr =
-                                      '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                  if (isRequested) {
+                                    dateStr = '${dt.day}/${dt.month}/${dt.year}';
+                                  } else {
+                                    dateStr =
+                                        '${dt.day}/${dt.month}/${dt.year} at ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                                  }
                                 }
 
                                 return Card(
@@ -185,19 +192,33 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                       horizontal: 10,
                                                       vertical: 4),
                                               decoration: BoxDecoration(
-                                                color: Colors.blue.shade50,
+                                                color: status == 'requested'
+                                                    ? Colors.amber.shade50
+                                                    : status == 'confirmed'
+                                                        ? Colors.green.shade50
+                                                        : Colors.blue.shade50,
                                                 borderRadius:
                                                     BorderRadius.circular(12),
                                                 border: Border.all(
-                                                    color:
-                                                        Colors.blue.shade200),
+                                                  color: status == 'requested'
+                                                      ? Colors.amber.shade300
+                                                      : status == 'confirmed'
+                                                          ? Colors.green.shade300
+                                                          : Colors.blue.shade200,
+                                                ),
                                               ),
                                               child: Text(
-                                                status.toUpperCase(),
+                                                status == 'requested'
+                                                    ? 'AWAITING CONFIRMATION'
+                                                    : status.toUpperCase(),
                                                 style: TextStyle(
-                                                  color: Colors.blue.shade800,
+                                                  color: status == 'requested'
+                                                      ? Colors.amber.shade900
+                                                      : status == 'confirmed'
+                                                          ? Colors.green.shade800
+                                                          : Colors.blue.shade800,
                                                   fontWeight: FontWeight.bold,
-                                                  fontSize: 11,
+                                                  fontSize: 10,
                                                 ),
                                               ),
                                             ),
@@ -219,7 +240,7 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                                         fontSize: 13)),
                                               ],
                                             ),
-                                            if (pos != null)
+                                            if (isConfirmed && pos != null)
                                               Text(
                                                 'Queue #$pos',
                                                 style: TextStyle(
@@ -232,11 +253,42 @@ class _AppointmentScreenState extends State<AppointmentScreen> {
                                           ],
                                         ),
                                         const SizedBox(height: 6),
-                                        Text(
-                                          'Patient: $patient',
-                                          style: TextStyle(
-                                              fontSize: 12.5,
-                                              color: Colors.grey.shade700),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              'Patient: $patient',
+                                              style: TextStyle(
+                                                  fontSize: 12.5,
+                                                  color: Colors.grey.shade700),
+                                            ),
+                                            if (status != 'cancelled' && status != 'done')
+                                              TextButton(
+                                                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                                                onPressed: () async {
+                                                  final apptDocId = (upcoming[i].id).toString();
+                                                  final ok = await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (c) => AlertDialog(
+                                                      title: const Text('Cancel Appointment?'),
+                                                      content: const Text('Are you sure you want to cancel this booking?'),
+                                                      actions: [
+                                                        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('No')),
+                                                        FilledButton(
+                                                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                                                          onPressed: () => Navigator.pop(c, true),
+                                                          child: const Text('Cancel Appointment'),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                  if (ok == true) {
+                                                    await DataService.cancelAppointmentByPatient(apptDocId);
+                                                  }
+                                                },
+                                                child: const Text('Cancel', style: TextStyle(color: Colors.red, fontSize: 12)),
+                                              ),
+                                          ],
                                         ),
                                       ],
                                     ),

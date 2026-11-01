@@ -1,0 +1,34 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // 1. Patient health documents (prescriptions, lab tests): Owner only
+    match /patient_docs/{uid}/{allPaths=**} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // 2. Doctor profile verification certificates: Owner upload, authenticated read
+    match /claims/{uid}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(uid);
+    }
+
+    // 3. Review proof images (appointment slip/prescription): Owner upload, public read
+    match /reviews/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isOwner(uid);
+    }
+
+    // 4. Community medical stream feed images: Authenticated upload, public read
+    match /feed_images/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+  }
+}

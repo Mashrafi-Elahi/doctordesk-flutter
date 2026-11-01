@@ -1,119 +1,424 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    
+    // Core Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+    
     function isAdmin() {
-      return request.auth != null &&
-        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.isAdmin == true);
+      return isAuthenticated() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
-    // Doctors: Public read. Authenticated users can claim profiles or update aggregate ratings.
+    function hasRolesMap() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        ('roles' in getUserData()) &&
+        getUserData().roles is map;
+    }
+    
+    function isModerator() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        (hasRolesMap() && getUserData().roles.isModerator == true)
+      );
+    }
+    
+    function isDoctor() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        (hasRolesMap() && getUserData().roles.isDoctor == true)
+      );
+    }
+
+    function isDoctorManagingOperator() {
+      return isDoctor() &&
+        getUserData().doctorProfileId != null &&
+        exists(/databases/$(database)/documents/doctors/$(getUserData().doctorProfileId)) &&
+        get(/databases/$(database)/documents/doctors/$(getUserData().doctorProfileId)).data.claimedByUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['roles', 'operatorAssignments', 'assignedChambers', 'updatedAt']) &&
+        (!('roles' in request.resource.data) ||
+         !('roles' in resource.data) ||
+         request.resource.data.roles.diff(resource.data.roles).affectedKeys().hasOnly(['isOperator'])) &&
+        (!('isAdmin' in request.resource.data.roles) || request.resource.data.roles.isAdmin == resource.data.roles.isAdmin) &&
+        (!('isDoctor' in request.resource.data.roles) || request.resource.data.roles.isDoctor == resource.data.roles.isDoctor);
+    }
+
+    // 1. Users Collection
+    // Signed-in read; users write only own doc and cannot change roles, doctorProfileId, or operatorAssignments.
+    // Doctor can update another user only to assign/remove operator for their own chamber.
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(uid) &&
+        (!('roles' in request.resource.data) ||
+         (request.resource.data.roles.isAdmin != true &&
+          request.resource.data.roles.isDoctor != true &&
+          request.resource.data.roles.isOperator != true));
+      allow update: if isAdmin() || (
+        isOwner(uid) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'doctorProfileId', 'operatorAssignments'])
+      ) || isDoctorManagingOperator();
+      allow delete: if isAdmin();
+    }
+
+    // 2. Doctors Collection
+    // Public read; full create/delete admin only.
+    // Allow lightweight create/update for rating aggregates on bundled or un-migrated doctors.
     match /doctors/{docId} {
       allow read: if true;
-      allow create, update: if request.auth != null;
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['ratingAverage', 'ratingCount', 'updatedAt'])
+      );
+      allow update: if isAdmin() ||
+        (isAuthenticated() && resource.data.claimedByUid == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+           'verificationStatus', 'isBmdcVerified', 'verifiedAt', 'verifiedBy',
+           'checkedAt', 'checkedBy', 'bmdcVerificationOutcome', 'method', 'sourceUrl',
+           'claimStatus', 'claimedByUid'
+         ])) ||
+        (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratingAverage', 'ratingCount', 'updatedAt']));
       allow delete: if isAdmin();
     }
 
-    // Chambers: Public read. Authenticated users/operators can manage.
+    // Manual BMDC reviews are an admin-only, append-only audit record.
+    match /doctor_verification_history/{historyId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.verifiedByUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // 3. Chambers Collection
+    // Public read; write by admin or owning doctor.
     match /chambers/{chamberId} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if isAdmin() || (
+        isAuthenticated() && (
+          (resource != null && resource.data.doctorId != null &&
+           exists(/databases/$(database)/documents/doctors/$(resource.data.doctorId)) &&
+           get(/databases/$(database)/documents/doctors/$(resource.data.doctorId)).data.claimedByUid == request.auth.uid) ||
+          (request.resource.data.doctorId != null &&
+           exists(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)) &&
+           get(/databases/$(database)/documents/doctors/$(request.resource.data.doctorId)).data.claimedByUid == request.auth.uid)
+        )
+      );
     }
 
-    // Metadata: Public read for precomputed specialty categories.
-    match /meta/{docId} {
-      allow read: if true;
-      allow write: if isAdmin();
+    // Active bookings collection: prevents double or multiple active bookings
+    match /active_bookings/{bookingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        !exists(/databases/$(database)/documents/active_bookings/$(bookingId));
+      allow update: if false;
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments)
+      );
     }
 
-    // Config: Public read. Admin write only.
-    match /config/{docId} {
-      allow read: if true;
-      allow write: if isAdmin();
+    // 4. Appointments Collection
+    // Patient may only create as 'requested' (no confirmed status or queuePosition).
+    // Patient may only update to cancel own appointment (status == 'cancelled').
+    // Doctor, assigned operator, and admin have full lifecycle management (confirm, reschedule, reject, walk-ins).
+    match /appointments/{apptId} {
+      allow create: if isAuthenticated() && (
+        (request.resource.data.userId == request.auth.uid &&
+          request.resource.data.status == 'requested' &&
+          (!('queuePosition' in request.resource.data) || request.resource.data.queuePosition == null) &&
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          (!('doctorProfileId' in getUserData()) ||
+           getUserData().doctorProfileId != request.resource.data.doctorId) &&
+          (!('operatorAssignments' in getUserData()) ||
+           !(request.resource.data.chamberId in getUserData().operatorAssignments))) ||
+        isAdmin() ||
+        (request.resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == request.resource.data.doctorId &&
+         request.resource.data.status != 'requested') ||
+        (request.resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         request.resource.data.chamberId in getUserData().operatorAssignments &&
+         request.resource.data.status != 'requested')
+      );
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments)
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments) ||
+        (resource.data.userId == request.auth.uid &&
+         request.resource.data.status == 'cancelled' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']))
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.chamberId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().operatorAssignments != null &&
+         resource.data.chamberId in getUserData().operatorAssignments)
+      );
     }
 
-    // App releases are public metadata and can only be changed outside clients.
-    match /app_config/{docId} {
-      allow read: if true;
-      allow write: if false;
+    // 4b. Queue Counter Documents (for transactional queue numbers: queues/{chamberId}_{yyyyMMdd})
+    // Restricted to assigned operator for this chamber, doctor, or admin. Patients must not write queue counters.
+    match /queues/{queueId} {
+      allow read, write: if isAuthenticated() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          (getUserData().operatorAssignments != null &&
+           (resource == null || resource.data.chamberId in getUserData().operatorAssignments ||
+            request.resource.data.chamberId in getUserData().operatorAssignments)) ||
+          (getUserData().doctorProfileId != null)
+        ))
+      );
     }
 
-    // Admins: Read own admin doc.
-    match /admins/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if isAdmin();
+    // 5. Notifications Collection
+    // Any signed-in user can create; recipient or admin can read/update/delete.
+    match /notifications/{notifId} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAuthenticated() && (
+        isAdmin() ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid) ||
+        (resource.data.recipientId != null && resource.data.recipientId == request.auth.uid)
+      );
     }
 
-    // Reviews: Public read. Any authenticated patient/user can review.
-    // Author or Admin can edit/delete their review.
+    // 6. Reviews Collection
+    // Public read; create/update/delete only your own review (or admin delete).
     match /reviews/{reviewId} {
       allow read: if true;
-      allow create, update: if request.auth != null;
-      allow delete: if request.auth != null && (
-        resource.data.userId == request.auth.uid ||
-        resource.data.patientUid == request.auth.uid ||
-        isAdmin()
+      allow create: if isAuthenticated() &&
+        (('userId' in request.resource.data && request.resource.data.userId == request.auth.uid) ||
+         ('patientUid' in request.resource.data && request.resource.data.patientUid == request.auth.uid)) &&
+        (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+         !('doctorProfileId' in getUserData()) ||
+         getUserData().doctorProfileId != request.resource.data.doctorId);
+      allow update: if isAuthenticated() && (
+        (resource.data.userId != null && resource.data.userId == request.auth.uid) ||
+        (resource.data.patientUid != null && resource.data.patientUid == request.auth.uid)
+      );
+      allow delete: if isAuthenticated() && (
+        isAdmin() ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid) ||
+        (resource.data.patientUid != null && resource.data.patientUid == request.auth.uid)
       );
     }
 
-    // Appointments:
-    // Patients see their own appointments. Doctors see their profile appointments.
-    // Operators see assigned chamber appointments. Admins see all.
-    match /appointments/{apptId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null;
-    }
-
-    // Notifications:
-    match /notifications/{notifId} {
-      allow read, write: if request.auth != null;
-    }
-
-    // Health Journal: Owner-only.
-    match /journal/{entryId} {
-      allow read, write: if request.auth != null && (
-        resource == null || resource.data.userId == request.auth.uid ||
-        request.resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Users: Owner can read/update. Doctors/admins can manage roles/assignments.
-    match /users/{uid} {
-      allow read: if true;
-      allow create, update: if request.auth != null;
-      allow delete: if isAdmin();
-    }
-
-    // Specialty Matching Feedback
-    match /specialty_feedback/{feedbackId} {
-      allow create: if true;
-      allow read: if true;
-      allow update, delete: if isAdmin();
-    }
-
-    // Feed Posts, Real-time Videos, Community Q&A & Doctor Opinions
+    // 7. Posts and Comments Collection
+    // Create as yourself; delete by owner, admin, or moderator.
+    // Allow signed-in users to increment/decrement commentsCount and likesCount.
     match /posts/{postId} {
       allow read: if true;
-      allow create, update: if request.auth != null;
-      allow delete: if request.auth != null && (
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
+        isDoctor() ||
+        isAdmin() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['commentsCount', 'likesCount', 'commentCount', 'viewsCount', 'updatedAt'])
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isModerator() ||
         isAdmin()
       );
 
       match /comments/{commentId} {
         allow read: if true;
-        allow create, update: if request.auth != null;
-        allow delete: if request.auth != null && (
+        allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+        allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+        allow delete: if isAuthenticated() && (
           resource.data.userId == request.auth.uid ||
+          isModerator() ||
           isAdmin()
         );
       }
     }
 
-    // Desk Operator Applications:
+    // 8. Health Journal Collection (Private, Owner Only)
+    match /journal/{entryId} {
+      allow read, write: if isAuthenticated() && (
+        (resource == null && request.resource.data.userId == request.auth.uid) ||
+        (resource != null && resource.data.userId == request.auth.uid)
+      );
+    }
+
+    // 9. Operator Applications
     match /operator_applications/{appId} {
-      allow read, write: if request.auth != null;
+      allow create: if isAuthenticated() && request.resource.data.applicantUid == request.auth.uid;
+      allow read: if isAuthenticated() && (
+        resource.data.applicantUid == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.doctorId != null &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId)
+      );
+      allow update, delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.doctorId != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().doctorProfileId == resource.data.doctorId
+      );
+    }
+
+    // 10. Specialty Matching Feedback
+    match /specialty_feedback/{feedbackId} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // 11. Admins Collection
+    // Client read own doc only, no client write.
+    match /admins/{uid} {
+      allow read: if isAuthenticated() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // 12. App Configuration and Metadata
+    // Public read, no client write.
+    match /app_config/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /meta/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 13. Claim Requests Collection
+    match /claim_requests/{requestId} {
+      allow create: if isAuthenticated() && request.resource.data.applicantUid == request.auth.uid;
+      allow read: if isAuthenticated() && (
+        resource.data.applicantUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow update, delete: if isAdmin();
+    }
+  
+    // 14. Real-time Patient-Doctor Chats (Unlocked Only After Care or Paid Consultation)
+    // A patient can NEVER create or activate a chat; only doctor or admin can.
+    match /chats/{chatId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        resource.data.patientUid == request.auth.uid ||
+        resource.data.doctorUid == request.auth.uid ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants)
+      );
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (isDoctor() && request.auth.uid == request.resource.data.doctorUid) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().roles.isOperator == true &&
+         getUserData().operatorAssignments != null)
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isDoctor() && resource.data.doctorUid == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().roles.isOperator == true &&
+         getUserData().operatorAssignments != null) ||
+        (resource.data.patientUid == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['messageCount', 'lastMessage', 'updatedAt']) &&
+         request.resource.data.messageCount == resource.data.messageCount + 1)
+      );
+      allow delete: if isAdmin();
+
+      match /messages/{msgId} {
+        allow read: if isAuthenticated() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/chats/$(chatId)).data.patientUid == request.auth.uid ||
+          get(/databases/$(database)/documents/chats/$(chatId)).data.doctorUid == request.auth.uid ||
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+        );
+        // Message create requires chat to be active, within expiry window, within message limit, and sender is auth.uid.
+        allow create: if isAuthenticated() && (
+          isAdmin() ||
+          (
+            request.resource.data.senderUid == request.auth.uid &&
+            get(/databases/$(database)/documents/chats/$(chatId)).data.status == 'active' &&
+            (!('expiresAt' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
+              request.time < get(/databases/$(database)/documents/chats/$(chatId)).data.expiresAt) &&
+            (!('messageLimit' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
+              get(/databases/$(database)/documents/chats/$(chatId)).data.messageCount < get(/databases/$(database)/documents/chats/$(chatId)).data.messageLimit) &&
+            (
+              request.auth.uid == get(/databases/$(database)/documents/chats/$(chatId)).data.patientUid ||
+              request.auth.uid == get(/databases/$(database)/documents/chats/$(chatId)).data.doctorUid
+            )
+          )
+        );
+        allow update, delete: if isAdmin() || (
+          isAuthenticated() && resource.data.senderUid == request.auth.uid
+        );
+      }
+    }
+
+    // 15. Paid Online Consultations
+    match /consultations/{consultationId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        resource.data.patientUid == request.auth.uid ||
+        resource.data.doctorUid == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId)
+      );
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (request.resource.data.patientUid == request.auth.uid &&
+         request.resource.data.status in ['pending_payment', 'paid_unconfirmed'])
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        resource.data.doctorUid == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         getUserData().doctorProfileId == resource.data.doctorId) ||
+        (resource.data.patientUid == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['trxId', 'paymentMethod', 'status', 'updatedAt']) &&
+         request.resource.data.status == 'paid_unconfirmed')
+      );
+      allow delete: if isAdmin();
     }
   }
 }

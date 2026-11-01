@@ -1,3 +1,5 @@
+import 'consultation_management_screen.dart';
+import 'operator_desk_screen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -567,6 +569,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: 'Terms & Privacy',
         onTap: () => _showTermsDialog(context),
       ),
+      if (_userRoles.isDoctor)
+        _SettingsItem(
+          icon: Icons.video_call_outlined,
+          title: 'Doctor Telehealth & Consultations',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ConsultationManagementScreen(
+                isDoctor: true,
+                doctorProfileId: _userProfile?['doctorProfileId'] as String?,
+              ),
+            ),
+          ),
+        ),
+      _SettingsItem(
+        icon: Icons.chat_outlined,
+        title: 'My Online Consultations & Chats',
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ConsultationManagementScreen(
+              isDoctor: _userRoles.isDoctor,
+              doctorProfileId: _userProfile?['doctorProfileId'] as String?,
+            ),
+          ),
+        ),
+      ),
       if (_userRoles.isAdmin)
         _SettingsItem(
           icon: Icons.admin_panel_settings_outlined,
@@ -874,82 +903,262 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Desk Status', style: AppTheme.sectionTitle),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Assigned Chamber',
-                                      style: AppTheme.caption),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _userProfile?['operatorChamberName'] ??
-                                        'Central Clinic Desk',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.primaryTint,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Today's Queue",
-                                      style: AppTheme.caption),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '3 Waiting',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
+                      Text('Assigned Chambers & Live Queues', style: AppTheme.sectionTitle),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Live waiting counts for today across all your assigned desks.',
+                        style: AppTheme.caption,
                       ),
                       const SizedBox(height: 14),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                  AppConstants.radiusButton),
-                            ),
-                          ),
-                          onPressed: () {
-                            widget.onTabSwitch?.call(2);
-                          },
-                          child: const Text('Open Desk'),
-                        ),
+                      Builder(
+                        builder: (context) {
+                          final assignments = (_userProfile?['operatorAssignments'] as List?)
+                                  ?.map((e) => e.toString())
+                                  .where((e) => e.isNotEmpty)
+                                  .toList() ??
+                              const <String>[];
+                          final assignedChamberMaps = (_userProfile?['assignedChambers'] as List?)
+                                  ?.map((e) => Map<String, dynamic>.from(e as Map))
+                                  .toList() ??
+                              const <Map<String, dynamic>>[];
+
+                          if (assignments.isEmpty) {
+                            return Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.info_outline, color: AppColors.primary),
+                                  SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      'No chambers assigned yet. Please contact an administrator to be assigned to clinic desks.',
+                                      style: TextStyle(fontSize: 12.5),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          return Column(
+                            children: assignments.map((chamberId) {
+                              String chamberName = chamberId;
+                              for (final ac in assignedChamberMaps) {
+                                if (ac['chamberId'] == chamberId || ac['id'] == chamberId) {
+                                  chamberName = (ac['chamberName'] ?? ac['name'] ?? ac['hospitalName'] ?? chamberId).toString();
+                                  break;
+                                }
+                              }
+                              if (chamberName == 'demo-chamber') {
+                                chamberName = 'Popular Central Diagnostic Desk';
+                              } else if (chamberName == 'chamber-bup-1') {
+                                chamberName = 'BUP Medical Center Desk';
+                              } else if (chamberName.startsWith('chamber-')) {
+                                chamberName = 'Chamber Desk (${chamberId.substring(8, 12.clamp(0, chamberId.length))})';
+                              }
+
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.18)),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(14),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      // Chamber Header Row
+                                      Row(
+                                        children: [
+                                          const CircleAvatar(
+                                            radius: 18,
+                                            backgroundColor: AppColors.primary,
+                                            child: Icon(Icons.business_outlined, color: Colors.white, size: 18),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  chamberName,
+                                                  style: GoogleFonts.poppins(
+                                                    fontSize: 14.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: AppColors.primary,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  'Chamber: $chamberId',
+                                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      const Divider(height: 1),
+                                      const SizedBox(height: 10),
+                                      // Doctor Details List for this chamber
+                                      FutureBuilder<List<Map<String, dynamic>>>(
+                                        future: DataService.fetchChamberDoctorDetails(chamberId),
+                                        builder: (ctx, snap) {
+                                          final docs = snap.data ?? [];
+                                          if (snap.connectionState == ConnectionState.waiting) {
+                                            return const Padding(
+                                              padding: EdgeInsets.symmetric(vertical: 12),
+                                              child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+                                            );
+                                          }
+                                          if (docs.isEmpty) {
+                                            return Container(
+                                              padding: const EdgeInsets.all(12),
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey.shade50,
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  const Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text('Specialist Doctor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                                        Text('Visiting Hours: 5:00 PM - 9:00 PM', style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  FilledButton.tonalIcon(
+                                                    onPressed: () {
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (_) => OperatorDeskScreen(chamberId: chamberId),
+                                                        ),
+                                                      );
+                                                    },
+                                                    icon: const Icon(Icons.queue, size: 16),
+                                                    label: const Text('Open Queue', style: TextStyle(fontSize: 12)),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }
+
+                                          return Column(
+                                            children: docs.map((docInfo) {
+                                              final dName = (docInfo['name'] ?? 'Doctor').toString();
+                                              final dHours = (docInfo['hours'] ?? '5:00 PM - 9:00 PM').toString();
+                                              final dSpec = (docInfo['speciality'] ?? 'Specialist').toString();
+
+                                              return Container(
+                                                margin: const EdgeInsets.only(bottom: 8),
+                                                padding: const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.primaryTint.withValues(alpha: 0.5),
+                                                  borderRadius: BorderRadius.circular(10),
+                                                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.1)),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            dName,
+                                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                                          ),
+                                                          const SizedBox(height: 2),
+                                                          Text(
+                                                            dSpec,
+                                                            style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+                                                          ),
+                                                          const SizedBox(height: 4),
+                                                          Row(
+                                                            children: [
+                                                              const Icon(Icons.access_time, size: 12, color: Colors.grey),
+                                                              const SizedBox(width: 4),
+                                                              Expanded(
+                                                                child: Text(
+                                                                  dHours,
+                                                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                                                  maxLines: 1,
+                                                                  overflow: TextOverflow.ellipsis,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                                      children: [
+                                                        StreamBuilder<int>(
+                                                          stream: DataService.streamTodayWaitingCount(chamberId),
+                                                          builder: (ctx, countSnap) {
+                                                            final count = countSnap.data ?? 0;
+                                                            return Container(
+                                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                              decoration: BoxDecoration(
+                                                                color: count > 0 ? Colors.amber.shade100 : Colors.green.shade50,
+                                                                borderRadius: BorderRadius.circular(12),
+                                                                border: Border.all(
+                                                                  color: count > 0 ? Colors.amber.shade300 : Colors.green.shade200,
+                                                                ),
+                                                              ),
+                                                              child: Text(
+                                                                '$count Waiting',
+                                                                style: TextStyle(
+                                                                  fontSize: 11,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: count > 0 ? const Color(0xFF78350F) : Colors.green.shade800,
+                                                                ),
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                        const SizedBox(height: 8),
+                                                        FilledButton.tonal(
+                                                          style: FilledButton.styleFrom(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                            minimumSize: const Size(0, 32),
+                                                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                          ),
+                                                          onPressed: () {
+                                                            Navigator.push(
+                                                              context,
+                                                              MaterialPageRoute(
+                                                                builder: (_) => OperatorDeskScreen(chamberId: chamberId),
+                                                              ),
+                                                            );
+                                                          },
+                                                          child: const Text('Open Queue', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }).toList(),
+                                          );
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
                       ),
                     ],
                   ),

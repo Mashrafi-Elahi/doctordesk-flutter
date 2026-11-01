@@ -1,3 +1,4 @@
+import '../models/user_role.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -24,8 +25,13 @@ import '../theme/app_constants.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int, {String? searchQuery})? onTabSwitch;
+  final UserRole role;
 
-  const HomeScreen({super.key, this.onTabSwitch});
+  const HomeScreen({
+    super.key,
+    this.onTabSwitch,
+    this.role = UserRole.patient,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -38,6 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Map<String, dynamic>> _specialities = [];
   List<Doctor> _topDoctors = [];
+  Doctor? _ownDoctor;
   int? _totalDoctorsCount;
   String? _todayFeeling;
   bool _isMoodExpanded = false;
@@ -76,11 +83,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Doctor> get _displayedDoctors {
     final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) return _topDoctors;
-    return _topDoctors.where((d) =>
-        d.name.toLowerCase().contains(query) ||
-        d.specialities.any((s) => s.toLowerCase().contains(query)) ||
-        (d.chamber?.hospitalName?.toLowerCase().contains(query) ?? false)).toList();
+    List<Doctor> list = query.isEmpty
+        ? List<Doctor>.from(_topDoctors)
+        : _topDoctors.where((d) =>
+            d.name.toLowerCase().contains(query) ||
+            d.specialities.any((s) => s.toLowerCase().contains(query)) ||
+            (d.chamber?.hospitalName?.toLowerCase().contains(query) ?? false)).toList();
+
+    final ownId = AuthService.userRoles.doctorProfileId;
+    if (ownId != null && ownId.isNotEmpty) {
+      final existingIdx = list.indexWhere((d) => d.id == ownId);
+      if (existingIdx > 0) {
+        final d = list.removeAt(existingIdx);
+        list.insert(0, d);
+      } else if (existingIdx < 0 && _ownDoctor != null) {
+        final matches = query.isEmpty ||
+            _ownDoctor!.name.toLowerCase().contains(query) ||
+            _ownDoctor!.specialities.any((s) => s.toLowerCase().contains(query));
+        if (matches) {
+          list.insert(0, _ownDoctor!);
+        }
+      }
+    }
+    return list;
   }
 
   IconData _getSpecialtyIcon(String name) {
@@ -285,6 +310,14 @@ class _HomeScreenState extends State<HomeScreen> {
       final doctorsData = await ApiService.fetchDoctors(limit: 5);
       final todayStatus = await ApiService.fetchTodayFeeling();
 
+      Doctor? ownDoc;
+      final ownId = AuthService.userRoles.doctorProfileId;
+      if (ownId != null && ownId.isNotEmpty) {
+        try {
+          ownDoc = await ApiService.fetchDoctorById(ownId);
+        } catch (_) {}
+      }
+
       final List<Doctor> doctors =
           List<Doctor>.from(doctorsData['doctors'] ?? []);
       final bool offlineFlag = doctorsData['isOffline'] == true;
@@ -305,6 +338,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _specialities = specialitiesData;
         _topDoctors = doctors;
+        _ownDoctor = ownDoc;
         _totalDoctorsCount = doctorsData['total'] as int?;
         _isOffline = offlineFlag;
         if (todayStatus != null && todayStatus['feeling'] != null) {
@@ -384,9 +418,9 @@ class _HomeScreenState extends State<HomeScreen> {
               // 1. Header: Full-width primary-color block with rounded bottom corners (radius 28)
               Container(
                 width: double.infinity,
-                decoration: const BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.only(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).primaryColor,
+                  borderRadius: const BorderRadius.only(
                     bottomLeft: Radius.circular(AppConstants.radiusHeader),
                     bottomRight: Radius.circular(AppConstants.radiusHeader),
                   ),
@@ -443,18 +477,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Welcome',
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w400,
-                                      color: Colors.white.withValues(alpha: 0.8),
-                                    ),
-                                  ),
-                                  Text(
-                                    _greetingName.isNotEmpty ? _greetingName : 'DocDesk',
+                                    'Hello, ${_greetingName.isNotEmpty ? _greetingName : 'there'}',
                                     style: GoogleFonts.poppins(
                                       fontSize: 16,
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w700,
                                       color: Colors.white,
                                     ),
                                     maxLines: 1,
@@ -799,7 +825,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         )
                       else
-                        ...displayedDoctors.map((doc) => _DoctorListCard(doctor: doc)),
+                        ...displayedDoctors.map((doc) => _DoctorListCard(doctor: doc, isPinnedOwn: AuthService.userRoles.doctorProfileId == doc.id)),
                     ],
 
                     const SizedBox(height: AppConstants.sectionGap),
@@ -1662,8 +1688,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _DoctorListCard extends StatelessWidget {
   final Doctor doctor;
+  final bool isPinnedOwn;
 
-  const _DoctorListCard({required this.doctor});
+  const _DoctorListCard({required this.doctor, this.isPinnedOwn = false});
 
   String _getInitials(String name) {
     final clean = name.replaceAll(RegExp(r'^(Dr\.?|Prof\.?)\s+', caseSensitive: false), '').trim();
@@ -1694,8 +1721,13 @@ class _DoctorListCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: AppConstants.cardGap),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: isPinnedOwn
+            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.10)
+            : AppColors.surface,
         borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+        border: isPinnedOwn
+            ? Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4))
+            : null,
         boxShadow: AppConstants.softShadow,
       ),
       child: Material(
@@ -1745,12 +1777,73 @@ class _DoctorListCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               doctor.name,
-                              style: AppTheme.cardTitle,
+                              style: AppTheme.cardTitle.copyWith(
+                                color: const Color(0xFF0F172A),
+                              ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          if (doctor.isBmdcVerified) ...[
+                          if (isPinnedOwn) ...[
+                            Container(
+                              margin: const EdgeInsets.only(left: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Your profile',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check_circle, size: 12, color: AppColors.primary),
+                                SizedBox(width: 2),
+                                Text(
+                                  'Claimed',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF0F172A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ] else if (doctor.claimedByUid != null && doctor.claimedByUid!.isNotEmpty) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.grey.shade300),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.check, size: 10, color: AppColors.primary),
+                                  SizedBox(width: 2),
+                                  Text(
+                                    'Claimed',
+                                    style: TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF0F172A),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          if (doctor.verificationStatus == 'checked_found' || doctor.verificationStatus == 'verified') ...[
                             const SizedBox(width: 4),
                             const Icon(Icons.verified, color: AppColors.primary, size: 16),
                           ],

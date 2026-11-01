@@ -19,6 +19,7 @@ class AppNotification {
   final DateTime timestamp;
   final bool isRead;
   final String? relatedId;
+  final DateTime? expiresAt;
 
   AppNotification({
     required this.id,
@@ -29,6 +30,7 @@ class AppNotification {
     required this.timestamp,
     this.isRead = false,
     this.relatedId,
+    this.expiresAt,
   });
 
   factory AppNotification.fromJson(Map<String, dynamic> json, [String? docId]) {
@@ -53,7 +55,15 @@ class AppNotification {
       timestamp: parsedTime,
       isRead: json['isRead'] == true,
       relatedId: json['relatedId']?.toString(),
+      expiresAt: _dateFromValue(json['expiresAt']),
     );
+  }
+
+  static DateTime? _dateFromValue(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is String) return DateTime.tryParse(value);
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    return null;
   }
 
   Map<String, dynamic> toJson() => {
@@ -65,6 +75,7 @@ class AppNotification {
         'timestamp': timestamp.toIso8601String(),
         'isRead': isRead,
         if (relatedId != null) 'relatedId': relatedId,
+        if (expiresAt != null) 'expiresAt': expiresAt!.toIso8601String(),
       };
 }
 
@@ -87,12 +98,14 @@ class NotificationService {
       final now = DateTime.now();
       final notificationData = {
         'userId': userId,
+        'recipientId': userId,
         'title': title,
         'body': body,
         'type': type,
         'isRead': false,
         'relatedId': relatedId,
         'timestamp': FieldValue.serverTimestamp(),
+        'expiresAt': Timestamp.fromDate(now.add(const Duration(days: 30))),
       };
 
       // Also record in Firestore
@@ -116,6 +129,7 @@ class NotificationService {
           timestamp: now,
           isRead: false,
           relatedId: relatedId,
+          expiresAt: now.add(const Duration(days: 30)),
         ),
       );
     } catch (e) {
@@ -135,8 +149,11 @@ class NotificationService {
         .limit(50)
         .snapshots()
         .map((snapshot) {
+      final now = DateTime.now();
       final firestoreList = snapshot.docs
           .map((doc) => AppNotification.fromJson(doc.data(), doc.id))
+          .where((notification) =>
+              notification.expiresAt == null || notification.expiresAt!.isAfter(now))
           .toList();
       firestoreList.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       return firestoreList;
@@ -156,6 +173,8 @@ class NotificationService {
       final List decoded = jsonDecode(raw);
       final list = decoded
           .map((j) => AppNotification.fromJson(j as Map<String, dynamic>))
+          .where((notification) =>
+              notification.expiresAt == null || notification.expiresAt!.isAfter(DateTime.now()))
           .toList();
       list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       return list;
@@ -204,6 +223,7 @@ class NotificationService {
             timestamp: current[i].timestamp,
             isRead: true,
             relatedId: current[i].relatedId,
+            expiresAt: current[i].expiresAt,
           );
         }
       }
@@ -213,6 +233,25 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint('Error marking notification as read: $e');
+    }
+  }
+
+  /// Removes one notification from both the signed-in user's remote list and
+  /// the offline mirror. The rules remain the authority for remote deletion.
+  static Future<void> deleteNotification(String id, String userId) async {
+    try {
+      if (userId != 'guest') {
+        await _db.collection('notifications').doc(id).delete();
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final current = await loadLocalNotifications(userId);
+      current.removeWhere((notification) => notification.id == id);
+      await prefs.setString(
+        '$_prefsKeyPrefix$userId',
+        jsonEncode(current.map((notification) => notification.toJson()).toList()),
+      );
+    } catch (e) {
+      debugPrint('Error deleting notification: $e');
     }
   }
 

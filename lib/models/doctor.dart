@@ -102,9 +102,14 @@ class Doctor {
   final List<String> concentrations;
   final String? designation;
   final String? bmdcRegNumber;
+  final String? bmdcNumber;
   final bool isBmdcVerified;
+  final String verificationStatus;
+  final dynamic verifiedAt;
+  final String? verifiedBy;
   final bool isClaimed;
   final String? claimedByUid;
+  final String claimStatus;
   final String? certificateImageUrl;
   final double? bayesianRating;
   final double? ratingAverage;
@@ -112,6 +117,18 @@ class Doctor {
   final List<Chamber> chambers;
   final Chamber? chamber;
   final double? distance;
+  final bool consultEnabled;
+  final double consultFee;
+  final String? consultAvailability;
+  final bool isHidden;
+  final String? hiddenReason;
+  final String? hiddenBy;
+  final dynamic hiddenAt;
+  final bool isDeleted;
+  final dynamic deletedAt;
+  final String messagingMode; // 'off' | 'followup' | 'paid'
+  final int followupDays;
+  final int followupMaxMessages;
 
   Doctor({
     required this.id,
@@ -122,9 +139,14 @@ class Doctor {
     required this.concentrations,
     this.designation,
     this.bmdcRegNumber,
+    String? bmdcNumber,
     required this.isBmdcVerified,
+    String? verificationStatus,
+    this.verifiedAt,
+    this.verifiedBy,
     this.isClaimed = false,
     this.claimedByUid,
+    String? claimStatus,
     this.certificateImageUrl,
     this.bayesianRating,
     this.ratingAverage,
@@ -132,11 +154,77 @@ class Doctor {
     required this.chambers,
     this.chamber,
     this.distance,
-  });
+    this.consultEnabled = false,
+    this.consultFee = 500.0,
+    this.consultAvailability,
+    this.isHidden = false,
+    this.hiddenReason,
+    this.hiddenBy,
+    this.hiddenAt,
+    this.isDeleted = false,
+    this.deletedAt,
+    this.messagingMode = 'followup',
+    this.followupDays = 7,
+    this.followupMaxMessages = 20,
+  })  : bmdcNumber = bmdcNumber ?? bmdcRegNumber,
+        verificationStatus = verificationStatus ?? (isBmdcVerified ? 'verified' : 'unverified'),
+        claimStatus = claimStatus ?? (claimedByUid != null || isClaimed ? 'claimed' : 'unclaimed');
 
   bool get hasAccessibleChamber {
     if (chamber?.isAccessible == true) return true;
     return chambers.any((c) => c.isAccessible);
+  }
+
+  Doctor copyWith({
+    String? id,
+    String? name,
+    List<String>? specialities,
+    double? experienceYears,
+    List<String>? education,
+    List<String>? concentrations,
+    String? designation,
+    String? bmdcRegNumber,
+    String? bmdcNumber,
+    bool? isBmdcVerified,
+    String? verificationStatus,
+    dynamic verifiedAt,
+    String? verifiedBy,
+    bool? isClaimed,
+    String? claimedByUid,
+    String? claimStatus,
+    String? certificateImageUrl,
+    double? bayesianRating,
+    double? ratingAverage,
+    int? ratingCount,
+    List<Chamber>? chambers,
+    Chamber? chamber,
+    double? distance,
+  }) {
+    return Doctor(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      specialities: specialities ?? this.specialities,
+      experienceYears: experienceYears ?? this.experienceYears,
+      education: education ?? this.education,
+      concentrations: concentrations ?? this.concentrations,
+      designation: designation ?? this.designation,
+      bmdcRegNumber: bmdcRegNumber ?? this.bmdcRegNumber,
+      bmdcNumber: bmdcNumber ?? this.bmdcNumber,
+      isBmdcVerified: isBmdcVerified ?? this.isBmdcVerified,
+      verificationStatus: verificationStatus ?? this.verificationStatus,
+      verifiedAt: verifiedAt ?? this.verifiedAt,
+      verifiedBy: verifiedBy ?? this.verifiedBy,
+      isClaimed: isClaimed ?? this.isClaimed,
+      claimedByUid: claimedByUid ?? this.claimedByUid,
+      claimStatus: claimStatus ?? this.claimStatus,
+      certificateImageUrl: certificateImageUrl ?? this.certificateImageUrl,
+      bayesianRating: bayesianRating ?? this.bayesianRating,
+      ratingAverage: ratingAverage ?? this.ratingAverage,
+      ratingCount: ratingCount ?? this.ratingCount,
+      chambers: chambers ?? this.chambers,
+      chamber: chamber ?? this.chamber,
+      distance: distance ?? this.distance,
+    );
   }
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
@@ -163,6 +251,12 @@ class Doctor {
       parsedChamber = parsedChambers.first;
     }
 
+    final bmdc = (json['bmdcNumber'] ?? json['bmdcRegNumber'])?.toString();
+    final isBmdcVer = json['isBmdcVerified'] == true || json['verificationStatus'] == 'verified';
+    final verStatus = json['verificationStatus']?.toString() ?? (isBmdcVer ? 'verified' : 'unverified');
+    final claimed = json['isClaimed'] == true || (json['claimedByUid'] != null && json['claimedByUid'].toString().isNotEmpty) || json['claimStatus'] == 'claimed';
+    final cStatus = json['claimStatus']?.toString() ?? (claimed ? 'claimed' : 'unclaimed');
+
     return Doctor(
       id: (json['_id'] ?? json['id'] ?? '').toString(),
       name: json['name'] ?? '',
@@ -171,10 +265,15 @@ class Doctor {
       education: (json['education'] as List?)?.map((e) => e.toString()).toList() ?? [],
       concentrations: (json['concentrations'] as List?)?.map((e) => e.toString()).toList() ?? [],
       designation: json['designation'],
-      bmdcRegNumber: json['bmdcRegNumber'],
-      isBmdcVerified: json['isBmdcVerified'] ?? false,
-      isClaimed: json['isClaimed'] ?? false,
-      claimedByUid: json['claimedByUid'],
+      bmdcRegNumber: bmdc,
+      bmdcNumber: bmdc,
+      isBmdcVerified: isBmdcVer,
+      verificationStatus: verStatus,
+      verifiedAt: json['verifiedAt'],
+      verifiedBy: json['verifiedBy']?.toString(),
+      isClaimed: claimed,
+      claimedByUid: json['claimedByUid']?.toString(),
+      claimStatus: cStatus,
       certificateImageUrl: json['certificateImageUrl'],
       bayesianRating: (json['bayesianRating'] as num?)?.toDouble(),
       ratingAverage: (json['ratingAverage'] as num?)?.toDouble(),
@@ -187,6 +286,7 @@ class Doctor {
 
   Map<String, dynamic> toJson() => {
     '_id': id,
+    'id': id,
     'name': name,
     'specialities': specialities,
     'experienceYears': experienceYears,
@@ -194,9 +294,14 @@ class Doctor {
     'concentrations': concentrations,
     'designation': designation,
     'bmdcRegNumber': bmdcRegNumber,
+    'bmdcNumber': bmdcNumber ?? bmdcRegNumber,
     'isBmdcVerified': isBmdcVerified,
+    'verificationStatus': verificationStatus,
+    if (verifiedAt != null) 'verifiedAt': verifiedAt,
+    if (verifiedBy != null) 'verifiedBy': verifiedBy,
     'isClaimed': isClaimed,
     'claimedByUid': claimedByUid,
+    'claimStatus': claimStatus,
     'certificateImageUrl': certificateImageUrl,
     'bayesianRating': bayesianRating,
     'ratingAverage': ratingAverage,
